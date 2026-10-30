@@ -1,0 +1,181 @@
+[gd_resource type="Animation" format=3]
+
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P2Walking/1760.png" id="1_6nu5v"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P2Walking/1762.png" id="2_2f10u"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P2Walking/1764.png" id="3_hhsqg"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P2Walking/1766.png" id="4_ii05t"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P2Walking/1768.png" id="5_ydco6"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P2Walking/1770.png" id="6_dfa7r"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P2Walking/1772.png" id="7_ldrxj"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P2Walking/1774.png" id="8_dhas1"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P2Walking/1776.png" id="9_kmxrx"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P2Walking/1778.png" id="10_61ss1"]
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_kdxyr"]
+atlas = ExtResource("1_6nu5v")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_5syv1"]
+atlas = ExtResource("2_2f10u")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_vgwq6"]
+atlas = ExtResource("3_hhsqg")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_6tgg2"]
+atlas = ExtResource("4_ii05t")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_shgny"]
+atlas = ExtResource("5_ydco6")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_3ymd6"]
+atlas = ExtResource("6_dfa7r")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_mlkh2"]
+atlas = ExtResource("7_ldrxj")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_dp12b"]
+atlas = ExtResource("8_dhas1")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_8d0hp"]
+atlas = ExtResource("9_kmxrx")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_7qr0p"]
+atlas = ExtResource("10_61ss1")
+region = Rect2(0, 0, 150, 200)
+
+[resource]
+resource_name = "P2Walking_Anim"
+length = 2.0
+loop_mode = 1
+tracks/0/type = "value"
+tracks/0/imported = false
+tracks/0/enabled = true
+tracks/0/path = NodePath("slot_0:unbound")
+tracks/0/interp = 0
+tracks/0/loop_wrap = false
+tracks/0/keys = {
+"times": PackedFloat32Array(0, 0.2, 0.4, 0.6, 0.8, 1, 1.2, 1.4, 1.6, 1.8),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [SubResource("AtlasTexture_kdxyr"), SubResource("AtlasTexture_5syv1"), SubResource("AtlasTexture_vgwq6"), SubResource("AtlasTexture_6tgg2"), SubResource("AtlasTexture_shgny"), SubResource("AtlasTexture_3ymd6"), SubResource("AtlasTexture_mlkh2"), SubResource("AtlasTexture_dp12b"), SubResource("AtlasTexture_8d0hp"), SubResource("AtlasTexture_7qr0p")]
+}
+tracks/1/type = "value"
+tracks/1/imported = false
+tracks/1/enabled = true
+tracks/1/path = NodePath("slot_1:unbound")
+tracks/1/interp = 0
+tracks/1/loop_wrap = false
+tracks/1/keys = {
+"times": PackedFloat32Array(0, 0.2, 0.4, 0.6, 0.8, 1, 1.2, 1.4, 1.6, 1.8),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573)]
+}
+tracks/2/type = "value"
+tracks/2/imported = false
+tracks/2/enabled = true
+tracks/2/path = NodePath("slot_2:unbound")
+tracks/2/interp = 0
+tracks/2/loop_wrap = false
+tracks/2/keys = {
+"times": PackedFloat32Array(0, 0.2, 0.4, 0.6, 0.8, 1, 1.2, 1.4, 1.6, 1.8),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0)]
+}
+tracks/3/type = "method"
+tracks/3/imported = false
+tracks/3/enabled = true
+tracks/3/path = NodePath(".")
+tracks/3/interp = 1
+tracks/3/loop_wrap = true
+tracks/3/keys = {
+"times": PackedFloat32Array(0.8),
+"transitions": PackedFloat32Array(1),
+"values": [{
+"args": ["startSmallBurstParticles", null],
+"method": &"_native_event"
+}]
+}
+tracks/4/type = "method"
+tracks/4/imported = false
+tracks/4/enabled = true
+tracks/4/path = NodePath(".")
+tracks/4/interp = 1
+tracks/4/loop_wrap = true
+tracks/4/keys = {
+"times": PackedFloat32Array(0.8),
+"transitions": PackedFloat32Array(1),
+"values": [{
+"args": ["playSound", "SatanStep"],
+"method": &"_native_event"
+}]
+}
+tracks/5/type = "method"
+tracks/5/imported = false
+tracks/5/enabled = true
+tracks/5/path = NodePath(".")
+tracks/5/interp = 1
+tracks/5/loop_wrap = true
+tracks/5/keys = {
+"times": PackedFloat32Array(1.8),
+"transitions": PackedFloat32Array(1),
+"values": [{
+"args": ["playSound", "SatanStep2"],
+"method": &"_native_event"
+}]
+}
+tracks/6/type = "method"
+tracks/6/imported = false
+tracks/6/enabled = true
+tracks/6/path = NodePath(".")
+tracks/6/interp = 1
+tracks/6/loop_wrap = true
+tracks/6/keys = {
+"times": PackedFloat32Array(1.8),
+"transitions": PackedFloat32Array(1),
+"values": [{
+"args": ["startSmallBurstParticles", null],
+"method": &"_native_event"
+}]
+}
+tracks/7/type = "method"
+tracks/7/imported = false
+tracks/7/enabled = true
+tracks/7/path = NodePath(".")
+tracks/7/interp = 1
+tracks/7/loop_wrap = true
+tracks/7/keys = {
+"times": PackedFloat32Array(2),
+"transitions": PackedFloat32Array(1),
+"values": [{
+"args": ["finishOneWalkCycle", null],
+"method": &"_native_event"
+}]
+}
+metadata/sprite_tracks = PackedInt32Array(0, 1, 2)
+metadata/boundaries = PackedFloat64Array(0.8, 1.8, 2)
+metadata/bindings = Array[Dictionary]([{
+"bezier": false,
+"kind": "sprite",
+"path": "",
+"property": "texture"
+}, {
+"bezier": false,
+"kind": "sprite_geometry",
+"path": "",
+"property": "scale"
+}, {
+"bezier": false,
+"kind": "sprite_geometry",
+"path": "",
+"property": "offset"
+}])

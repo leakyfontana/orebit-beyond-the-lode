@@ -1,0 +1,25 @@
+[gd_resource type="Animation" format=3]
+
+[resource]
+resource_name = "LowFuelWarning"
+length = 2.4
+loop_mode = 1
+tracks/0/type = "bezier"
+tracks/0/imported = false
+tracks/0/enabled = true
+tracks/0/path = NodePath("slot_0:unbound")
+tracks/0/interp = 1
+tracks/0/loop_wrap = true
+tracks/0/keys = {
+"handle_modes": PackedInt32Array(0, 0, 0),
+"points": PackedFloat32Array(1, 0, 0, 0.4, 0, 0, -0.4, 0, 0.4, 0, 1, -0.4, 0, 0, 0),
+"times": PackedFloat32Array(0, 1.2, 2.4)
+}
+metadata/sprite_tracks = PackedInt32Array()
+metadata/boundaries = PackedFloat64Array(2.4)
+metadata/bindings = Array[Dictionary]([{
+"bezier": true,
+"kind": "text",
+"path": "",
+"property": "theme_override_colors/font_color:g"
+}])

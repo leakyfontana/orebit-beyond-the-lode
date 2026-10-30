@@ -1,0 +1,251 @@
+[gd_scene load_steps=13 format=3]
+
+[ext_resource type="Script" path="res://scripts/touch_controls.gd" id="1_script"]
+[ext_resource type="Texture2D" path="res://assets/Resources/UI/itemShop/105.png" id="2_fuel"]
+[ext_resource type="Texture2D" path="res://assets/Resources/UI/itemShop/102.png" id="3_repair"]
+[ext_resource type="Texture2D" path="res://assets/Resources/UI/itemShop/99.png" id="4_dynamite"]
+[ext_resource type="Texture2D" path="res://assets/Resources/UI/itemShop/96.png" id="5_plastic"]
+[ext_resource type="Texture2D" path="res://assets/Resources/UI/itemShop/93.png" id="6_teleport"]
+[ext_resource type="Texture2D" path="res://assets/Resources/UI/itemShop/90.png" id="7_matter"]
+
+[sub_resource type="CircleShape2D" id="Circle_item"]
+radius = 46.0
+
+[sub_resource type="StyleBoxFlat" id="Style_item"]
+bg_color = Color(0.075, 0.085, 0.1, 0.74)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.62, 0.64, 0.65, 0.8)
+corner_radius_top_left = 18
+corner_radius_top_right = 18
+corner_radius_bottom_left = 18
+corner_radius_bottom_right = 18
+
+[sub_resource type="StyleBoxFlat" id="Style_stick"]
+bg_color = Color(0.075, 0.085, 0.1, 0.48)
+border_width_left = 3
+border_width_top = 3
+border_width_right = 3
+border_width_bottom = 3
+border_color = Color(0.62, 0.64, 0.65, 0.7)
+corner_radius_top_left = 250
+corner_radius_top_right = 250
+corner_radius_bottom_left = 250
+corner_radius_bottom_right = 250
+
+[sub_resource type="StyleBoxFlat" id="Style_tip"]
+bg_color = Color(0.56, 0.58, 0.6, 0.72)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.85, 0.85, 0.85, 0.85)
+corner_radius_top_left = 125
+corner_radius_top_right = 125
+corner_radius_bottom_left = 125
+corner_radius_bottom_right = 125
+
+[sub_resource type="StyleBoxFlat" id="Style_tip_pressed"]
+bg_color = Color(0.85, 0.64, 0.33, 0.85)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(1, 0.85, 0.6, 0.95)
+corner_radius_top_left = 125
+corner_radius_top_right = 125
+corner_radius_bottom_left = 125
+corner_radius_bottom_right = 125
+
+[node name="TouchControls" type="Control"]
+process_mode = 3
+visible = false
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("1_script")
+
+[node name="Joystick" type="VirtualJoystick" parent="."]
+layout_mode = 0
+offset_right = 180.0
+offset_bottom = 180.0
+mouse_filter = 0
+theme_override_styles/normal_joystick = SubResource("Style_stick")
+theme_override_styles/pressed_joystick = SubResource("Style_stick")
+theme_override_styles/normal_tip = SubResource("Style_tip")
+theme_override_styles/pressed_tip = SubResource("Style_tip_pressed")
+joystick_mode = 0
+joystick_size = 180.0
+tip_size = 72.0
+deadzone_ratio = 0.18
+clampzone_ratio = 1.0
+initial_offset_ratio = Vector2(0.5, 0.5)
+action_left = &"move_left"
+action_right = &"move_right"
+action_up = &"move_up"
+action_down = &"move_down"
+visibility_mode = 0
+
+[node name="Items" type="Node2D" parent="."]
+
+[node name="Fuel" type="TouchScreenButton" parent="Items"]
+texture_normal = ExtResource("2_fuel")
+shape = SubResource("Circle_item")
+shape_visible = false
+passby_press = false
+action = &"item_1"
+
+[node name="Background" type="Panel" parent="Items/Fuel"]
+show_behind_parent = true
+offset_left = -21.0
+offset_top = -21.0
+offset_right = 71.0
+offset_bottom = 71.0
+mouse_filter = 2
+theme_override_styles/panel = SubResource("Style_item")
+
+[node name="Caption" type="Label" parent="Items/Fuel"]
+offset_left = -21.0
+offset_top = 48.0
+offset_right = 71.0
+offset_bottom = 70.0
+mouse_filter = 2
+theme_override_font_sizes/font_size = 14
+text = "1 Fuel"
+horizontal_alignment = 1
+
+[node name="Repair" type="TouchScreenButton" parent="Items"]
+texture_normal = ExtResource("3_repair")
+shape = SubResource("Circle_item")
+shape_visible = false
+passby_press = false
+action = &"item_2"
+
+[node name="Background" type="Panel" parent="Items/Repair"]
+show_behind_parent = true
+offset_left = -21.0
+offset_top = -21.0
+offset_right = 71.0
+offset_bottom = 71.0
+mouse_filter = 2
+theme_override_styles/panel = SubResource("Style_item")
+
+[node name="Caption" type="Label" parent="Items/Repair"]
+offset_left = -21.0
+offset_top = 48.0
+offset_right = 71.0
+offset_bottom = 70.0
+mouse_filter = 2
+theme_override_font_sizes/font_size = 14
+text = "2 Repair"
+horizontal_alignment = 1
+
+[node name="Dynamite" type="TouchScreenButton" parent="Items"]
+texture_normal = ExtResource("4_dynamite")
+shape = SubResource("Circle_item")
+shape_visible = false
+passby_press = false
+action = &"item_3"
+
+[node name="Background" type="Panel" parent="Items/Dynamite"]
+show_behind_parent = true
+offset_left = -21.0
+offset_top = -21.0
+offset_right = 71.0
+offset_bottom = 71.0
+mouse_filter = 2
+theme_override_styles/panel = SubResource("Style_item")
+
+[node name="Caption" type="Label" parent="Items/Dynamite"]
+offset_left = -21.0
+offset_top = 48.0
+offset_right = 71.0
+offset_bottom = 70.0
+mouse_filter = 2
+theme_override_font_sizes/font_size = 14
+text = "3 Dynamite"
+horizontal_alignment = 1
+
+[node name="Plastic" type="TouchScreenButton" parent="Items"]
+texture_normal = ExtResource("5_plastic")
+shape = SubResource("Circle_item")
+shape_visible = false
+passby_press = false
+action = &"item_4"
+
+[node name="Background" type="Panel" parent="Items/Plastic"]
+show_behind_parent = true
+offset_left = -21.0
+offset_top = -21.0
+offset_right = 71.0
+offset_bottom = 71.0
+mouse_filter = 2
+theme_override_styles/panel = SubResource("Style_item")
+
+[node name="Caption" type="Label" parent="Items/Plastic"]
+offset_left = -21.0
+offset_top = 48.0
+offset_right = 71.0
+offset_bottom = 70.0
+mouse_filter = 2
+theme_override_font_sizes/font_size = 14
+text = "4 Plastic"
+horizontal_alignment = 1
+
+[node name="Teleport" type="TouchScreenButton" parent="Items"]
+texture_normal = ExtResource("6_teleport")
+shape = SubResource("Circle_item")
+shape_visible = false
+passby_press = false
+action = &"item_5"
+
+[node name="Background" type="Panel" parent="Items/Teleport"]
+show_behind_parent = true
+offset_left = -21.0
+offset_top = -21.0
+offset_right = 71.0
+offset_bottom = 71.0
+mouse_filter = 2
+theme_override_styles/panel = SubResource("Style_item")
+
+[node name="Caption" type="Label" parent="Items/Teleport"]
+offset_left = -21.0
+offset_top = 48.0
+offset_right = 71.0
+offset_bottom = 70.0
+mouse_filter = 2
+theme_override_font_sizes/font_size = 14
+text = "5 Teleport"
+horizontal_alignment = 1
+
+[node name="Matter" type="TouchScreenButton" parent="Items"]
+texture_normal = ExtResource("7_matter")
+shape = SubResource("Circle_item")
+shape_visible = false
+passby_press = false
+action = &"item_6"
+
+[node name="Background" type="Panel" parent="Items/Matter"]
+show_behind_parent = true
+offset_left = -21.0
+offset_top = -21.0
+offset_right = 71.0
+offset_bottom = 71.0
+mouse_filter = 2
+theme_override_styles/panel = SubResource("Style_item")
+
+[node name="Caption" type="Label" parent="Items/Matter"]
+offset_left = -21.0
+offset_top = 48.0
+offset_right = 71.0
+offset_bottom = 70.0
+mouse_filter = 2
+theme_override_font_sizes/font_size = 14
+text = "6 Matter"
+horizontal_alignment = 1

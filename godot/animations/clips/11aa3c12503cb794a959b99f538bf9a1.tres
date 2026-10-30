@@ -1,0 +1,66 @@
+[gd_resource type="Animation" format=3]
+
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P2Standing/1755.png" id="1_had4y"]
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_gpx6d"]
+atlas = ExtResource("1_had4y")
+region = Rect2(0, 0, 150, 200)
+
+[resource]
+resource_name = "P2Standing_Anim"
+length = 1.2
+loop_mode = 1
+tracks/0/type = "value"
+tracks/0/imported = false
+tracks/0/enabled = true
+tracks/0/path = NodePath("slot_0:unbound")
+tracks/0/interp = 0
+tracks/0/loop_wrap = false
+tracks/0/keys = {
+"times": PackedFloat32Array(0, 0.2, 0.4, 0.6, 0.8, 1),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [SubResource("AtlasTexture_gpx6d"), SubResource("AtlasTexture_gpx6d"), SubResource("AtlasTexture_gpx6d"), SubResource("AtlasTexture_gpx6d"), SubResource("AtlasTexture_gpx6d"), SubResource("AtlasTexture_gpx6d")]
+}
+tracks/1/type = "value"
+tracks/1/imported = false
+tracks/1/enabled = true
+tracks/1/path = NodePath("slot_1:unbound")
+tracks/1/interp = 0
+tracks/1/loop_wrap = false
+tracks/1/keys = {
+"times": PackedFloat32Array(0, 0.2, 0.4, 0.6, 0.8, 1),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573)]
+}
+tracks/2/type = "value"
+tracks/2/imported = false
+tracks/2/enabled = true
+tracks/2/path = NodePath("slot_2:unbound")
+tracks/2/interp = 0
+tracks/2/loop_wrap = false
+tracks/2/keys = {
+"times": PackedFloat32Array(0, 0.2, 0.4, 0.6, 0.8, 1),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0)]
+}
+metadata/sprite_tracks = PackedInt32Array(0, 1, 2)
+metadata/boundaries = PackedFloat64Array(1.2)
+metadata/bindings = Array[Dictionary]([{
+"bezier": false,
+"kind": "sprite",
+"path": "",
+"property": "texture"
+}, {
+"bezier": false,
+"kind": "sprite_geometry",
+"path": "",
+"property": "scale"
+}, {
+"bezier": false,
+"kind": "sprite_geometry",
+"path": "",
+"property": "offset"
+}])

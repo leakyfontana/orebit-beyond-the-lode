@@ -1,0 +1,195 @@
+name: Beta
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+
+defaults:
+  run:
+    shell: bash
+# Never overlap publishers. PR updates may cancel their own obsolete validation.
+concurrency:
+  group: beta-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  validate:
+    if: github.event_name == 'pull_request'
+    name: Validate ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-arm64
+            runner: macos-15
+          - platform: windows-x86_64
+            runner: windows-2022
+          - platform: android-arm64
+            runner: ubuntu-24.04
+          - platform: web
+            runner: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: ./.github/actions/build-platform
+        with:
+          platform: ${{ matrix.platform }}
+          validation: 'true'
+
+  checks:
+    name: Beta checks
+    if: always() && github.event_name == 'pull_request'
+    needs: validate
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every platform and Web menu smoke
+        env:
+          VALIDATION_RESULT: ${{ needs.validate.result }}
+        run: test "$VALIDATION_RESULT" = success
+
+  release-build:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    name: Release ${{ matrix.platform }}
+    environment: beta-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-arm64
+            runner: macos-15
+          - platform: windows-x86_64
+            runner: windows-2022
+          - platform: android-arm64
+            runner: ubuntu-24.04
+          - platform: web
+            runner: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: ./.github/actions/build-platform
+        env:
+          OREBIT_ANDROID_KEYSTORE_BASE64: ${{ secrets.OREBIT_ANDROID_KEYSTORE_BASE64 }}
+          OREBIT_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.OREBIT_ANDROID_KEYSTORE_PASSWORD }}
+          OREBIT_ANDROID_KEYSTORE_ALIAS: ${{ secrets.OREBIT_ANDROID_KEYSTORE_ALIAS }}
+        with:
+          platform: ${{ matrix.platform }}
+          validation: 'false'
+
+  publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: release-build
+    environment: beta-release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: beta-production-*
+          path: dist
+          merge-multiple: true
+      - name: Verify the complete release
+        run: python automation/release/manifest.py --sha "$GITHUB_SHA"
+      - name: Install pinned uploader
+        run: |
+          python - <<'PY'
+          import hashlib, os, shutil, urllib.request, zipfile
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP']) / 'orebit-rclone'
+          root.mkdir()
+          archive = root / 'rclone.zip'
+          with urllib.request.urlopen('https://github.com/rclone/rclone/releases/download/v1.73.5/rclone-v1.73.5-linux-amd64.zip', timeout=60) as source, archive.open('wb') as sink:
+              shutil.copyfileobj(source, sink)
+          if hashlib.sha256(archive.read_bytes()).hexdigest() != '932cf4b7484de74d82b4875488e0009469fd21f9904673385184520fe11a1bf0':
+              raise SystemExit('rclone archive digest mismatch')
+          with zipfile.ZipFile(archive) as package, (root / 'rclone').open('wb') as sink:
+              sink.write(package.read('rclone-v1.73.5-linux-amd64/rclone'))
+          (root / 'rclone').chmod(0o700)
+          with open(os.environ['GITHUB_PATH'], 'a') as path:
+              path.write(str(root) + '\n')
+          PY
+      - name: Configure narrowly scoped publication access
+        env:
+          DRIVE_CONFIG: ${{ secrets.RCLONE_CONFIG_DRIVE }}
+          VPS_KEY: ${{ secrets.OREBIT_VPS_SSH_KEY }}
+          VPS_KNOWN_HOSTS: ${{ secrets.OREBIT_VPS_KNOWN_HOSTS }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP']) / 'orebit-access'
+          root.mkdir(mode=0o700)
+          for name, value in [('rclone.conf', 'DRIVE_CONFIG'), ('vps-key', 'VPS_KEY'), ('known_hosts', 'VPS_KNOWN_HOSTS')]:
+              content = os.environ[value]
+              if not content.strip():
+                  raise SystemExit('Missing protected release credential: ' + value)
+              path = root / name
+              path.write_text(content + '\n')
+              path.chmod(0o600)
+          ssh = Path.home() / '.ssh'
+          ssh.mkdir(mode=0o700, exist_ok=True)
+          config = ssh / 'config'
+          config.write_text('Host orebit-ci\n  HostName 135.181.198.116\n  User arcdeploy\n  IdentityFile ' + str(root / 'vps-key') + '\n  UserKnownHostsFile ' + str(root / 'known_hosts') + '\n  StrictHostKeyChecking yes\n  IdentitiesOnly yes\n  BatchMode yes\n  ConnectTimeout 15\n')
+          config.chmod(0o600)
+          with open(os.environ['GITHUB_ENV'], 'a') as env:
+              env.write('RCLONE_CONFIG=' + str(root / 'rclone.conf') + '\n')
+          PY
+      - name: Publish and verify Drive artifacts
+        run: python automation/release/publish_drive.py
+      - name: Deploy and verify matching Web release
+        id: deploy
+        run: python automation/release/deploy_web.py --host orebit-ci --manifest dist/release.json | tee dist/vps-deployment.json
+      - name: Exercise public Web menu
+        id: public-smoke
+        run: |
+          python -m pip install playwright==1.56.0
+          python -m playwright install --with-deps chromium
+          python automation/release/smoke_web.py --url https://play.arcmonkeyswelding.com --sha "$GITHUB_SHA" --screenshot dist/public-web-menu.png | tee dist/public-web-smoke.json
+      - name: Restore prior release if public browser verification fails
+        if: failure() && steps.deploy.outcome == 'success' && steps.public-smoke.outcome == 'failure'
+        run: |
+          python - <<'PY'
+          import json, subprocess, sys
+          from pathlib import Path
+          evidence = json.loads(Path('dist/vps-deployment.json').read_text())
+          if evidence.get('mutated') is True:
+              subprocess.run([sys.executable, 'automation/release/deploy_web.py', '--host', 'orebit-ci', '--manifest', 'dist/release.json', '--rollback'], check=True)
+          PY
+      - name: Publish durable successful-publication receipt
+        run: python automation/release/receipt.py
+      - name: Remove runner credentials
+        if: always()
+        run: |
+          python - <<'PY'
+          import os, shutil
+          from pathlib import Path
+          shutil.rmtree(Path(os.environ['RUNNER_TEMP']) / 'orebit-access', ignore_errors=True)
+          (Path.home() / '.ssh/config').unlink(missing_ok=True)
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: beta-publication-evidence
+          path: |
+            dist/*.json
+            dist/*.png
+            dist/release-notes.md
+          if-no-files-found: warn
+          retention-days: 30

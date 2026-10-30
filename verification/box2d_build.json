@@ -1,0 +1,125 @@
+{
+  "purpose": "Pinned source-built Godot 4.7.2 physics backend for macOS ARM64, Windows x86-64 and Android ARM64. All five native platform scenarios execute; full original-game parity remains unverified.",
+  "sources": {
+    "adapter": {
+      "url": "https://github.com/appsinacup/godot-box2d.git",
+      "tag": "v0.9.11",
+      "commit": "f717f7534da19fa2618b82fbcdafc040093aaafe",
+      "path": "verification/tools/box2d-source"
+    },
+    "box2d_submodule": {
+      "url": "https://github.com/appsinacup/box2d.git",
+      "commit": "b31e89d5d923b485d72bf58899304a8863e5caa0"
+    },
+    "godot_cpp": {
+      "url": "https://github.com/godotengine/godot-cpp.git",
+      "tag": "10.0.0-stable",
+      "commit": "507ed9d840c01a3c5b2a39af8bb4000bfac30bf5",
+      "path": "verification/tools/godot-cpp-10"
+    },
+    "engine_api": {
+      "engine": "Godot 4.7.2",
+      "path": "verification/tools/engine-api-4.7.2/extension_api.json",
+      "sha256": "d0e4c08c03b165156dabe6bfb6a906baf0069189f62035341230a246c86d6986",
+      "regeneration": "Run the exact evaluated engine with --headless --dump-extension-api in verification/tools/engine-api-4.7.2."
+    }
+  },
+  "patch": {
+    "path": "verification/box2d-godot-4.7.2.patch",
+    "base_commit": "f717f7534da19fa2618b82fbcdafc040093aaafe",
+    "changed_paths": [
+      "SConstruct",
+      "src/b2_user_settings.h",
+      "src/bodies/box2d_area_2d.cpp",
+      "src/bodies/box2d_area_2d.h",
+      "src/bodies/box2d_body_2d.cpp",
+      "src/bodies/box2d_body_2d.h",
+      "src/bodies/box2d_collision_object_2d.cpp",
+      "src/bodies/box2d_collision_object_2d.h",
+      "src/bodies/box2d_direct_body_state_2d.cpp",
+      "src/bodies/box2d_direct_body_state_2d.h",
+      "src/box2d-wrapper/box2d_wrapper.cpp",
+      "src/box2d-wrapper/box2d_wrapper.h",
+      "src/register_types.cpp",
+      "src/servers/box2d_body_utils_2d.cpp",
+      "src/servers/box2d_physics_server_2d.cpp",
+      "src/servers/box2d_physics_server_2d.h",
+      "src/shapes/box2d_concave_polygon_shape_2d.cpp",
+      "src/shapes/box2d_convex_polygon_shape_2d.cpp",
+      "src/shapes/box2d_segment_shape_2d.cpp",
+      "src/spaces/box2d_direct_space_state_2d.cpp",
+      "src/spaces/box2d_direct_space_state_2d.h",
+      "src/spaces/box2d_space_2d.cpp",
+      "src/spaces/box2d_space_2d.h"
+    ],
+    "apply_from_repository_root": "git -C verification/tools/box2d-source apply ../../box2d-godot-4.7.2.patch"
+  },
+  "box2d_fixture_patch": {
+    "path": "verification/box2d-fixture-shape-sync.patch",
+    "base_commit": "b31e89d5d923b485d72bf58899304a8863e5caa0",
+    "changed_paths": ["include/box2d/b2_fixture.h", "src/dynamics/b2_fixture.cpp"],
+    "apply_from_repository_root": "git -C verification/tools/box2d-source/box2d apply ../../../box2d-fixture-shape-sync.patch",
+    "purpose": "Synchronize only the edited fixture's broad-phase bounds after local geometry baking; preserve fixture/contact identity and schedule next-step pair creation."
+  },
+  "fresh_checkout_commands_from_repository_root": [
+    "git clone --branch v0.9.11 https://github.com/appsinacup/godot-box2d.git verification/tools/box2d-source",
+    "git -C verification/tools/box2d-source checkout f717f7534da19fa2618b82fbcdafc040093aaafe",
+    "git -C verification/tools/box2d-source submodule update --init box2d",
+    "git clone --branch 10.0.0-stable --depth 1 https://github.com/godotengine/godot-cpp.git verification/tools/godot-cpp-10",
+    "git -C verification/tools/godot-cpp-10 checkout 507ed9d840c01a3c5b2a39af8bb4000bfac30bf5",
+    "git -C verification/tools/box2d-source apply ../../box2d-godot-4.7.2.patch",
+    "git -C verification/tools/box2d-source/box2d apply ../../../box2d-fixture-shape-sync.patch",
+    "git -C verification/tools/godot-cpp-10 apply ../../godot-cpp-msvc-conformance.patch"
+  ],
+  "build_commands_from_repository_root": {
+    "macos_arm64": "env PATH=\"/usr/bin:$PATH\" verification/tools/asset-inspection/bin/scons -C verification/tools/box2d-source platform=macos arch=arm64 target=template_release precision=single",
+    "windows_x86_64_native_developer_shell": "scons -C verification/tools/box2d-source platform=windows arch=x86_64 target=template_release precision=single msvc_version=14.3 \"msvc_setup_script=C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Auxiliary/Build/vcvars64.bat\"",
+    "android_arm64": "ANDROID_HOME=\"$HOME/Library/Android/sdk\" PATH=/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin verification/tools/asset-inspection/bin/scons -C verification/tools/box2d-source platform=android arch=arm64 target=template_release precision=single -j8",
+    "web_wasm32": "python3 verification/build_web.py"
+  },
+  "build_requirements": [
+    "SCons 4 or later and Python 3.8 or later.",
+    "macOS: Xcode command-line tools; platform tool selects clang++ (/usr/bin/clang++ with the supplied PATH).",
+    "Windows: verified with free Microsoft Build Tools 2022, MSVC v143 (14.44.35207) and Windows SDK. Select the explicit vcvars64.bat and msvc_version=14.3 shown above; automatic discovery selected an incomplete Community installation on the verification machine.",
+    "Android: approved official NDK 28.1.13356709 (r28b). Native ARM64 ELF LOAD alignment is 16KB; matching Godot template supplies libc++_shared.so.",
+    "Web: Emscripten on PATH; exercised with 6.0.13, single-threaded wasm32, official extension-enabled Godot 4.7.2 Web templates.",
+    "The exact engine API file above must already exist; SConstruct selects it by default. A custom_api_file=<absolute-path> argument can explicitly override it."
+  ],
+  "expected_artifacts": {
+    "macos_arm64": "verification/tools/box2d-source/bin/addons/godot-box2d/bin/libgodot-box2d.macos.template_release.framework/libgodot-box2d.macos.template_release",
+    "windows_x86_64": "verification/tools/box2d-source/bin/addons/godot-box2d/bin/libgodot-box2d.windows.template_release.x86_64.dll",
+    "android_arm64_production": "godot/addons/godot-box2d/bin/libgodot-box2d.android.template_release.arm64.so",
+    "web_wasm32_production": "godot/addons/godot-box2d/bin/libgodot-box2d.web.template_release.wasm32.nothreads.wasm"
+  },
+  "changes": [
+    "Use matching godot-cpp 10 and the evaluated Godot 4.7.2 API, including current virtual hashes and real_t scalar signatures.",
+    "Register server implementation classes as internal extension classes.",
+    "Implement required direct-body collision layer/mask access, contact-local velocity, collider object lookup and default force integration.",
+    "Honor the one-way direction argument in body-shape state, solver filtering and motion queries.",
+    "Build two-point convex inputs, SegmentShape2D and ConcavePolygonShape2D endpoint pairs as actual two-sided Box2D edges; transform edges without adding artificial polygon thickness or closing disconnected segments.",
+    "Release owned template shapes and temporary conversion buffers.",
+    "Use the original game's 50 pixels per Unity meter so Box2D slop, polygon radius, sleeping and speed limits scale consistently.",
+    "Accumulate central forces with ApplyForceToCenter rather than converting them to immediate impulses that a subsequent velocity assignment erases.",
+    "Maintain fixture shape indices after removal, destroy fixtures through owned handles, reference-count logical sensor shape pairs, and detach space/query lists before object destruction.",
+    "Reset pending monitor events by observer category and re-register existing overlap pairs when callbacks change, without dispatching null callbacks.",
+    "Use radius-aware stationary query/shape overlap instead of moving-sweep TOI's reduced separation target; preserve polygon-skin sensor contact semantics without changing moving sweeps.",
+    "Use fixture body's world transform once in shape queries: fixture vertices already contain their collider-local translation/rotation, so applying the saved local transform again displaces terrain fixtures."
+  ],
+  "remaining_upstream_limitations": [
+    "No double-precision Box2D backend; evaluate precision=single only.",
+    "No edge-versus-edge contact manifold in Box2D.",
+    "Convex polygons are limited to the configured b2_maxPolygonVertices (64).",
+    "Circle/capsule skewing, thread safety and cross-platform determinism are not supplied by the upstream adapter.",
+    "Shape query transforms do not scale template geometry; bake scale into query shapes and pass rotation/translation-only transforms.",
+    "Custom per-shape solver bias is unsupported and already warns.",
+    "Existing body contacts-reported depth threshold setters/getters do not implement filtering.",
+    "Existing omit-force-integration state is stored but is not consumed by the upstream Box2D force step; custom integration requiring omitted automatic forces is unsupported.",
+    "Existing concave packed-float data input is not implemented; use PackedVector2Array endpoint pairs."
+  ],
+  "evidence": {
+    "binding_generation": "Bindings generated from the exact evaluated 4.7.2 API and compiled on all three target architectures.",
+    "compilation": "macOS ARM64, Windows x86-64 and Android ARM64 template_release compiled successfully. Windows uses approved side-by-side MSVC19.44/v143; Android uses the approved pinned NDK.",
+    "runtime": "Cycles45/52 complete all5 macOS, interactive Windows and Pixel scenarios without engine errors; Windows game0/runner0/errors[]/warnings[] and task cleanup pass. Cycle51 passes all6 actual stationary skin/body-offset/child-offset overlap regression cases. Corrected source/native rotor RNG matches through410, but later draws, exact state and shop/boss timing still differ. Windows exported templates do not run the external standalone script; no standalone Windows regression pass inferred. Exact acceptance remains unverified.",
+    "windows_binding_flags_patch": "verification/godot-cpp-msvc-conformance.patch; apply to pinned godot-cpp in addition to the adapter patch. Provides consistent C++17 conformance flags and explicit existing compiler-instance selection; no linker errors are suppressed."
+  }
+}

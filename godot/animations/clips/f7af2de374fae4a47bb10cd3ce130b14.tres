@@ -1,0 +1,200 @@
+[gd_resource type="Animation" format=3]
+
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P2Death/1854.png" id="1_isxew"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P2Death/1856.png" id="2_6klk4"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P2Death/1858.png" id="3_cey11"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P2Death/1860.png" id="4_gtg6y"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P2Death/1862.png" id="5_5yfhy"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P2Death/1864.png" id="6_pg0ty"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P2Death/1866.png" id="7_2mjfj"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P2Death/1868.png" id="8_q7j2k"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P2Death/1870.png" id="9_ru0ov"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P2Death/1872.png" id="10_bu4xa"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P2Death/1874.png" id="11_eeuha"]
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_m5gos"]
+atlas = ExtResource("1_isxew")
+region = Rect2(0, 0, 217, 235)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_dnwa7"]
+atlas = ExtResource("2_6klk4")
+region = Rect2(0, 0, 217, 235)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_smlve"]
+atlas = ExtResource("3_cey11")
+region = Rect2(0, 0, 217, 235)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_1g2nj"]
+atlas = ExtResource("4_gtg6y")
+region = Rect2(0, 0, 217, 235)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_e5tyr"]
+atlas = ExtResource("5_5yfhy")
+region = Rect2(0, 0, 217, 235)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_rtgox"]
+atlas = ExtResource("6_pg0ty")
+region = Rect2(0, 0, 217, 235)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_ktolr"]
+atlas = ExtResource("7_2mjfj")
+region = Rect2(0, 0, 217, 235)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_m6igx"]
+atlas = ExtResource("8_q7j2k")
+region = Rect2(0, 0, 217, 235)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_sqdco"]
+atlas = ExtResource("9_ru0ov")
+region = Rect2(0, 0, 217, 235)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_rwnme"]
+atlas = ExtResource("10_bu4xa")
+region = Rect2(0, 0, 217, 235)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_eg1sf"]
+atlas = ExtResource("11_eeuha")
+region = Rect2(0, 0, 217, 235)
+
+[resource]
+resource_name = "P2Death_Anim"
+length = 5.0
+loop_mode = 1
+tracks/0/type = "value"
+tracks/0/imported = false
+tracks/0/enabled = true
+tracks/0/path = NodePath("slot_0:unbound")
+tracks/0/interp = 0
+tracks/0/loop_wrap = false
+tracks/0/keys = {
+"times": PackedFloat32Array(0, 0.2, 0.4, 0.6, 0.8, 1, 4, 4.2, 4.4, 4.6, 4.8),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [SubResource("AtlasTexture_m5gos"), SubResource("AtlasTexture_dnwa7"), SubResource("AtlasTexture_smlve"), SubResource("AtlasTexture_1g2nj"), SubResource("AtlasTexture_e5tyr"), SubResource("AtlasTexture_rtgox"), SubResource("AtlasTexture_ktolr"), SubResource("AtlasTexture_m6igx"), SubResource("AtlasTexture_sqdco"), SubResource("AtlasTexture_rwnme"), SubResource("AtlasTexture_eg1sf")]
+}
+tracks/1/type = "value"
+tracks/1/imported = false
+tracks/1/enabled = true
+tracks/1/path = NodePath("slot_1:unbound")
+tracks/1/interp = 0
+tracks/1/loop_wrap = false
+tracks/1/keys = {
+"times": PackedFloat32Array(0, 0.2, 0.4, 0.6, 0.8, 1, 4, 4.2, 4.4, 4.6, 4.8),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573)]
+}
+tracks/2/type = "value"
+tracks/2/imported = false
+tracks/2/enabled = true
+tracks/2/path = NodePath("slot_2:unbound")
+tracks/2/interp = 0
+tracks/2/loop_wrap = false
+tracks/2/keys = {
+"times": PackedFloat32Array(0, 0.2, 0.4, 0.6, 0.8, 1, 4, 4.2, 4.4, 4.6, 4.8),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0)]
+}
+tracks/3/type = "method"
+tracks/3/imported = false
+tracks/3/enabled = true
+tracks/3/path = NodePath(".")
+tracks/3/interp = 1
+tracks/3/loop_wrap = true
+tracks/3/keys = {
+"times": PackedFloat32Array(0),
+"transitions": PackedFloat32Array(1),
+"values": [{
+"args": ["playSound", "P2Death"],
+"method": &"_native_event"
+}]
+}
+tracks/4/type = "method"
+tracks/4/imported = false
+tracks/4/enabled = true
+tracks/4/path = NodePath(".")
+tracks/4/interp = 1
+tracks/4/loop_wrap = true
+tracks/4/keys = {
+"times": PackedFloat32Array(1),
+"transitions": PackedFloat32Array(1),
+"values": [{
+"args": ["playSound", "SatanStep"],
+"method": &"_native_event"
+}]
+}
+tracks/5/type = "method"
+tracks/5/imported = false
+tracks/5/enabled = true
+tracks/5/path = NodePath(".")
+tracks/5/interp = 1
+tracks/5/loop_wrap = true
+tracks/5/keys = {
+"times": PackedFloat32Array(1),
+"transitions": PackedFloat32Array(1),
+"values": [{
+"args": ["startBurstParticles", null],
+"method": &"_native_event"
+}]
+}
+tracks/6/type = "method"
+tracks/6/imported = false
+tracks/6/enabled = true
+tracks/6/path = NodePath(".")
+tracks/6/interp = 1
+tracks/6/loop_wrap = true
+tracks/6/keys = {
+"times": PackedFloat32Array(4.8),
+"transitions": PackedFloat32Array(1),
+"values": [{
+"args": ["playSound", "SatanStep"],
+"method": &"_native_event"
+}]
+}
+tracks/7/type = "method"
+tracks/7/imported = false
+tracks/7/enabled = true
+tracks/7/path = NodePath(".")
+tracks/7/interp = 1
+tracks/7/loop_wrap = true
+tracks/7/keys = {
+"times": PackedFloat32Array(4.8),
+"transitions": PackedFloat32Array(1),
+"values": [{
+"args": ["startBurstParticles", null],
+"method": &"_native_event"
+}]
+}
+tracks/8/type = "method"
+tracks/8/imported = false
+tracks/8/enabled = true
+tracks/8/path = NodePath(".")
+tracks/8/interp = 1
+tracks/8/loop_wrap = true
+tracks/8/keys = {
+"times": PackedFloat32Array(4.8),
+"transitions": PackedFloat32Array(1),
+"values": [{
+"args": ["finishDeath", null],
+"method": &"_native_event"
+}]
+}
+metadata/sprite_tracks = PackedInt32Array(0, 1, 2)
+metadata/boundaries = PackedFloat64Array(0, 1, 4.8, 5)
+metadata/bindings = Array[Dictionary]([{
+"bezier": false,
+"kind": "sprite",
+"path": "",
+"property": "texture"
+}, {
+"bezier": false,
+"kind": "sprite_geometry",
+"path": "",
+"property": "scale"
+}, {
+"bezier": false,
+"kind": "sprite_geometry",
+"path": "",
+"property": "offset"
+}])

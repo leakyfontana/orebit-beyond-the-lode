@@ -1,0 +1,26 @@
+# Local/private intake is not part of the public game repository.
+/automation/*
+!/automation/release/
+!/automation/announcements/
+
+# Verification toolchains, captures and source-reference downloads stay local.
+/verification/*
+!/verification/build_web.py
+!/verification/box2d_build.json
+!/verification/box2d-godot-4.7.2.patch
+!/verification/box2d-fixture-shape-sync.patch
+!/verification/godot-cpp-msvc-conformance.patch
+
+# Built artifacts and per-machine credentials are never source inputs.
+/dist/
+/godot/addons/godot-box2d/bin/
+/godot/data/unity_manifest.json
+*.keystore
+*.jks
+*.pem
+*.key
+.env
+.env.*
+__pycache__/
+*.pyc
+.DS_Store

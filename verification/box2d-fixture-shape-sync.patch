@@ -1,0 +1,51 @@
+diff --git a/include/box2d/b2_fixture.h b/include/box2d/b2_fixture.h
+index 2229c3f..7505bb4 100644
+--- a/include/box2d/b2_fixture.h
++++ b/include/box2d/b2_fixture.h
+@@ -144,6 +144,10 @@ public:
+ 	/// Call this if you want to establish collision that was previously disabled by b2ContactFilter::ShouldCollide.
+ 	void Refilter();
+ 
++	/// Refresh broad-phase bounds after editing this shape's geometry in place.
++	/// The shape type and child count must remain unchanged; world must be unlocked.
++	void SynchronizeShape();
++
+ 	/// Get the parent body of this fixture. This is nullptr if the fixture is not attached.
+ 	/// @return the parent body.
+ 	b2Body* GetBody();
+diff --git a/src/dynamics/b2_fixture.cpp b/src/dynamics/b2_fixture.cpp
+index 9fd700a..49f9ffd 100644
+--- a/src/dynamics/b2_fixture.cpp
++++ b/src/dynamics/b2_fixture.cpp
+@@ -177,6 +177,31 @@ void b2Fixture::Synchronize(b2BroadPhase* broadPhase, const b2Transform& transfo
+ 	}
+ }
+ 
++void b2Fixture::SynchronizeShape()
++{
++	if (m_body == nullptr || m_proxyCount == 0)
++	{
++		return;
++	}
++
++	b2World* world = m_body->GetWorld();
++	b2Assert(world->IsLocked() == false);
++	if (world->IsLocked())
++	{
++		return;
++	}
++
++	b2BroadPhase* broadPhase = &world->m_contactManager.m_broadPhase;
++	const b2Transform& transform = m_body->GetTransform();
++	for (int32 i = 0; i < m_proxyCount; ++i)
++	{
++		b2FixtureProxy* proxy = m_proxies + i;
++		m_shape->ComputeAABB(&proxy->aabb, transform, proxy->childIndex);
++		broadPhase->MoveProxy(proxy->proxyId, proxy->aabb, b2Vec2_zero);
++	}
++	world->m_newContacts = true;
++}
++
+ void b2Fixture::SetFilterData(const b2Filter& filter)
+ {
+ 	m_filter = filter;

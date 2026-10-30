@@ -1,0 +1,181 @@
+[gd_resource type="Animation" format=3]
+
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P1Walk/18.png" id="1_tavog"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P1Walk/20.png" id="2_ionpm"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P1Walk/22.png" id="3_ik3cg"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P1Walk/24.png" id="4_i675d"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P1Walk/26.png" id="5_b4tde"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P1Walk/28.png" id="6_gux8p"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P1Walk/30.png" id="7_bn541"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P1Walk/32.png" id="8_l21ns"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P1Walk/34.png" id="9_y20dh"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P1Walk/36.png" id="10_2su0d"]
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_iv0bb"]
+atlas = ExtResource("1_tavog")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_7cqot"]
+atlas = ExtResource("2_ionpm")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_yatqm"]
+atlas = ExtResource("3_ik3cg")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_73byp"]
+atlas = ExtResource("4_i675d")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_p8tgm"]
+atlas = ExtResource("5_b4tde")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_liftb"]
+atlas = ExtResource("6_gux8p")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_0yufq"]
+atlas = ExtResource("7_bn541")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_c3xs6"]
+atlas = ExtResource("8_l21ns")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_t78x1"]
+atlas = ExtResource("9_y20dh")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_2vdiq"]
+atlas = ExtResource("10_2su0d")
+region = Rect2(0, 0, 150, 200)
+
+[resource]
+resource_name = "P1Walk_Anim"
+length = 2.0
+loop_mode = 1
+tracks/0/type = "value"
+tracks/0/imported = false
+tracks/0/enabled = true
+tracks/0/path = NodePath("slot_0:unbound")
+tracks/0/interp = 0
+tracks/0/loop_wrap = false
+tracks/0/keys = {
+"times": PackedFloat32Array(0, 0.2, 0.4, 0.6, 0.8, 1, 1.2, 1.4, 1.6, 1.8),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [SubResource("AtlasTexture_iv0bb"), SubResource("AtlasTexture_7cqot"), SubResource("AtlasTexture_yatqm"), SubResource("AtlasTexture_73byp"), SubResource("AtlasTexture_p8tgm"), SubResource("AtlasTexture_liftb"), SubResource("AtlasTexture_0yufq"), SubResource("AtlasTexture_c3xs6"), SubResource("AtlasTexture_t78x1"), SubResource("AtlasTexture_2vdiq")]
+}
+tracks/1/type = "value"
+tracks/1/imported = false
+tracks/1/enabled = true
+tracks/1/path = NodePath("slot_1:unbound")
+tracks/1/interp = 0
+tracks/1/loop_wrap = false
+tracks/1/keys = {
+"times": PackedFloat32Array(0, 0.2, 0.4, 0.6, 0.8, 1, 1.2, 1.4, 1.6, 1.8),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573)]
+}
+tracks/2/type = "value"
+tracks/2/imported = false
+tracks/2/enabled = true
+tracks/2/path = NodePath("slot_2:unbound")
+tracks/2/interp = 0
+tracks/2/loop_wrap = false
+tracks/2/keys = {
+"times": PackedFloat32Array(0, 0.2, 0.4, 0.6, 0.8, 1, 1.2, 1.4, 1.6, 1.8),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0)]
+}
+tracks/3/type = "method"
+tracks/3/imported = false
+tracks/3/enabled = true
+tracks/3/path = NodePath(".")
+tracks/3/interp = 1
+tracks/3/loop_wrap = true
+tracks/3/keys = {
+"times": PackedFloat32Array(0),
+"transitions": PackedFloat32Array(1),
+"values": [{
+"args": ["playSound", "SatanStep"],
+"method": &"_native_event"
+}]
+}
+tracks/4/type = "method"
+tracks/4/imported = false
+tracks/4/enabled = true
+tracks/4/path = NodePath(".")
+tracks/4/interp = 1
+tracks/4/loop_wrap = true
+tracks/4/keys = {
+"times": PackedFloat32Array(0),
+"transitions": PackedFloat32Array(1),
+"values": [{
+"args": ["startSmallBurstParticles", null],
+"method": &"_native_event"
+}]
+}
+tracks/5/type = "method"
+tracks/5/imported = false
+tracks/5/enabled = true
+tracks/5/path = NodePath(".")
+tracks/5/interp = 1
+tracks/5/loop_wrap = true
+tracks/5/keys = {
+"times": PackedFloat32Array(1),
+"transitions": PackedFloat32Array(1),
+"values": [{
+"args": ["startSmallBurstParticles", null],
+"method": &"_native_event"
+}]
+}
+tracks/6/type = "method"
+tracks/6/imported = false
+tracks/6/enabled = true
+tracks/6/path = NodePath(".")
+tracks/6/interp = 1
+tracks/6/loop_wrap = true
+tracks/6/keys = {
+"times": PackedFloat32Array(1),
+"transitions": PackedFloat32Array(1),
+"values": [{
+"args": ["playSound", "SatanStep2"],
+"method": &"_native_event"
+}]
+}
+tracks/7/type = "method"
+tracks/7/imported = false
+tracks/7/enabled = true
+tracks/7/path = NodePath(".")
+tracks/7/interp = 1
+tracks/7/loop_wrap = true
+tracks/7/keys = {
+"times": PackedFloat32Array(2),
+"transitions": PackedFloat32Array(1),
+"values": [{
+"args": ["finishOneWalkCycle", null],
+"method": &"_native_event"
+}]
+}
+metadata/sprite_tracks = PackedInt32Array(0, 1, 2)
+metadata/boundaries = PackedFloat64Array(0, 1, 2)
+metadata/bindings = Array[Dictionary]([{
+"bezier": false,
+"kind": "sprite",
+"path": "",
+"property": "texture"
+}, {
+"bezier": false,
+"kind": "sprite_geometry",
+"path": "",
+"property": "scale"
+}, {
+"bezier": false,
+"kind": "sprite_geometry",
+"path": "",
+"property": "offset"
+}])
