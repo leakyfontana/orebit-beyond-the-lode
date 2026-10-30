@@ -1,6 +1,6 @@
 extends Node2D
 
-const UNIT := Vector2(50, -50)
+const UNIT := Vector2(1, -1)
 var manifest: Dictionary
 var data := GameData.new()
 var world: WorldData
@@ -10,7 +10,11 @@ var ui: GameUI
 var player: PortPlayer
 var boss: PortBoss
 var body: RigidBody2D
-var player_trigger: Area2D
+var _player_trigger_query: PhysicsShapeQueryParameters2D
+var _player_trigger_transform := Transform2D.IDENTITY
+var _sensor_triggers: Dictionary = {}
+var _shop_queries: Dictionary = {}
+var _last_trigger_step := -1
 var terrain: TerrainView
 var camera: Camera2D
 var _camera_orthographic_size := 5.0
@@ -33,6 +37,7 @@ var player_go := ""
 var animators: Array = []
 var scene_triggers: Array = []
 var background_goal: Dictionary = {}
+var _background_float32 := PackedFloat32Array([0.0])
 var seed_value := 1
 var _seed_is_explicit := false
 var unity_random := UnityRandom.new()
@@ -99,6 +104,9 @@ func _load_scene(which: String) -> void:
 	player_alive = false
 	animators.clear()
 	scene_triggers.clear()
+	_sensor_triggers.clear()
+	_shop_queries.clear()
+	_last_trigger_step = -1
 	background_goal.clear()
 	for instance in [ui, player, boss, bridge, world_root, ui_root, camera, body]:
 		if is_instance_valid(instance):
@@ -107,7 +115,7 @@ func _load_scene(which: String) -> void:
 	player = null
 	boss = null
 	body = null
-	player_trigger = null
+	_player_trigger_query = null
 	terrain = null
 	player_go = ""
 	scene_name = which
@@ -142,6 +150,7 @@ func _load_scene(which: String) -> void:
 	if not get_viewport().size_changed.is_connected(_resize_camera):
 		get_viewport().size_changed.connect(_resize_camera)
 	_resize_camera()
+	_setup_background()
 	if which == "Game":
 		if not data.level_is_already_generated:
 			world.generate(seed_value if _seed_is_explicit else null)
@@ -209,21 +218,27 @@ func _setup_player() -> void:
 			_add_shape(body, component, visual.global_scale)
 	body.set_meta("unity_tag", "Player")
 	body.add_to_group("Player")
-	# Tag-filtered triggers observe the original child sensor, not the solid body.
+	# Query the authored child sensor at the completed rigid-body pose.
+	# A child Area2D is a separate native body and follows the Node cache,
+	# not the current physics step of its RigidBody2D parent.
 	for id in bridge.scene.game_objects:
 		if bridge.scene.game_objects[id].get("tag", "") != "PlayerTrigger":
 			continue
 		var sensor_visual := bridge.nodes[id] as Node2D
-		player_trigger = Area2D.new()
-		player_trigger.name = "PlayerTrigger"
-		player_trigger.collision_layer = 2
-		player_trigger.collision_mask = 0
-		player_trigger.monitoring = false
-		body.add_child(player_trigger)
-		player_trigger.global_transform = Transform2D(sensor_visual.global_rotation, sensor_visual.global_position)
 		for component in bridge.components(id):
-			if component.get("type", "").ends_with("Collider2D") and bool(component.properties.get("m_IsTrigger", false)) and bool(component.properties.get("m_Enabled", true)):
-				_add_shape(player_trigger, component, sensor_visual.global_scale)
+			var p: Dictionary = component.properties
+			if component.get("type", "") != "BoxCollider2D" or not bool(p.get("m_IsTrigger", false)) or not bool(p.get("m_Enabled", true)):
+				continue
+			var shape := RectangleShape2D.new()
+			shape.size = _vec(p.get("m_Size", {}), Vector2.ONE) * sensor_visual.global_scale.abs()
+			var sensor_pose := Transform2D(sensor_visual.global_rotation, sensor_visual.global_position)
+			sensor_pose.origin = sensor_pose * (_vec(p.get("m_Offset", {})) * UNIT * sensor_visual.global_scale)
+			_player_trigger_transform = body.global_transform.affine_inverse() * sensor_pose
+			_player_trigger_query = PhysicsShapeQueryParameters2D.new()
+			_player_trigger_query.shape = shape
+			_player_trigger_query.collision_mask = 1
+			_player_trigger_query.collide_with_bodies = false
+			_player_trigger_query.collide_with_areas = true
 	player_position = body.global_position / UNIT
 	player_alive = visual.visible
 	body.freeze = not player_alive
@@ -241,15 +256,15 @@ func _add_shape(owner_body: CollisionObject2D, component: Dictionary, scaling: V
 	match str(component.get("type", "")):
 		"CircleCollider2D":
 			var circle := CircleShape2D.new()
-			circle.radius = float(p.get("m_Radius", 0.5)) * 50.0 * maxf(absf(scaling.x), absf(scaling.y))
+			circle.radius = float(p.get("m_Radius", 0.5)) * maxf(absf(scaling.x), absf(scaling.y))
 			shape = circle
 		"BoxCollider2D":
 			var rectangle := RectangleShape2D.new()
-			rectangle.size = _vec(p.get("m_Size", {}), Vector2.ONE) * 50.0 * scaling.abs()
+			rectangle.size = _vec(p.get("m_Size", {}), Vector2.ONE) * scaling.abs()
 			shape = rectangle
 		"CapsuleCollider2D":
 			var capsule := CapsuleShape2D.new()
-			var size := _vec(p.get("m_Size", {}), Vector2.ONE) * 50.0 * scaling.abs()
+			var size := _vec(p.get("m_Size", {}), Vector2.ONE) * scaling.abs()
 			capsule.radius = minf(size.x, size.y) / 2.0
 			capsule.height = maxf(size.x, size.y)
 			shape = capsule
@@ -283,6 +298,7 @@ func _add_shape(owner_body: CollisionObject2D, component: Dictionary, scaling: V
 			return
 	var collision := CollisionShape2D.new()
 	collision.shape = shape
+	collision.set_meta("source_collider_id", str(component.file_id))
 	collision.position = _vec(p.get("m_Offset", {})) * UNIT * scaling
 	owner_body.add_child(collision)
 
@@ -307,13 +323,29 @@ func _setup_static_collisions() -> void:
 					for shape_component in bridge.components(id):
 						if shape_component.get("type", "").ends_with("Collider2D") and bool(shape_component.properties.get("m_IsTrigger", false)):
 							_add_shape(area, shape_component, visual.global_scale)
-				var trigger := {"id": id, "script": script, "properties": component.properties, "area": area}
+				var sensor := script in ["TransmissionTrigger", "StartBossfightTrigger", "BackgroundChangeColorTrigger"]
+				var trigger := {"id": id, "script": script, "properties": component.properties, "area": area,
+					"sensor": sensor, "inside": false, "touching": false}
 				scene_triggers.append(trigger)
-				if script in ["TransmissionTrigger", "StartBossfightTrigger", "BackgroundChangeColorTrigger"]:
-					area.area_entered.connect(_trigger_entered.bind(trigger), CONNECT_DEFERRED)
+				area.monitoring = false
+				if sensor:
+					_sensor_triggers[area] = trigger
 				else:
-					area.body_entered.connect(_trigger_entered.bind(trigger), CONNECT_DEFERRED)
-					area.body_exited.connect(_trigger_exited.bind(trigger), CONNECT_DEFERRED)
+					var collider_id := bridge.reference_id(component.properties.player_collision)
+					if not _shop_queries.has(collider_id):
+						for child in body.get_children():
+							if child is CollisionShape2D and str(child.get_meta("source_collider_id", "")) == collider_id:
+								var query := PhysicsShapeQueryParameters2D.new()
+								query.shape = child.shape
+								query.collision_mask = 1
+								query.collide_with_bodies = false
+								query.collide_with_areas = true
+								_shop_queries[collider_id] = {"shape": child, "query": query, "triggers": {}}
+								break
+					if not _shop_queries.has(collider_id):
+						push_error("Shop is missing its authored player collider: " + collider_id)
+						continue
+					_shop_queries[collider_id].triggers[area] = trigger
 		if not bridge.properties(id, "Rigidbody2D").is_empty() or not bridge.properties(id, "StartBossfightTrigger").is_empty():
 			continue
 		if not bridge.properties(id, "P1BossMethods").is_empty() or not bridge.properties(id, "P2BossMethods").is_empty():
@@ -348,6 +380,7 @@ func _process(delta: float) -> void:
 		delta = ui_delta * Engine.time_scale
 	if player != null and player_alive and not paused:
 		player.refresh_ground_after_step()
+		_sample_player_triggers()
 	var next := pending_scene
 	pending_scene = ""
 	if replay_runner != null and bridge != null:
@@ -372,12 +405,12 @@ func _process(delta: float) -> void:
 			player.tick(delta)
 		if boss != null:
 			boss.tick(delta)
-		_tick_background()
+	# BackgroundScript.Update uses a per-render step, including timeScale == 0.
+	_tick_background()
 	if body != null and player_alive:
 		player.sync_physics_pose()
 		_update_camera(0.0 if paused else delta)
 		terrain.follow(player_position)
-	_tick_triggers()
 	frame_number += 1
 	if replay_runner != null:
 		if replay_runner.frame < 0:
@@ -441,7 +474,7 @@ func spawn_prefab(prefab_name: String, position_unity: Vector2, parent: Node2D) 
 		root.visible = true
 		var random_explosion := not prefab_bridge.properties(str(root_id), "ExplosionBehavior").is_empty() or not prefab_bridge.properties(str(root_id), "ExplosionWithoutParticlesBehavior").is_empty()
 		for component in prefab_bridge.components(str(root_id)):
-			if component.get("type", "") == "Animator" and prefab_name != "Fireball":
+			if component.get("type", "") == "Animator":
 				var animator := NativeAnimator.new()
 				animator.bind_controller(component.properties.get("m_Controller", {}).get("guid", ""), root, prefab_bridge)
 				var record := {"root": root, "animator": animator, "start_explosion": random_explosion}
@@ -494,17 +527,47 @@ func _scene_event(method: String, argument: Variant, id: String) -> void:
 	else:
 		push_error("Unhandled original scene animation event: " + method)
 
-func _tick_triggers() -> void:
+func _sample_player_triggers() -> void:
+	if _player_trigger_query == null:
+		return
+	var step := Engine.get_physics_frames()
+	if step == _last_trigger_step:
+		return
+	_last_trigger_step = step
+	var pose: Transform2D = PhysicsServer2D.body_get_state(body.get_rid(), PhysicsServer2D.BODY_STATE_TRANSFORM)
+	_player_trigger_query.transform = pose * _player_trigger_transform
 	for trigger in scene_triggers:
-		var visual := bridge.nodes[trigger.id] as Node2D
-		if not is_instance_valid(visual):
-			continue
-		var enabled := visual.is_visible_in_tree()
-		if trigger.area.monitoring != enabled:
-			trigger.area.set_deferred("monitoring", enabled)
+		trigger.touching = false
+	for hit in body.get_world_2d().direct_space_state.intersect_shape(_player_trigger_query, scene_triggers.size()):
+		var trigger: Dictionary = _sensor_triggers.get(hit.collider, {})
+		if not trigger.is_empty():
+			trigger.touching = true
+	if body.collision_layer != 0 and body.collision_mask != 0:
+		for collider_id in _shop_queries:
+			var record: Dictionary = _shop_queries[collider_id]
+			var shape: CollisionShape2D = record.shape
+			if shape.disabled:
+				continue
+			var query: PhysicsShapeQueryParameters2D = record.query
+			query.transform = pose * shape.transform
+			for hit in body.get_world_2d().direct_space_state.intersect_shape(query, scene_triggers.size()):
+				var trigger: Dictionary = record.triggers.get(hit.collider, {})
+				if not trigger.is_empty():
+					trigger.touching = true
+	for trigger in scene_triggers:
+		var visual := bridge.nodes.get(trigger.id) as Node2D
+		var touching: bool = trigger.touching and is_instance_valid(trigger.area) and is_instance_valid(visual) and visual.is_visible_in_tree()
+		var entered: bool = touching and not trigger.inside
+		var exited: bool = not touching and trigger.inside
+		trigger.inside = touching
+		if entered:
+			_activate_trigger(trigger)
+		elif exited and trigger.script == "ExitShopDoorCollision":
+			bridge.set_active(trigger.properties.get("linked_door", {}), true)
 
-func _trigger_entered(collided: Node2D, trigger: Dictionary) -> void:
-	if collided != (player_trigger if trigger.script in ["TransmissionTrigger", "StartBossfightTrigger", "BackgroundChangeColorTrigger"] else body) or not player_alive or not is_instance_valid(trigger.area):
+
+func _activate_trigger(trigger: Dictionary) -> void:
+	if not player_alive or not is_instance_valid(trigger.area):
 		return
 	var visual := bridge.nodes[trigger.id] as Node2D
 	if not is_instance_valid(visual) or not visual.is_visible_in_tree():
@@ -523,45 +586,76 @@ func _trigger_entered(collided: Node2D, trigger: Dictionary) -> void:
 			begin_boss()
 			visual.visible = false
 		"BackgroundChangeColorTrigger":
-			background_goal = {"goal": p.color_goal}
+			_set_background_goal(p.background_object, p.color_goal)
 
-func _trigger_exited(collided: Node2D, trigger: Dictionary) -> void:
-	if collided == body and is_instance_valid(trigger.area) and trigger.script == "ExitShopDoorCollision":
-		bridge.set_active(trigger.properties.get("linked_door", {}), true)
-
-func resetBackgroundColor() -> void:
+func _setup_background() -> void:
 	for id in bridge.scene.game_objects:
 		var props := bridge.properties(id, "BackgroundScript")
-		if not props.is_empty():
-			background_goal = {"id": id, "goal": props.get("base_color", {})}
+		if props.is_empty() or not bool(props.get("m_Enabled", true)) or not bridge.graphics.has(id):
+			continue
+		var goal: Dictionary = props.get("goal", {})
+		background_goal[id] = {"goal": Color(float(goal.get("r", 0)), float(goal.get("g", 0)), float(goal.get("b", 0))), "changing": false}
+		# Start preserves the baked SpriteRenderer.m_Color, not base_color/goal.
+		# The source background follows its Cinemachine virtual-camera parent.
+		# Bind that visual attachment to the live native camera; the imported
+		# virtual-camera Node2D itself does not run Cinemachine.
+		var parent_id := str(bridge.scene.game_objects[id].get("parent_id", "0"))
+		for component in bridge.components(parent_id):
+			var parent_props: Dictionary = component.get("properties", {})
+			if parent_props.has("m_Follow") and parent_props.has("m_Lens"):
+				bridge.nodes[id].reparent(camera, false)
+				break
+
+func _set_background_goal(reference: Variant, serialized_color: Dictionary) -> void:
+	var id := bridge.component_owner(reference)
+	if not background_goal.has(id):
+		return
+	background_goal[id].goal = Color(float(serialized_color.get("r", 0)), float(serialized_color.get("g", 0)), float(serialized_color.get("b", 0)))
+	background_goal[id].changing = true
+
+func resetBackgroundColor() -> void:
+	for id in background_goal:
+		_set_background_goal(id, bridge.properties(id, "BackgroundScript").get("base_color", {}))
 
 func _tick_background() -> void:
-	if background_goal.is_empty():
-		return
-	for id in bridge.scene.game_objects:
-		if bridge.properties(id, "BackgroundScript").is_empty() or not bridge.graphics.has(id):
+	for id in background_goal:
+		var state: Dictionary = background_goal[id]
+		if not state.changing or not bridge.nodes[id].is_visible_in_tree():
 			continue
 		var sprite: CanvasItem = bridge.graphics[id]
-		var goal: Dictionary = background_goal.get("goal", {})
+		var goal: Color = state.goal
 		var color := sprite.modulate
-		sprite.modulate = Color(move_toward(color.r, float(goal.get("r", color.r)), 0.0005), move_toward(color.g, float(goal.get("g", color.g)), 0.0005), move_toward(color.b, float(goal.get("b", color.b)), 0.0005))
+		color = Color(_background_move_towards(color.r, goal.r), _background_move_towards(color.g, goal.g), _background_move_towards(color.b, goal.b))
+		sprite.modulate = color
+		if color.r == goal.r and color.g == goal.g and color.b == goal.b:
+			state.changing = false
+
+func _background_move_towards(current: float, target: float) -> float:
+	# Mathf.MoveTowards rounds the subtraction and addition to float32.
+	const STEP := 0.0005000000237487257
+	_background_float32[0] = target - current
+	var difference: float = _background_float32[0]
+	if absf(difference) <= STEP:
+		return target
+	_background_float32[0] = current + signf(difference) * STEP
+	return _background_float32[0]
 
 func _resize_camera() -> void:
 	if not is_instance_valid(camera):
 		return
 	# Unity's full-viewport orthographic size is the vertical half-span.
-	# Use stretched viewport coordinates, not physical window pixels: 50 px/unit.
-	camera.zoom = Vector2.ONE * get_viewport_rect().size.y / (_camera_orthographic_size * 100.0)
+	# Physics/world coordinates remain original metres; UI stays in pixels.
+	camera.zoom = Vector2.ONE * get_viewport_rect().size.y / (_camera_orthographic_size * 2.0)
 
 func _update_camera(delta: float) -> void:
-	var viewport_units := get_viewport_rect().size / camera.zoom / 50.0
+	var viewport_units := get_viewport_rect().size / camera.zoom
 	var target: Vector2 = bridge.nodes[player_go].global_position
-	var dead := viewport_units * Vector2(0.2, 0.1) * 25.0
+	var dead := viewport_units * Vector2(0.2, 0.1) * 0.5
 	var offset := target - camera.global_position
 	var desired := camera.global_position + Vector2(signf(offset.x) * maxf(0, absf(offset.x) - dead.x), signf(offset.y) * maxf(0, absf(offset.y) - dead.y))
 	camera.global_position = camera.global_position.lerp(desired, 1.0 - exp(-4.605170186 * delta))
-	var half_width := minf(viewport_units.x * 25.0, data.earthWidth * 25.0)
-	camera.global_position.x = clampf(camera.global_position.x, half_width, data.earthWidth * 50.0 - half_width)
+	var half_width := minf(viewport_units.x * 0.5, data.earthWidth * 0.5)
+	camera.global_position.x = clampf(camera.global_position.x, half_width, data.earthWidth - half_width)
 
 func _vec(value: Dictionary, fallback: Vector2 = Vector2.ZERO) -> Vector2:
 	return Vector2(float(value.get("x", fallback.x)), float(value.get("y", fallback.y)))

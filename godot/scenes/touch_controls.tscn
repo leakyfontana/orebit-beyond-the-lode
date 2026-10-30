@@ -86,10 +86,10 @@ tip_size = 72.0
 deadzone_ratio = 0.18
 clampzone_ratio = 1.0
 initial_offset_ratio = Vector2(0.5, 0.5)
-action_left = &"move_left"
-action_right = &"move_right"
-action_up = &"move_up"
-action_down = &"move_down"
+action_left = &"touch_move_left"
+action_right = &"touch_move_right"
+action_up = &"touch_move_up"
+action_down = &"touch_move_down"
 visibility_mode = 0
 
 [node name="Items" type="Node2D" parent="."]

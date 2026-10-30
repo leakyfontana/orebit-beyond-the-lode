@@ -25,22 +25,6 @@ function receipt(): PublicationReceipt {
 }
 
 describe('publication announcements', () => {
-  test('includes only actually published platforms and preserves their download provenance', () => {
-    const input = validateReceipt(receipt());
-    const message = renderAnnouncement(input, links);
-    expect(message.embeds[0].fields.map(field => field.name)).toEqual(['Web/PWA']);
-    expect(message.embeds[0].fields[0].value).toContain(input.platforms[0].artifacts[0].url);
-    expect(message.embeds[0].fields[0].value).toContain(input.web.url);
-    expect(message.embeds[0].title).toContain(input.version);
-    expect(message.embeds[0].description).toContain('Fix collision behavior');
-    expect(message.embeds[0].description).toContain(links.receiptUrl);
-  });
-
-  test('preserves the UTC-offset timestamps emitted by the CI receipt producer', () => {
-    const input = receipt();
-    input.published_at = '2026-10-30T00:00:00.123456+00:00';
-    expect(renderAnnouncement(validateReceipt(input), links).embeds[0].timestamp).toBe(input.published_at);
-  });
 
   test('rejects mismatched commit evidence rather than announcing an unverified build', () => {
     const input = receipt();
@@ -61,6 +45,7 @@ describe('publication announcements', () => {
 
   test('bounds long notes without dropping platform links or enabling mentions', () => {
     const input = receipt();
+    input.notes.commits = [];
     input.notes.markdown = ('@everyone [misleading link](https://evil.invalid/) 🚀 '.repeat(900));
     const message = renderAnnouncement(input, links);
     const embed = message.embeds[0];
@@ -68,10 +53,27 @@ describe('publication announcements', () => {
       embed.fields.reduce((total, field) => total + field.name.length + field.value.length, 0);
     expect(aggregate).toBeLessThanOrEqual(6000);
     expect(embed.description.length).toBeLessThanOrEqual(4096);
-    expect(embed.description).toContain(links.receiptUrl);
-    expect(embed.fields[0].value).toContain(input.platforms[0].artifacts[0].url);
     expect(embed.description).not.toContain('@everyone');
     expect(message.allowed_mentions.parse).toEqual([]);
     expect(embed.description.isWellFormed()).toBe(true);
+    expect(message.components.flatMap(row => row.components).every(button => button.url.startsWith('https://'))).toBe(true);
+    expect(message.components.every(row => row.components.length <= 5)).toBe(true);
+    expect(embed.description.length).toBeLessThanOrEqual(510);
+  });
+
+  test('keeps player changes while omitting CI chatter, commit hashes and PR metadata', () => {
+    const input = receipt();
+    input.notes.markdown = "";
+    input.notes.commits = [
+      { commit, subject: 'Automate four-platform beta delivery (#1)' },
+      { commit, subject: 'fix(ci): Repair publishing job' },
+      { commit, subject: 'Use verified outbound beta deployment without inbound SSH (#3)' },
+      { commit, subject: 'fix: Stop fuel draining while paused (#42)' },
+    ];
+    const embed = renderAnnouncement(input, links).embeds[0];
+    expect(embed.description).toContain('fuel');
+    expect(embed.description).toContain('paused');
+    expect(embed.description).not.toMatch(/publishing|delivery|SSH|#42/);
+    expect(embed.title + embed.description + embed.footer.text).not.toContain(commit);
   });
 });

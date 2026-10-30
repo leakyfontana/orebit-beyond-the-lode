@@ -1,7 +1,7 @@
 class_name PortPlayer
 extends Node
 
-const PIXELS := Vector2(50.0, -50.0)
+const UNITS := Vector2(1.0, -1.0)
 const ITEM_NAMES := ["Reserve Fuel Tank", "Hull Repair Nanobots", "Dynamite", "Plastic Explosives", "Quantum Teleporter", "Matter Transmitter"]
 
 var host: Node
@@ -38,15 +38,18 @@ var slowdownMovementSmoothing: float = 1.0
 var velocity_unity: Vector2:
 	get:
 		var velocity: Vector2 = PhysicsServer2D.body_get_state(body.get_rid(), PhysicsServer2D.BODY_STATE_LINEAR_VELOCITY)
-		return velocity / PIXELS
+		return velocity / UNITS
 	set(value):
-		body.linear_velocity = value * PIXELS
+		body.linear_velocity = value * UNITS
 var position_unity: Vector2:
 	get:
 		var pose: Transform2D = PhysicsServer2D.body_get_state(body.get_rid(), PhysicsServer2D.BODY_STATE_TRANSFORM)
-		return pose.origin / PIXELS
+		return pose.origin / UNITS
 	set(value):
-		body.global_position = value * PIXELS
+		body.global_position = value * UNITS
+		# Node transform notifications are deferred. Publish the teleport before
+		# any same-frame physics-pose read can restore the previous location.
+		PhysicsServer2D.body_set_state(body.get_rid(), PhysicsServer2D.BODY_STATE_TRANSFORM, body.global_transform)
 		visual.global_position = body.global_position
 		host.player_position = value
 
@@ -64,7 +67,7 @@ var _total_explosion_time: float = 0.0
 var _time_until_next_explosion_creation: float = 0.0
 var _number_of_explosions_per_batch: int = 0
 var _range_to_destroy_around_player: int = 0
-var _active_attacks: Array[Dictionary] = []
+var _attack_areas: Dictionary = {}
 var _block_target := Vector2i(-1, -1)
 var _block_target_data: Dictionary = {}
 var _block_target_position := Vector2.ZERO
@@ -128,7 +131,7 @@ func sync_physics_pose() -> void:
 	var pose: Transform2D = PhysicsServer2D.body_get_state(body.get_rid(), PhysicsServer2D.BODY_STATE_TRANSFORM)
 	visual.global_position = pose.origin
 	visual.global_rotation = pose.get_rotation()
-	host.player_position = pose.origin / PIXELS
+	host.player_position = pose.origin / UNITS
 
 func tick(delta: float) -> void:
 	_poll_item_keys()
@@ -193,7 +196,8 @@ func physics_tick(delta: float) -> void:
 		velocity.x = _smooth_damp(velocity.x, moveX, slowdownMovementSmoothing if moveX == 0.0 else accelerationMovementSmoothing, delta)
 		velocity_unity = velocity
 		if moveY > 0.0 and velocity.y < data.player_vertical_speed:
-			body.apply_central_force(Vector2(0.0, moveY * delta * 200.0) * PIXELS)
+			var lift := _f32(_f32(moveY * _f32(delta)) * 200.0)
+			body.apply_central_force(Vector2(0.0, lift) * UNITS)
 		if (moveX > 0.0 and not isFacingRight) or (moveX < 0.0 and isFacingRight):
 			animator.condition("NeedsFlipping", true)
 			_set_particles("smoke_particle_emitter", false)
@@ -208,7 +212,6 @@ func physics_tick(delta: float) -> void:
 		visual.global_rotation = body.global_rotation
 	updateFuel()
 	host.player_position = position_unity
-	_check_boss_attacks()
 
 func _can_move() -> bool:
 	return not is_digging_bottom and not is_digging_side and not is_in_shop and not _is_teleporting
@@ -253,7 +256,7 @@ func _read_axes() -> void:
 			arrow.show()
 
 func _mouse_position_unity() -> Vector2:
-	return visual.get_global_mouse_position() / PIXELS
+	return visual.get_global_mouse_position() / UNITS
 
 func updateMousePointerRotation() -> void:
 	var arrow: Node2D = bridge.node(properties.get("mouse_pointer_arrow", {})) as Node2D
@@ -268,9 +271,9 @@ func _configure_ground_detector() -> void:
 		return
 	var shape := RectangleShape2D.new()
 	var size: Dictionary = collider.get("m_Size", {})
-	shape.size = Vector2(float(size.get("x", 0.0)), float(size.get("y", 0.0))) * 50.0 * _ground_node.global_scale.abs()
+	shape.size = Vector2(float(size.get("x", 0.0)), float(size.get("y", 0.0))) * _ground_node.global_scale.abs()
 	var offset: Dictionary = collider.get("m_Offset", {})
-	_ground_offset = Vector2(float(offset.get("x", 0.0)), float(offset.get("y", 0.0))) * PIXELS
+	_ground_offset = Vector2(float(offset.get("x", 0.0)), float(offset.get("y", 0.0))) * UNITS
 	_ground_query = PhysicsShapeQueryParameters2D.new()
 	_ground_query.shape = shape
 	_ground_query.exclude = [body.get_rid()]
@@ -310,7 +313,7 @@ func _detector_cell(detector: Node2D) -> Vector2i:
 	if detector == null:
 		push_error("PlayerCollisions is missing a serialized block detector")
 		return Vector2i(-1, -1)
-	var point: Vector2 = detector.global_position / PIXELS
+	var point: Vector2 = detector.global_position / UNITS
 	return Vector2i(floori(point.x), absi(floori(point.y)))
 
 func _try_start_dig(cell: Vector2i, bottom: bool) -> void:
@@ -342,7 +345,9 @@ func dig() -> void:
 	if _block_target_data.is_empty():
 		cancelDig()
 		return
-	var step: float = 0.4 * data.player_dig_speed * _frame_delta * getDepthModifier(floori(position_unity.y))
+	var step := _f32(_f32(0.4) * _f32(data.player_dig_speed))
+	step = _f32(step * _f32(_frame_delta))
+	step = _f32(step * getDepthModifier(floori(position_unity.y)))
 	position_unity = position_unity.move_toward(_block_target_position, step)
 	updateMousePointerRotation()
 	var distance: float = position_unity.distance_to(_block_target_position)
@@ -398,7 +403,8 @@ func cancelDig() -> void:
 	_finish_dig()
 
 func getDepthModifier(position_y: int) -> float:
-	return 0.1 + 0.9 * (1.0 - absf(float(position_y)) / 600.0)
+	var depth_percent := _f32(float(absi(position_y)) / 600.0)
+	return _f32(_f32(0.1) + _f32(_f32(0.9) * _f32(1.0 - depth_percent)))
 
 func flipCharacter() -> void:
 	visual.scale.x *= -1.0
@@ -564,13 +570,12 @@ func _tick_explosions(delta: float) -> void:
 		for i in _number_of_explosions_per_batch:
 			host.spawn_prefab(prefab_name, Vector2(host.unity_random.range_float(_explosion_min.x, _explosion_max.x), host.unity_random.range_float(_explosion_min.y, _explosion_max.y)), host.world_root)
 		_time_until_next_explosion_creation = _f32(0.1)
-	_check_boss_attacks()
 	if _total_explosion_time <= 0.0:
 		_is_creating_explosions = false
 		destroyBlocksFromExplosion(_range_to_destroy_around_player)
 		bridge.set_active(properties.get("dynamite_hitbox", {}), false)
 		bridge.set_active(properties.get("C4_hitbox", {}), false)
-		_active_attacks.clear()
+		_deactivate_attacks()
 
 func _prefab_name(property_name: String) -> String:
 	var reference: Dictionary = properties.get(property_name, {})
@@ -597,21 +602,42 @@ func _activate_attack(property_name: String) -> void:
 	var reference: Variant = properties.get(property_name, {})
 	bridge.set_active(reference, true)
 	var owner_id: String = bridge.component_owner(reference)
-	var attack: Dictionary = bridge.properties(owner_id, "PlayerAttackBehavior")
-	var collider: Dictionary = bridge.properties(owner_id, "BoxCollider2D")
-	var size: Dictionary = collider.get("m_Size", {})
-	_active_attacks.append({"node": bridge.node(reference), "damage": int(attack.get("damage", 0)), "size": Vector2(float(size.get("x", 0.0)), float(size.get("y", 0.0))), "hit": false})
-	_check_boss_attacks()
+	if not _attack_areas.has(owner_id):
+		var source_attack: Dictionary = bridge.properties(owner_id, "PlayerAttackBehavior")
+		var collider: Dictionary = bridge.properties(owner_id, "BoxCollider2D")
+		var size: Dictionary = collider.get("m_Size", {})
+		var offset: Dictionary = collider.get("m_Offset", {})
+		var area := Area2D.new()
+		area.collision_layer = 0
+		area.collision_mask = 0
+		area.monitorable = false
+		var shape := RectangleShape2D.new()
+		shape.size = Vector2(float(size.get("x", 0.0)), float(size.get("y", 0.0)))
+		var collision := CollisionShape2D.new()
+		collision.shape = shape
+		collision.position = Vector2(float(offset.get("x", 0.0)), float(offset.get("y", 0.0))) * UNITS
+		area.add_child(collision)
+		bridge.node(reference).add_child(area)
+		var attack := {"area": area, "damage": int(source_attack.get("damage", 0)), "hit": false}
+		area.body_entered.connect(_attack_entered.bind(attack))
+		area.area_entered.connect(_attack_entered.bind(attack))
+		_attack_areas[owner_id] = attack
+	var attack: Dictionary = _attack_areas[owner_id]
+	attack.hit = false
+	attack.area.collision_mask = 1 | PortBoss.HURTBOX_LAYER
 
-func _check_boss_attacks() -> void:
-	var boss: Variant = host.get("boss")
-	if boss == null or not is_instance_valid(boss):
+func _attack_entered(collider: Node2D, attack: Dictionary) -> void:
+	if not _alive or host.paused or attack.hit or attack.area.collision_mask == 0:
 		return
-	for attack in _active_attacks:
-		var attack_node: Node2D = attack.node as Node2D
-		if not attack.hit and attack_node != null:
-			var half_extents: Vector2 = attack.size * attack_node.global_scale.abs() * 0.5
-			attack.hit = bool(boss.damage_from_explosion(attack_node.global_position / PIXELS, maxf(half_extents.x, half_extents.y), attack.damage))
+	var boss: Variant = host.get("boss")
+	if boss != null and is_instance_valid(boss):
+		attack.hit = boss.damage_from_attack(collider, attack.damage)
+
+func _deactivate_attacks() -> void:
+	for id in _attack_areas:
+		var attack: Dictionary = _attack_areas[id]
+		attack.area.collision_mask = 0
+		attack.hit = false
 
 func teleportPlayerSafe() -> void:
 	position_unity = Vector2(5.5, -3.5)
@@ -674,7 +700,7 @@ func killPlayer() -> void:
 	body.collision_layer = 0
 	body.collision_mask = 0
 	visual.hide()
-	_active_attacks.clear()
+	_deactivate_attacks()
 
 func _animation_event(method: String, argument: Variant) -> void:
 	if not _alive:

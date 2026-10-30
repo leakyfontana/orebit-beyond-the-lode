@@ -27,9 +27,12 @@ class BoundTree extends AnimationTree:
 
 var current_state: String:
 	get:
-		if _playback == null or _playback.get_current_node() == &"":
+		if _playback == null:
 			return ""
-		return str(_set.states[_playback.get_current_node()].name)
+		var state: StringName = _playback.get_current_node()
+		if not _set.states.has(state):
+			return ""
+		return str(_set.states[state].name)
 var state_time: float:
 	get:
 		return _elapsed
@@ -104,7 +107,7 @@ func bind_controller(controller_id: String, actor_root: Node, bridge: SceneBridg
 		match str(binding.kind):
 			"graphic", "sprite", "sprite_geometry": target = _graphic(node, false, bridge, node_ids)
 			"text": target = _graphic(node, true, bridge, node_ids)
-			"position": factor = (1.0 if node is Control else 50.0) * (-1.0 if property.ends_with(":y") else 1.0)
+			"position": factor = -1.0 if property.ends_with(":y") else 1.0
 			"rotation": factor = -PI / 180.0
 			"scale_z":
 				if not node.has_meta("unity_local_scale_z"):
@@ -122,6 +125,15 @@ func bind_controller(controller_id: String, actor_root: Node, bridge: SceneBridg
 			var label := target as Label
 			if not label.has_theme_color_override("font_color"):
 				label.add_theme_color_override("font_color", label.get_theme_color("font_color"))
+			# Curves are source vertex colors, not already multiplied material
+			# colors. Preserve the baked face tint/alpha for native plain text;
+			# the full SDF material multiplies vertex color in its own shader.
+			var face_color: Color = label.get_meta("source_face_color", Color.WHITE)
+			match property.get_slice(":", 1):
+				"r": factor = face_color.r
+				"g": factor = face_color.g
+				"b": factor = face_color.b
+				"a": factor = face_color.a
 		var path := NodePath(str(get_path_to(target)) + ":" + property)
 		targets.append(path)
 		factors.append(factor)

@@ -38,8 +38,8 @@ function checkKey(key: string): void {
   if (typeof key !== "string" || !KEY.test(key)) throw new DeliveryError("Invalid announcement deduplication key");
 }
 
-function marker(key: string): string {
-  return `orebit.release:${key}`;
+function releaseUrl(key: string): string {
+  return `https://github.com/leakyfontana/orebit-beyond-the-lode/releases/tag/beta-${key.split(":")[1]}`;
 }
 
 function text(value: unknown, maximum: number): value is string {
@@ -47,21 +47,22 @@ function text(value: unknown, maximum: number): value is string {
 }
 
 // Snapshot before entering the queue: later caller mutations cannot change an intent.
-// The renderer owns the exact footer marker and the complete, already budgeted embed.
+// The canonical release URL identifies the build without exposing machine IDs in the footer.
 function freezePayload(key: string, payload: DiscordAnnouncement): string {
   try {
     const value: unknown = JSON.parse(JSON.stringify(payload));
-    if (!object(value) || !exactKeys(value, ["embeds", "allowed_mentions"])
+    if (!object(value) || !exactKeys(value, ["embeds", "components", "allowed_mentions"])
       || !Array.isArray(value.embeds) || value.embeds.length !== 1
       || !object(value.allowed_mentions) || !exactKeys(value.allowed_mentions, ["parse"])
       || !Array.isArray(value.allowed_mentions.parse) || value.allowed_mentions.parse.length !== 0) {
       throw new Error();
     }
     const embed = value.embeds[0];
-    if (!object(embed) || !exactKeys(embed, ["title", "url", "description", "fields", "footer", "timestamp"])
-      || !text(embed.title, 256) || !text(embed.url, 2048) || !text(embed.description, 4096)
-      || !text(embed.timestamp, 64) || !object(embed.footer) || !exactKeys(embed.footer, ["text"])
-      || embed.footer.text !== marker(key) || !text(embed.footer.text, 2048)
+    if (!object(embed) || !exactKeys(embed, ["title", "url", "color", "description", "fields", "footer", "timestamp"])
+      || !text(embed.title, 256) || embed.url !== releaseUrl(key)
+      || !Number.isInteger(embed.color) || (embed.color as number) < 0 || (embed.color as number) > 0xffffff
+      || !text(embed.description, 4096) || !text(embed.timestamp, 64)
+      || !object(embed.footer) || !exactKeys(embed.footer, ["text"]) || !text(embed.footer.text, 2048)
       || !Array.isArray(embed.fields) || embed.fields.length > 25) throw new Error();
     let total = embed.title.length + embed.description.length + embed.footer.text.length;
     for (const field of embed.fields) {
@@ -71,13 +72,25 @@ function freezePayload(key: string, payload: DiscordAnnouncement): string {
       total += field.name.length + field.value.length;
     }
     if (total > 6000) throw new Error();
+    if (!Array.isArray(value.components) || value.components.length < 1 || value.components.length > 5) throw new Error();
+    for (const row of value.components) {
+      if (!object(row) || !exactKeys(row, ["type", "components"]) || row.type !== 1
+        || !Array.isArray(row.components) || row.components.length < 1 || row.components.length > 5) throw new Error();
+      for (const button of row.components) {
+        if (!object(button) || !exactKeys(button, ["type", "style", "label", "url"])
+          || button.type !== 2 || button.style !== 5 || !text(button.label, 80) || !text(button.url, 512)) throw new Error();
+        const url = new URL(button.url);
+        if (url.protocol !== "https:" || url.username || url.password
+          || !["drive.google.com", "play.arcmonkeyswelding.com", "github.com", "discord.com"].includes(url.hostname)) throw new Error();
+      }
+    }
     return JSON.stringify({
       ...value,
       nonce: createHash("sha256").update(key).digest("hex").slice(0, 25),
       enforce_nonce: true,
     });
   } catch {
-    throw new DeliveryError("Invalid frozen announcement payload or footer marker");
+    throw new DeliveryError("Invalid frozen announcement payload or release identity");
   }
 }
 
@@ -261,7 +274,7 @@ export class AnnouncementDelivery {
       && value.channel_id === CHANNEL && value.type === 0 && !value.webhook_id
       && object(value.author) && value.author.id === BOT && value.author.bot === true
       && Array.isArray(value.embeds) && value.embeds.some((embed) => object(embed)
-        && object(embed.footer) && embed.footer.text === marker(key));
+        && embed.url === releaseUrl(key));
   }
 
   async #reconcile(key: string): Promise<string | null> {

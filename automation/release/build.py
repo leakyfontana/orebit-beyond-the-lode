@@ -37,6 +37,8 @@ import tempfile
 import urllib.request
 import zipfile
 
+from web_bundle import stage_web_bundle
+
 ROOT = Path(__file__).resolve().parents[2]
 GODOT_VERSION = "4.7.2"
 RELEASE_URL = "https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable/"
@@ -419,7 +421,7 @@ def build(args):
         run([godot, "--headless", "--editor", "--path", project, "--import"], cwd=work, env=environment)
         export = work / "export"
         export.mkdir()
-        filename = {"macos": "MotherloadRecoded.app", "windows": "MotherloadRecoded.exe", "android": "MotherloadRecoded.apk", "web": "index.html"}[target]
+        filename = {"macos": "Orebit.app", "windows": "Orebit.exe", "android": "Orebit.apk", "web": "index.html"}[target]
         run([godot, "--headless", "--path", project,
              "--export-debug" if target == "android" else "--export-release", preset_name, export / filename], cwd=work, env=environment)
         if not (export / filename).exists():
@@ -443,10 +445,11 @@ def build(args):
         elif target == "web":
             if not list(export.glob("*.wasm")):
                 raise RuntimeError("Web export has no WebAssembly runtime")
-            (export / "build.json").write_text(json.dumps({"commit": args.sha, "version": version}, indent=2) + "\n", encoding="utf-8")
+            entrypoint = stage_web_bundle(export)
+            (export / "build.json").write_text(json.dumps({"commit": args.sha, "version": version, "entrypoint": entrypoint}, indent=2) + "\n", encoding="utf-8")
         destination = output_root / args.platform
         destination.mkdir(parents=True, exist_ok=True)
-        artifact = destination / ("MotherloadRecoded-" + version + "-" + args.platform + (".apk" if target == "android" else ".zip"))
+        artifact = destination / ("Orebit-" + version + "-" + args.platform + (".apk" if target == "android" else ".zip"))
         if target == "android":
             shutil.copy2(export / filename, artifact)
         else:

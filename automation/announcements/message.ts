@@ -31,11 +31,13 @@ export interface DiscordAnnouncement {
   embeds: [{
     title: string;
     url: string;
+    color: number;
     description: string;
     fields: Array<{ name: string; value: string; inline?: boolean }>;
     footer: { text: string };
     timestamp: string;
   }];
+  components: Array<{ type: 1; components: Array<{ type: 2; style: 5; label: string; url: string }> }>;
   allowed_mentions: { parse: [] };
 }
 
@@ -165,11 +167,38 @@ function excerpt(value: string, maximum: number): string {
 }
 
 const UPDATE_INSTRUCTIONS: Record<keyof typeof PLATFORM_NAMES, string> = {
-  "android-arm64": "Install the ARM64 APK over the existing app using the same signer. Do not uninstall; if Android reports a signing mismatch, stop rather than removing the app or its data.",
-  "windows-x86_64": "Quit the game, extract the complete ZIP into a new folder, then run its EXE. Keep the matching DLL files beside that EXE; do not mix files from older versions.",
-  "macos-arm64": "Apple Silicon ARM64: quit the game, extract the ZIP, then move/replace the app in Applications. This app is ad-hoc signed, not notarized. Only if Gatekeeper prompts, use System Settings → Privacy & Security → Open Anyway, then confirm Open.",
-  web: `Open or reload ${WEB_URL} in your browser or installed PWA to update. The ZIP is the downloadable Web archive, not a native iOS app.`,
+  "android-arm64": "**Android ARM64:** Install over the existing app. **Don’t uninstall**; stop if the signature doesn’t match.",
+  "windows-x86_64": "**Windows 64-bit:** Quit, extract the whole ZIP into a fresh folder, and keep the EXE and DLLs together.",
+  "macos-arm64": "**macOS · Apple Silicon only:** Replace the app in Applications. Not notarized; if blocked, use Privacy & Security → Open Anyway.",
+  web: "**Web / PWA:** Reload the game to update.",
 };
+
+const PLATFORM_ORDER = ["web", "windows-x86_64", "macos-arm64", "android-arm64"] as const;
+const BUTTON_LABELS = { web: "Play web", "windows-x86_64": "Windows", "macos-arm64": "macOS", "android-arm64": "Android" } as const;
+const TOOLING_NOTE = /^(?:ci|build|chore|docs|test|style|refactor)(?:\([^)]*\))?!?:|\b(?:GitHub Actions|CI\/CD|CI|inbound SSH|outbound (?:beta )?deploy(?:ment)?|beta delivery|publication receipts?|release automation|(?:build|release|deployment) (?:pipelines?|workflows?))\b/i;
+
+function highlights(receipt: PublicationReceipt): string[] {
+  const candidates = receipt.notes.markdown.trim()
+    ? receipt.notes.markdown.split("\n")
+    : receipt.notes.commits.map(note => note.subject);
+  const result: string[] = [];
+  const seen = new Set<string>();
+  let inCode = false;
+  for (const candidate of candidates) {
+    if (/^\s*(`{3,}|~{3,})/.test(candidate)) { inCode = !inCode; continue; }
+    if (inCode || TOOLING_NOTE.test(candidate) || /^\s*(?:#{1,6}\s|https?:\/\/|<!--)/.test(candidate)) continue;
+    const note = candidate.trim().replace(/^[-*•]\s+|^\d+\.\s+/, "")
+      .replace(/\s*\(?`[0-9a-f]{7,40}`\)?\s*$/i, "")
+      .replace(/\s*\(#\d+\)\s*$/, "")
+      .replace(/^(?:feat|fix|perf)(?:\([^)]*\))?!?:\s*/i, "")
+      .replace(/\s+/g, " ").trim();
+    if (!note || TOOLING_NOTE.test(note) || seen.has(note.toLowerCase())) continue;
+    seen.add(note.toLowerCase());
+    result.push(`- ${excerpt(escapeMarkdown(note), 160)}`);
+    if (result.length === 3) break;
+  }
+  return result;
+}
 
 /** Pure, deterministic rendering: no network requests, commands, or generated change claims. */
 export function renderAnnouncement(receipt: PublicationReceipt, links: { releaseUrl: string; receiptUrl: string }): DiscordAnnouncement {
@@ -182,43 +211,33 @@ export function renderAnnouncement(receipt: PublicationReceipt, links: { release
     "release URL must identify this repository and commit");
   requireValue(asset.hostname === "github.com" && asset.pathname === assetPath && !asset.search,
     "receipt URL must identify this release's publication.json");
-  const title = `Orebit beta ${receipt.version}`;
-  const provenance = `[Release and full recorded notes](${links.releaseUrl}) · [Full publication receipt](${links.receiptUrl})`;
-  const notes = receipt.notes.markdown.trim() || receipt.notes.commits
-    .map((item) => `${item.commit.slice(0, 12)} ${item.subject}`).join("\n");
-  const escapedNotes = escapeMarkdown(notes);
-  // Reserve every platform's actual archive link and update instructions before notes.
-  const fields = receipt.platforms.map((platform) => {
-    const instruction = UPDATE_INSTRUCTIONS[platform.platform];
-    const prefix = platform.platform === "web" ? `[Play / update live](${WEB_URL}) · ` : "";
-    const primary = platform.artifacts[0]!;
-    const label = platform.platform === "android-arm64" ? "Download APK"
-      : platform.platform === "web" ? "Download Web archive (ZIP)" : "Download ZIP";
-    let value = `${prefix}[${label}](${primary.url})\n${instruction}`;
-    const folder = `\n[All published downloads](${platform.url})`;
-    if (value.length + folder.length <= 1024) value += folder;
-    for (const artifact of platform.artifacts.slice(1)) {
-      const download = `\n[${escapeMarkdown(artifact.name)}](${artifact.url})`;
-      if (value.length + download.length <= 1024) value += download;
-      // Additional artifacts remain reachable through the full receipt.
-    }
-    requireValue(value.length <= 1024, "platform links and instructions exceed Discord field limit");
-    return {
-      name: platform.platform === "macos-arm64" ? "macOS — Apple Silicon ARM64" : platform.name,
-      value,
-      inline: false,
-    };
-  });
-  const footer = { text: `orebit.release:${receipt.repository}:${receipt.commit}` };
-  // Leave conservative headroom below Discord's aggregate embed limit.
-  const fixedLength = title.length + provenance.length + 2 + footer.text.length
-    + fields.reduce((total, field) => total + field.name.length + field.value.length, 0);
-  const notesBudget = Math.min(4096 - provenance.length - 2, 5700 - fixedLength);
-  requireValue(title.length <= 256 && fields.length <= 25 && fields.every((field) => field.name.length <= 256)
-    && notesBudget >= 1, "announcement exceeds Discord embed limits");
-  const description = `${excerpt(escapedNotes, notesBudget)}\n\n${provenance}`;
+  const platforms = PLATFORM_ORDER.flatMap(key => receipt.platforms.filter(platform => platform.platform === key));
+  const notes = highlights(receipt);
+  const description = notes.length ? `**Highlights**\n${notes.join("\n")}` : "A new beta is ready to play.";
+  const downloads = platforms.map(platform => ({
+    type: 2 as const,
+    style: 5 as const,
+    label: BUTTON_LABELS[platform.platform],
+    url: platform.platform === "web" ? WEB_URL
+      : platform.artifacts.length === 1 ? platform.artifacts[0]!.url : platform.url,
+  }));
   return {
-    embeds: [{ title, url: links.releaseUrl, description, fields, footer, timestamp: receipt.published_at }],
+    embeds: [{
+      title: `Orebit · ${receipt.version.split("+")[0]}`,
+      url: links.releaseUrl,
+      color: 0xe6ab47,
+      description,
+      fields: [{ name: "Updating?", value: platforms.map(platform => `- ${UPDATE_INSTRUCTIONS[platform.platform]}`).join("\n") }],
+      footer: { text: "Beta release" },
+      timestamp: receipt.published_at,
+    }],
+    components: [
+      { type: 1, components: downloads },
+      { type: 1, components: [
+        { type: 2, style: 5, label: "Full release notes", url: links.releaseUrl },
+        { type: 2, style: 5, label: "Report a bug", url: "https://discord.com/channels/1565550697070596216/1565551259929284739" },
+      ] },
+    ],
     allowed_mentions: { parse: [] },
   };
 }
