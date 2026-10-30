@@ -1,0 +1,2 @@
+# The root-owned helper rejects extra arguments and all non-release operations.
+orebit-deploy ALL=(root) NOPASSWD: /usr/bin/python3 -I -u /srv/motherload/deploy/remote_web_release.py --original-command *
