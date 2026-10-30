@@ -1,0 +1,37 @@
+diff --git a/tools/common_compiler_flags.py b/tools/common_compiler_flags.py
+index d5013e8..968c8ae 100644
+--- a/tools/common_compiler_flags.py
++++ b/tools/common_compiler_flags.py
+@@ -32,7 +32,7 @@ def generate(env):
+ 
+     # Require C++17
+     if env.get("is_msvc", False):
+-        env.Append(CXXFLAGS=["/std:c++17"])
++        env.Append(CXXFLAGS=["/std:c++17", "/permissive-", "/Zc:inline"])
+         # Allow use of `__cplusplus` macro to determine C++ standard universally.
+         env.Append(CXXFLAGS=["/Zc:__cplusplus"])
+     else:
+diff --git a/tools/windows.py b/tools/windows.py
+index 9aad0d8..e8cd71a 100644
+--- a/tools/windows.py
++++ b/tools/windows.py
+@@ -81,6 +81,8 @@ def options(opts):
+     opts.Add(BoolVariable("debug_crt", "Compile with MSVC's debug CRT (/MDd)", False))
+     opts.Add(BoolVariable("use_llvm", "Use the LLVM compiler (MVSC or MinGW depending on the use_mingw flag)", False))
+     opts.Add("mingw_prefix", "MinGW prefix", mingw)
++    opts.Add("msvc_version", "Explicit SCons MSVC version (for example 14.3)", "")
++    opts.Add("msvc_setup_script", "Explicit existing vcvars script for the selected MSVC installation", "")
+ 
+ 
+ def exists(env):
+@@ -100,7 +102,9 @@ def generate(env):
+ 
+         env["MSVC_SETUP_RUN"] = False  # Need to set this to re-run the tool
+         env["MSVS_VERSION"] = None
+-        env["MSVC_VERSION"] = None
++        env["MSVC_VERSION"] = env["msvc_version"] or None
++        if env["msvc_setup_script"]:
++            env["MSVC_USE_SCRIPT"] = env["msvc_setup_script"]
+ 
+         env["is_msvc"] = True
+ 

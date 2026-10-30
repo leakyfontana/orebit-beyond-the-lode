@@ -1,0 +1,299 @@
+[gd_resource type="Animation" format=3]
+
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1484.png" id="1_qjjco"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1486.png" id="2_6mui6"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1488.png" id="3_xabmi"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1490.png" id="4_ymg7d"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1492.png" id="5_eceti"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1494.png" id="6_tvkli"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1496.png" id="7_x7umy"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1498.png" id="8_woigr"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1500.png" id="9_6drqt"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1502.png" id="10_riofs"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1504.png" id="11_0g0u5"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1506.png" id="12_dj0a7"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1508.png" id="13_d0w2s"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1510.png" id="14_wxtmv"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1512.png" id="15_0rgsr"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1514.png" id="16_1gdvv"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1516.png" id="17_gisbu"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1518.png" id="18_4123j"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1520.png" id="19_xk8g7"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1522.png" id="20_5757q"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1524.png" id="21_ol64b"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1526.png" id="22_w5at4"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1528.png" id="23_kadtc"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1530.png" id="24_nioqc"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1532.png" id="25_roj3n"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1534.png" id="26_drxfh"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1536.png" id="27_h7beq"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1538.png" id="28_4ybub"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1540.png" id="29_whaga"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1542.png" id="30_rl3cd"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1544.png" id="31_uo67t"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1546.png" id="32_bfnyf"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1548.png" id="33_h076d"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1550.png" id="34_fjv3v"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1552.png" id="35_leoaw"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1554.png" id="36_aqf2h"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1556.png" id="37_h215t"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1558.png" id="38_pxigi"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1560.png" id="39_5v1je"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1562.png" id="40_rpskx"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1564.png" id="41_3cnyk"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/RiskyTeleport/1566.png" id="42_l41mm"]
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_1rtqk"]
+atlas = ExtResource("1_qjjco")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_u3rba"]
+atlas = ExtResource("2_6mui6")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_77d3e"]
+atlas = ExtResource("3_xabmi")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_kupso"]
+atlas = ExtResource("4_ymg7d")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_552o0"]
+atlas = ExtResource("5_eceti")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_hkkmc"]
+atlas = ExtResource("6_tvkli")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_3ixwb"]
+atlas = ExtResource("7_x7umy")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_wpjxk"]
+atlas = ExtResource("8_woigr")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_rlbu0"]
+atlas = ExtResource("9_6drqt")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_u0mj4"]
+atlas = ExtResource("10_riofs")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_3omxm"]
+atlas = ExtResource("11_0g0u5")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_rbtwf"]
+atlas = ExtResource("12_dj0a7")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_t87nb"]
+atlas = ExtResource("13_d0w2s")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_io0kd"]
+atlas = ExtResource("14_wxtmv")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_kgpsg"]
+atlas = ExtResource("15_0rgsr")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_bev7n"]
+atlas = ExtResource("16_1gdvv")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_dfg1i"]
+atlas = ExtResource("17_gisbu")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_p4eup"]
+atlas = ExtResource("18_4123j")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_l3beg"]
+atlas = ExtResource("19_xk8g7")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_v2qe2"]
+atlas = ExtResource("20_5757q")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_1ck8e"]
+atlas = ExtResource("21_ol64b")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_ii8jx"]
+atlas = ExtResource("22_w5at4")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_knh7m"]
+atlas = ExtResource("23_kadtc")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_debtx"]
+atlas = ExtResource("24_nioqc")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_vem0t"]
+atlas = ExtResource("25_roj3n")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_ite5x"]
+atlas = ExtResource("26_drxfh")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_6joyc"]
+atlas = ExtResource("27_h7beq")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_ps541"]
+atlas = ExtResource("28_4ybub")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_sotg1"]
+atlas = ExtResource("29_whaga")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_vpqkf"]
+atlas = ExtResource("30_rl3cd")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_ywb15"]
+atlas = ExtResource("31_uo67t")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_utwyi"]
+atlas = ExtResource("32_bfnyf")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_u1ovp"]
+atlas = ExtResource("33_h076d")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_fvcha"]
+atlas = ExtResource("34_fjv3v")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_weilr"]
+atlas = ExtResource("35_leoaw")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_sct1i"]
+atlas = ExtResource("36_aqf2h")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_7d8mn"]
+atlas = ExtResource("37_h215t")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_nvadu"]
+atlas = ExtResource("38_pxigi")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_7texg"]
+atlas = ExtResource("39_5v1je")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_qaorj"]
+atlas = ExtResource("40_rpskx")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_gwkxi"]
+atlas = ExtResource("41_3cnyk")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_mhbnn"]
+atlas = ExtResource("42_l41mm")
+region = Rect2(0, 0, 100, 100)
+
+[resource]
+resource_name = "FullRiskyTeleport_Animation"
+length = 1.85
+loop_mode = 1
+tracks/0/type = "value"
+tracks/0/imported = false
+tracks/0/enabled = true
+tracks/0/path = NodePath("slot_0:unbound")
+tracks/0/interp = 0
+tracks/0/loop_wrap = false
+tracks/0/keys = {
+"times": PackedFloat32Array(0, 0.033333335, 0.06666667, 0.1, 0.13333334, 0.16666667, 0.2, 0.23333333, 0.26666668, 0.3, 0.33333334, 0.36666667, 0.4, 0.43333334, 0.46666667, 0.5, 0.53333336, 0.56666666, 0.6, 0.6333333, 0.6666667, 0.7, 0.73333335, 0.76666665, 0.8, 0.8333333, 0.8666667, 0.9, 0.93333334, 0.96666664, 1, 1.0333333, 1.0666667, 1.1, 1.1333333, 1.1666666, 1.2, 1.2333333, 1.2666667, 1.3, 1.3333334, 1.3666667, 1.4, 1.4333333, 1.4666667, 1.5, 1.5333333, 1.5666667, 1.6, 1.6333333, 1.6666666, 1.7, 1.7333333, 1.7666667, 1.8, 1.8333334),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [SubResource("AtlasTexture_1rtqk"), SubResource("AtlasTexture_u3rba"), SubResource("AtlasTexture_77d3e"), SubResource("AtlasTexture_kupso"), SubResource("AtlasTexture_552o0"), SubResource("AtlasTexture_hkkmc"), SubResource("AtlasTexture_3ixwb"), SubResource("AtlasTexture_wpjxk"), SubResource("AtlasTexture_rlbu0"), SubResource("AtlasTexture_u0mj4"), SubResource("AtlasTexture_3omxm"), SubResource("AtlasTexture_rbtwf"), SubResource("AtlasTexture_t87nb"), SubResource("AtlasTexture_io0kd"), SubResource("AtlasTexture_kgpsg"), SubResource("AtlasTexture_bev7n"), SubResource("AtlasTexture_dfg1i"), SubResource("AtlasTexture_p4eup"), SubResource("AtlasTexture_l3beg"), SubResource("AtlasTexture_v2qe2"), SubResource("AtlasTexture_1ck8e"), SubResource("AtlasTexture_ii8jx"), SubResource("AtlasTexture_knh7m"), SubResource("AtlasTexture_debtx"), SubResource("AtlasTexture_vem0t"), SubResource("AtlasTexture_ite5x"), SubResource("AtlasTexture_6joyc"), SubResource("AtlasTexture_ps541"), SubResource("AtlasTexture_sotg1"), SubResource("AtlasTexture_vpqkf"), SubResource("AtlasTexture_ywb15"), SubResource("AtlasTexture_utwyi"), SubResource("AtlasTexture_u1ovp"), SubResource("AtlasTexture_fvcha"), SubResource("AtlasTexture_weilr"), SubResource("AtlasTexture_sct1i"), SubResource("AtlasTexture_7d8mn"), SubResource("AtlasTexture_nvadu"), SubResource("AtlasTexture_7texg"), SubResource("AtlasTexture_qaorj"), SubResource("AtlasTexture_gwkxi"), SubResource("AtlasTexture_mhbnn"), SubResource("AtlasTexture_mhbnn"), SubResource("AtlasTexture_gwkxi"), SubResource("AtlasTexture_qaorj"), SubResource("AtlasTexture_7texg"), SubResource("AtlasTexture_nvadu"), SubResource("AtlasTexture_7d8mn"), SubResource("AtlasTexture_sct1i"), SubResource("AtlasTexture_weilr"), SubResource("AtlasTexture_fvcha"), SubResource("AtlasTexture_u1ovp"), SubResource("AtlasTexture_utwyi"), SubResource("AtlasTexture_ywb15"), SubResource("AtlasTexture_vpqkf"), SubResource("AtlasTexture_sotg1")]
+}
+tracks/1/type = "value"
+tracks/1/imported = false
+tracks/1/enabled = true
+tracks/1/path = NodePath("slot_1:unbound")
+tracks/1/interp = 0
+tracks/1/loop_wrap = false
+tracks/1/keys = {
+"times": PackedFloat32Array(0, 0.033333335, 0.06666667, 0.1, 0.13333334, 0.16666667, 0.2, 0.23333333, 0.26666668, 0.3, 0.33333334, 0.36666667, 0.4, 0.43333334, 0.46666667, 0.5, 0.53333336, 0.56666666, 0.6, 0.6333333, 0.6666667, 0.7, 0.73333335, 0.76666665, 0.8, 0.8333333, 0.8666667, 0.9, 0.93333334, 0.96666664, 1, 1.0333333, 1.0666667, 1.1, 1.1333333, 1.1666666, 1.2, 1.2333333, 1.2666667, 1.3, 1.3333334, 1.3666667, 1.4, 1.4333333, 1.4666667, 1.5, 1.5333333, 1.5666667, 1.6, 1.6333333, 1.6666666, 1.7, 1.7333333, 1.7666667, 1.8, 1.8333334),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863), Vector2(0.74626863, 0.74626863)]
+}
+tracks/2/type = "value"
+tracks/2/imported = false
+tracks/2/enabled = true
+tracks/2/path = NodePath("slot_2:unbound")
+tracks/2/interp = 0
+tracks/2/loop_wrap = false
+tracks/2/keys = {
+"times": PackedFloat32Array(0, 0.033333335, 0.06666667, 0.1, 0.13333334, 0.16666667, 0.2, 0.23333333, 0.26666668, 0.3, 0.33333334, 0.36666667, 0.4, 0.43333334, 0.46666667, 0.5, 0.53333336, 0.56666666, 0.6, 0.6333333, 0.6666667, 0.7, 0.73333335, 0.76666665, 0.8, 0.8333333, 0.8666667, 0.9, 0.93333334, 0.96666664, 1, 1.0333333, 1.0666667, 1.1, 1.1333333, 1.1666666, 1.2, 1.2333333, 1.2666667, 1.3, 1.3333334, 1.3666667, 1.4, 1.4333333, 1.4666667, 1.5, 1.5333333, 1.5666667, 1.6, 1.6333333, 1.6666666, 1.7, 1.7333333, 1.7666667, 1.8, 1.8333334),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0)]
+}
+tracks/3/type = "method"
+tracks/3/imported = false
+tracks/3/enabled = true
+tracks/3/path = NodePath(".")
+tracks/3/interp = 1
+tracks/3/loop_wrap = true
+tracks/3/keys = {
+"times": PackedFloat32Array(1.3833333),
+"transitions": PackedFloat32Array(1),
+"values": [{
+"args": ["teleportPlayerDangerous", null],
+"method": &"_native_event"
+}]
+}
+tracks/4/type = "method"
+tracks/4/imported = false
+tracks/4/enabled = true
+tracks/4/path = NodePath(".")
+tracks/4/interp = 1
+tracks/4/loop_wrap = true
+tracks/4/keys = {
+"times": PackedFloat32Array(1.8166667),
+"transitions": PackedFloat32Array(1),
+"values": [{
+"args": ["endTeleportPlayerDangerous", null],
+"method": &"_native_event"
+}]
+}
+metadata/sprite_tracks = PackedInt32Array(0, 1, 2)
+metadata/boundaries = PackedFloat64Array(1.3833333, 1.8166667, 1.85)
+metadata/bindings = Array[Dictionary]([{
+"bezier": false,
+"kind": "sprite",
+"path": "",
+"property": "texture"
+}, {
+"bezier": false,
+"kind": "sprite_geometry",
+"path": "",
+"property": "scale"
+}, {
+"bezier": false,
+"kind": "sprite_geometry",
+"path": "",
+"property": "offset"
+}])

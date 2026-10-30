@@ -1,0 +1,90 @@
+[gd_resource type="Animation" format=3]
+
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/GettingDownDrillOut/436.png" id="1_pbaot"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/GettingDownDrillOut/434.png" id="2_hkrja"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/GettingDownDrillOut/432.png" id="3_xearr"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/GettingDownDrillOut/430.png" id="4_y33qe"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/GettingDownDrillOut/428.png" id="5_tjurm"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/GettingDownDrillOut/426.png" id="6_wfoqh"]
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_bfp3c"]
+atlas = ExtResource("1_pbaot")
+region = Rect2(0, 0, 70, 70)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_bdmr1"]
+atlas = ExtResource("2_hkrja")
+region = Rect2(0, 0, 70, 70)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_86giw"]
+atlas = ExtResource("3_xearr")
+region = Rect2(0, 0, 70, 70)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_5r0la"]
+atlas = ExtResource("4_y33qe")
+region = Rect2(0, 0, 70, 70)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_0xm4k"]
+atlas = ExtResource("5_tjurm")
+region = Rect2(0, 0, 70, 70)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_pvth5"]
+atlas = ExtResource("6_wfoqh")
+region = Rect2(0, 0, 70, 70)
+
+[resource]
+resource_name = "PuttingDownDrillAway_Animation"
+length = 0.2
+tracks/0/type = "value"
+tracks/0/imported = false
+tracks/0/enabled = true
+tracks/0/path = NodePath("slot_0:unbound")
+tracks/0/interp = 0
+tracks/0/loop_wrap = false
+tracks/0/keys = {
+"times": PackedFloat32Array(0, 0.033333335, 0.06666667, 0.1, 0.13333334, 0.16666667),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [SubResource("AtlasTexture_bfp3c"), SubResource("AtlasTexture_bdmr1"), SubResource("AtlasTexture_86giw"), SubResource("AtlasTexture_5r0la"), SubResource("AtlasTexture_0xm4k"), SubResource("AtlasTexture_pvth5")]
+}
+tracks/1/type = "value"
+tracks/1/imported = false
+tracks/1/enabled = true
+tracks/1/path = NodePath("slot_1:unbound")
+tracks/1/interp = 0
+tracks/1/loop_wrap = false
+tracks/1/keys = {
+"times": PackedFloat32Array(0, 0.033333335, 0.06666667, 0.1, 0.13333334, 0.16666667),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573)]
+}
+tracks/2/type = "value"
+tracks/2/imported = false
+tracks/2/enabled = true
+tracks/2/path = NodePath("slot_2:unbound")
+tracks/2/interp = 0
+tracks/2/loop_wrap = false
+tracks/2/keys = {
+"times": PackedFloat32Array(0, 0.033333335, 0.06666667, 0.1, 0.13333334, 0.16666667),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0)]
+}
+metadata/sprite_tracks = PackedInt32Array(0, 1, 2)
+metadata/boundaries = PackedFloat64Array(0.2)
+metadata/bindings = Array[Dictionary]([{
+"bezier": false,
+"kind": "sprite",
+"path": "",
+"property": "texture"
+}, {
+"bezier": false,
+"kind": "sprite_geometry",
+"path": "",
+"property": "scale"
+}, {
+"bezier": false,
+"kind": "sprite_geometry",
+"path": "",
+"property": "offset"
+}])

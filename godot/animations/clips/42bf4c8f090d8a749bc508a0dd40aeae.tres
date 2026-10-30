@@ -1,0 +1,134 @@
+[gd_resource type="Animation" format=3]
+
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P1LaserAttack/1878.png" id="1_t7fa2"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P1LaserAttack/1880.png" id="2_pyhup"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P1LaserAttack/1882.png" id="3_owwk7"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P1LaserAttack/1884.png" id="4_2mlmc"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P1LaserAttack/1917.png" id="5_o56fn"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P1LaserAttack/1918.png" id="6_rtwyi"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P1LaserAttack/1919.png" id="7_43gti"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P1LaserAttack/1921.png" id="8_m5l6d"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P1LaserAttack/1923.png" id="9_pmbov"]
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_qblhq"]
+atlas = ExtResource("1_t7fa2")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_in4hs"]
+atlas = ExtResource("2_pyhup")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_injty"]
+atlas = ExtResource("3_owwk7")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_f2ucr"]
+atlas = ExtResource("4_2mlmc")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_bvqoe"]
+atlas = ExtResource("5_o56fn")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_ecyxn"]
+atlas = ExtResource("6_rtwyi")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_qriva"]
+atlas = ExtResource("7_43gti")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_u3ii7"]
+atlas = ExtResource("8_m5l6d")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_au7vi"]
+atlas = ExtResource("9_pmbov")
+region = Rect2(0, 0, 150, 200)
+
+[resource]
+resource_name = "P1LaserAttack_Anim"
+length = 2.3999999
+loop_mode = 1
+tracks/0/type = "value"
+tracks/0/imported = false
+tracks/0/enabled = true
+tracks/0/path = NodePath("slot_0:unbound")
+tracks/0/interp = 0
+tracks/0/loop_wrap = false
+tracks/0/keys = {
+"times": PackedFloat32Array(0, 0.1, 0.2, 0.3, 0.4, 2, 2.1, 2.2, 2.3),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [SubResource("AtlasTexture_qblhq"), SubResource("AtlasTexture_in4hs"), SubResource("AtlasTexture_injty"), SubResource("AtlasTexture_f2ucr"), SubResource("AtlasTexture_bvqoe"), SubResource("AtlasTexture_ecyxn"), SubResource("AtlasTexture_qriva"), SubResource("AtlasTexture_u3ii7"), SubResource("AtlasTexture_au7vi")]
+}
+tracks/1/type = "value"
+tracks/1/imported = false
+tracks/1/enabled = true
+tracks/1/path = NodePath("slot_1:unbound")
+tracks/1/interp = 0
+tracks/1/loop_wrap = false
+tracks/1/keys = {
+"times": PackedFloat32Array(0, 0.1, 0.2, 0.3, 0.4, 2, 2.1, 2.2, 2.3),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573)]
+}
+tracks/2/type = "value"
+tracks/2/imported = false
+tracks/2/enabled = true
+tracks/2/path = NodePath("slot_2:unbound")
+tracks/2/interp = 0
+tracks/2/loop_wrap = false
+tracks/2/keys = {
+"times": PackedFloat32Array(0, 0.1, 0.2, 0.3, 0.4, 2, 2.1, 2.2, 2.3),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0)]
+}
+tracks/3/type = "method"
+tracks/3/imported = false
+tracks/3/enabled = true
+tracks/3/path = NodePath(".")
+tracks/3/interp = 1
+tracks/3/loop_wrap = true
+tracks/3/keys = {
+"times": PackedFloat32Array(0.5),
+"transitions": PackedFloat32Array(1),
+"values": [{
+"args": ["activateLaserAttack", null],
+"method": &"_native_event"
+}]
+}
+tracks/4/type = "method"
+tracks/4/imported = false
+tracks/4/enabled = true
+tracks/4/path = NodePath(".")
+tracks/4/interp = 1
+tracks/4/loop_wrap = true
+tracks/4/keys = {
+"times": PackedFloat32Array(2),
+"transitions": PackedFloat32Array(1),
+"values": [{
+"args": ["deactivateLaserAttack", null],
+"method": &"_native_event"
+}]
+}
+metadata/sprite_tracks = PackedInt32Array(0, 1, 2)
+metadata/boundaries = PackedFloat64Array(0.5, 2, 2.3999999)
+metadata/bindings = Array[Dictionary]([{
+"bezier": false,
+"kind": "sprite",
+"path": "",
+"property": "texture"
+}, {
+"bezier": false,
+"kind": "sprite_geometry",
+"path": "",
+"property": "scale"
+}, {
+"bezier": false,
+"kind": "sprite_geometry",
+"path": "",
+"property": "offset"
+}])

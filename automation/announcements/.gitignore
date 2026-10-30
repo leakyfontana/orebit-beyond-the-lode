@@ -1,0 +1,10 @@
+# Runtime state belongs in ~/Library/Application Support/Orebit Intake/announcements.
+.state/
+*.sqlite
+*.sqlite-*
+*.log
+*.lock
+.env
+.env.*
+discord-token
+node_modules/

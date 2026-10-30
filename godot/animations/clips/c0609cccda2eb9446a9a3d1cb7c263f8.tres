@@ -1,0 +1,120 @@
+[gd_resource type="Animation" format=3]
+
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/FlyingOpeningBlades/381.png" id="1_vtolt"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/FlyingOpeningBlades/383.png" id="2_f7wxt"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/FlyingOpeningBlades/385.png" id="3_4t48t"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/FlyingOpeningBlades/387.png" id="4_q2t0r"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/FlyingOpeningBlades/389.png" id="5_nx8rm"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/FlyingOpeningBlades/391.png" id="6_w2p1n"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/FlyingOpeningBlades/393.png" id="7_qa6mm"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/FlyingOpeningBlades/395.png" id="8_u36m3"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/FlyingOpeningBlades/397.png" id="9_ete0g"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/FlyingOpeningBlades/399.png" id="10_vwhy0"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/FlyingOpeningBlades/401.png" id="11_o010c"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/FlyingOpeningBlades/405.png" id="12_sn737"]
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_05nkx"]
+atlas = ExtResource("1_vtolt")
+region = Rect2(0, 0, 70, 70)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_4r6p2"]
+atlas = ExtResource("2_f7wxt")
+region = Rect2(0, 0, 70, 70)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_0788k"]
+atlas = ExtResource("3_4t48t")
+region = Rect2(0, 0, 70, 70)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_bq0ws"]
+atlas = ExtResource("4_q2t0r")
+region = Rect2(0, 0, 70, 70)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_3ew42"]
+atlas = ExtResource("5_nx8rm")
+region = Rect2(0, 0, 70, 70)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_qm7j1"]
+atlas = ExtResource("6_w2p1n")
+region = Rect2(0, 0, 70, 70)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_xywox"]
+atlas = ExtResource("7_qa6mm")
+region = Rect2(0, 0, 70, 70)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_mvh3h"]
+atlas = ExtResource("8_u36m3")
+region = Rect2(0, 0, 70, 70)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_5a0d2"]
+atlas = ExtResource("9_ete0g")
+region = Rect2(0, 0, 70, 70)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_54xe5"]
+atlas = ExtResource("10_vwhy0")
+region = Rect2(0, 0, 70, 70)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_0sf78"]
+atlas = ExtResource("11_o010c")
+region = Rect2(0, 0, 70, 70)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_7ailp"]
+atlas = ExtResource("12_sn737")
+region = Rect2(0, 0, 70, 70)
+
+[resource]
+resource_name = "FlyingOpeningBlades_Animation"
+length = 0.4
+tracks/0/type = "value"
+tracks/0/imported = false
+tracks/0/enabled = true
+tracks/0/path = NodePath("slot_0:unbound")
+tracks/0/interp = 0
+tracks/0/loop_wrap = false
+tracks/0/keys = {
+"times": PackedFloat32Array(0, 0.033333335, 0.06666667, 0.1, 0.13333334, 0.16666667, 0.2, 0.23333333, 0.26666668, 0.3, 0.33333334, 0.36666667),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [SubResource("AtlasTexture_05nkx"), SubResource("AtlasTexture_4r6p2"), SubResource("AtlasTexture_0788k"), SubResource("AtlasTexture_bq0ws"), SubResource("AtlasTexture_3ew42"), SubResource("AtlasTexture_qm7j1"), SubResource("AtlasTexture_xywox"), SubResource("AtlasTexture_mvh3h"), SubResource("AtlasTexture_5a0d2"), SubResource("AtlasTexture_54xe5"), SubResource("AtlasTexture_0sf78"), SubResource("AtlasTexture_7ailp")]
+}
+tracks/1/type = "value"
+tracks/1/imported = false
+tracks/1/enabled = true
+tracks/1/path = NodePath("slot_1:unbound")
+tracks/1/interp = 0
+tracks/1/loop_wrap = false
+tracks/1/keys = {
+"times": PackedFloat32Array(0, 0.033333335, 0.06666667, 0.1, 0.13333334, 0.16666667, 0.2, 0.23333333, 0.26666668, 0.3, 0.33333334, 0.36666667),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573)]
+}
+tracks/2/type = "value"
+tracks/2/imported = false
+tracks/2/enabled = true
+tracks/2/path = NodePath("slot_2:unbound")
+tracks/2/interp = 0
+tracks/2/loop_wrap = false
+tracks/2/keys = {
+"times": PackedFloat32Array(0, 0.033333335, 0.06666667, 0.1, 0.13333334, 0.16666667, 0.2, 0.23333333, 0.26666668, 0.3, 0.33333334, 0.36666667),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0)]
+}
+metadata/sprite_tracks = PackedInt32Array(0, 1, 2)
+metadata/boundaries = PackedFloat64Array(0.4)
+metadata/bindings = Array[Dictionary]([{
+"bezier": false,
+"kind": "sprite",
+"path": "",
+"property": "texture"
+}, {
+"bezier": false,
+"kind": "sprite_geometry",
+"path": "",
+"property": "scale"
+}, {
+"bezier": false,
+"kind": "sprite_geometry",
+"path": "",
+"property": "offset"
+}])

@@ -1,0 +1,86 @@
+[gd_resource type="Animation" format=3]
+
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/FlyingBladeRotating/405.png" id="1_5w5m4"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/FlyingBladeRotating/407.png" id="2_h7nl6"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/FlyingBladeRotating/409.png" id="3_x883f"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/FlyingBladeRotating/411.png" id="4_5w0if"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/FlyingBladeRotating/413.png" id="5_6fhgd"]
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_yw3d6"]
+atlas = ExtResource("1_5w5m4")
+region = Rect2(0, 0, 70, 70)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_6ef7l"]
+atlas = ExtResource("2_h7nl6")
+region = Rect2(0, 0, 70, 70)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_gkabl"]
+atlas = ExtResource("3_x883f")
+region = Rect2(0, 0, 70, 70)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_lf2j0"]
+atlas = ExtResource("4_5w0if")
+region = Rect2(0, 0, 70, 70)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_dgf1u"]
+atlas = ExtResource("5_6fhgd")
+region = Rect2(0, 0, 70, 70)
+
+[resource]
+resource_name = "FlyingBladeRotation_Animation"
+length = 0.16666667
+loop_mode = 1
+tracks/0/type = "value"
+tracks/0/imported = false
+tracks/0/enabled = true
+tracks/0/path = NodePath("slot_0:unbound")
+tracks/0/interp = 0
+tracks/0/loop_wrap = false
+tracks/0/keys = {
+"times": PackedFloat32Array(0, 0.033333335, 0.06666667, 0.1, 0.13333334),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1),
+"update": 0,
+"values": [SubResource("AtlasTexture_yw3d6"), SubResource("AtlasTexture_6ef7l"), SubResource("AtlasTexture_gkabl"), SubResource("AtlasTexture_lf2j0"), SubResource("AtlasTexture_dgf1u")]
+}
+tracks/1/type = "value"
+tracks/1/imported = false
+tracks/1/enabled = true
+tracks/1/path = NodePath("slot_1:unbound")
+tracks/1/interp = 0
+tracks/1/loop_wrap = false
+tracks/1/keys = {
+"times": PackedFloat32Array(0, 0.033333335, 0.06666667, 0.1, 0.13333334),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1),
+"update": 0,
+"values": [Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573)]
+}
+tracks/2/type = "value"
+tracks/2/imported = false
+tracks/2/enabled = true
+tracks/2/path = NodePath("slot_2:unbound")
+tracks/2/interp = 0
+tracks/2/loop_wrap = false
+tracks/2/keys = {
+"times": PackedFloat32Array(0, 0.033333335, 0.06666667, 0.1, 0.13333334),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1),
+"update": 0,
+"values": [Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0)]
+}
+metadata/sprite_tracks = PackedInt32Array(0, 1, 2)
+metadata/boundaries = PackedFloat64Array(0.16666667)
+metadata/bindings = Array[Dictionary]([{
+"bezier": false,
+"kind": "sprite",
+"path": "",
+"property": "texture"
+}, {
+"bezier": false,
+"kind": "sprite_geometry",
+"path": "",
+"property": "scale"
+}, {
+"bezier": false,
+"kind": "sprite_geometry",
+"path": "",
+"property": "offset"
+}])

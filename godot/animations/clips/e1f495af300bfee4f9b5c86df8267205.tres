@@ -1,0 +1,135 @@
+[gd_resource type="Animation" format=3]
+
+[ext_resource type="Texture2D" path="res://assets/Resources/ExplosionAnimations/Explosion1/1669.png" id="1_5jx5n"]
+[ext_resource type="Texture2D" path="res://assets/Resources/ExplosionAnimations/Explosion1/1671.png" id="2_rmt0v"]
+[ext_resource type="Texture2D" path="res://assets/Resources/ExplosionAnimations/Explosion1/1673.png" id="3_1g2nw"]
+[ext_resource type="Texture2D" path="res://assets/Resources/ExplosionAnimations/Explosion1/1675.png" id="4_2psw4"]
+[ext_resource type="Texture2D" path="res://assets/Resources/ExplosionAnimations/Explosion1/1677.png" id="5_0mt81"]
+[ext_resource type="Texture2D" path="res://assets/Resources/ExplosionAnimations/Explosion1/1679.png" id="6_2uydb"]
+[ext_resource type="Texture2D" path="res://assets/Resources/ExplosionAnimations/Explosion1/1681.png" id="7_vv2dt"]
+[ext_resource type="Texture2D" path="res://assets/Resources/ExplosionAnimations/Explosion1/1683.png" id="8_c6r27"]
+[ext_resource type="Texture2D" path="res://assets/Resources/ExplosionAnimations/Explosion1/1685.png" id="9_df3og"]
+[ext_resource type="Texture2D" path="res://assets/Resources/ExplosionAnimations/Explosion1/1687.png" id="10_ty8ul"]
+[ext_resource type="Texture2D" path="res://assets/Resources/ExplosionAnimations/Explosion1/1689.png" id="11_y7dv0"]
+[ext_resource type="Texture2D" path="res://assets/Resources/ExplosionAnimations/Explosion1/1691.png" id="12_8cv8y"]
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_uupfp"]
+atlas = ExtResource("1_5jx5n")
+region = Rect2(0, 0, 50, 50)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_ra4i5"]
+atlas = ExtResource("2_rmt0v")
+region = Rect2(0, 0, 50, 50)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_0q5hh"]
+atlas = ExtResource("3_1g2nw")
+region = Rect2(0, 0, 50, 50)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_xh0dr"]
+atlas = ExtResource("4_2psw4")
+region = Rect2(0, 0, 50, 50)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_clxd3"]
+atlas = ExtResource("5_0mt81")
+region = Rect2(0, 0, 50, 50)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_7e482"]
+atlas = ExtResource("6_2uydb")
+region = Rect2(0, 0, 50, 50)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_v48w0"]
+atlas = ExtResource("7_vv2dt")
+region = Rect2(0, 0, 50, 50)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_od2eg"]
+atlas = ExtResource("8_c6r27")
+region = Rect2(0, 0, 50, 50)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_mvm6a"]
+atlas = ExtResource("9_df3og")
+region = Rect2(0, 0, 50, 50)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_4vt0o"]
+atlas = ExtResource("10_ty8ul")
+region = Rect2(0, 0, 50, 50)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_kdbv5"]
+atlas = ExtResource("11_y7dv0")
+region = Rect2(0, 0, 50, 50)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_m6nkp"]
+atlas = ExtResource("12_8cv8y")
+region = Rect2(0, 0, 50, 50)
+
+[resource]
+resource_name = "Explosion1_Anim"
+length = 0.4
+loop_mode = 1
+tracks/0/type = "value"
+tracks/0/imported = false
+tracks/0/enabled = true
+tracks/0/path = NodePath("slot_0:unbound")
+tracks/0/interp = 0
+tracks/0/loop_wrap = false
+tracks/0/keys = {
+"times": PackedFloat32Array(0, 0.033333335, 0.06666667, 0.1, 0.13333334, 0.16666667, 0.2, 0.23333333, 0.26666668, 0.3, 0.33333334, 0.36666667),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [SubResource("AtlasTexture_uupfp"), SubResource("AtlasTexture_ra4i5"), SubResource("AtlasTexture_0q5hh"), SubResource("AtlasTexture_xh0dr"), SubResource("AtlasTexture_clxd3"), SubResource("AtlasTexture_7e482"), SubResource("AtlasTexture_v48w0"), SubResource("AtlasTexture_od2eg"), SubResource("AtlasTexture_mvm6a"), SubResource("AtlasTexture_4vt0o"), SubResource("AtlasTexture_kdbv5"), SubResource("AtlasTexture_m6nkp")]
+}
+tracks/1/type = "value"
+tracks/1/imported = false
+tracks/1/enabled = true
+tracks/1/path = NodePath("slot_1:unbound")
+tracks/1/interp = 0
+tracks/1/loop_wrap = false
+tracks/1/keys = {
+"times": PackedFloat32Array(0, 0.033333335, 0.06666667, 0.1, 0.13333334, 0.16666667, 0.2, 0.23333333, 0.26666668, 0.3, 0.33333334, 0.36666667),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [Vector2(1, 1), Vector2(1, 1), Vector2(1, 1), Vector2(1, 1), Vector2(1, 1), Vector2(1, 1), Vector2(1, 1), Vector2(1, 1), Vector2(1, 1), Vector2(1, 1), Vector2(1, 1), Vector2(1, 1)]
+}
+tracks/2/type = "value"
+tracks/2/imported = false
+tracks/2/enabled = true
+tracks/2/path = NodePath("slot_2:unbound")
+tracks/2/interp = 0
+tracks/2/loop_wrap = false
+tracks/2/keys = {
+"times": PackedFloat32Array(0, 0.033333335, 0.06666667, 0.1, 0.13333334, 0.16666667, 0.2, 0.23333333, 0.26666668, 0.3, 0.33333334, 0.36666667),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0)]
+}
+tracks/3/type = "method"
+tracks/3/imported = false
+tracks/3/enabled = true
+tracks/3/path = NodePath(".")
+tracks/3/interp = 1
+tracks/3/loop_wrap = true
+tracks/3/keys = {
+"times": PackedFloat32Array(0.4),
+"transitions": PackedFloat32Array(1),
+"values": [{
+"args": ["destroy", null],
+"method": &"_native_event"
+}]
+}
+metadata/sprite_tracks = PackedInt32Array(0, 1, 2)
+metadata/boundaries = PackedFloat64Array(0.4)
+metadata/bindings = Array[Dictionary]([{
+"bezier": false,
+"kind": "sprite",
+"path": "",
+"property": "texture"
+}, {
+"bezier": false,
+"kind": "sprite_geometry",
+"path": "",
+"property": "scale"
+}, {
+"bezier": false,
+"kind": "sprite_geometry",
+"path": "",
+"property": "offset"
+}])

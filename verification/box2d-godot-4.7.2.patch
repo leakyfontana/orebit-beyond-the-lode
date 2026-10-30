@@ -1,0 +1,2031 @@
+diff --git a/SConstruct b/SConstruct
+index fae82cc..b692fc5 100644
+--- a/SConstruct
++++ b/SConstruct
+@@ -2,7 +2,9 @@
+ import os
+ import sys
+ 
+-env = SConscript("godot-cpp/SConstruct")
++# Always generate the virtual-method ABI from the engine under evaluation.
++ARGUMENTS.setdefault("custom_api_file", File("../engine-api-4.7.2/extension_api.json").abspath)
++env = SConscript("../godot-cpp-10/SConstruct")
+ box2d_folder = "box2d/"
+ box2d_include = [
+ 	"include/",
+diff --git a/src/b2_user_settings.h b/src/b2_user_settings.h
+index 0de97d5..88bad33 100644
+--- a/src/b2_user_settings.h
++++ b/src/b2_user_settings.h
+@@ -14,7 +14,7 @@
+ 
+ // You can use this to change the length scale used by your game.
+ // For example for inches you could use 39.4.
+-#define b2_lengthUnitsPerMeter 100.0f
++#define b2_lengthUnitsPerMeter 50.0f
+ 
+ // The maximum number of vertices on a convex polygon. You cannot increase
+ // this too much because b2BlockAllocator has a maximum object size.
+diff --git a/src/bodies/box2d_area_2d.cpp b/src/bodies/box2d_area_2d.cpp
+index d1eeb37..09b2b2e 100644
+--- a/src/bodies/box2d_area_2d.cpp
++++ b/src/bodies/box2d_area_2d.cpp
+@@ -9,141 +9,91 @@ void Box2DArea2D::set_space(Box2DSpace2D *p_space) {
+ 	}
+ 
+ 	if (get_space()) {
+-		// Need to keep in list to handle remove events for bodies
+-		if (!detected_bodies.is_empty() && !monitor_query_list.in_list()) {
+-			get_space()->area_add_to_monitor_query_list(&monitor_query_list);
+-		}
+-
+-		for (auto E = detected_bodies.begin(); E != detected_bodies.end(); ++E) {
+-			Box2DBody2D *body = get_space()->get_body_from_rid(E->key);
+-			if (!body || !body->get_space()) {
+-				continue;
+-			}
+-			body->remove_area(this);
+-		}
+-		detected_bodies.clear();
+-
++		// Destroy fixtures while detections still exist: their synchronous
++		// EndContact callbacks remove body overrides and notify the other areas.
++		_set_space(nullptr);
+ 		area_override_update_list.remove_from_list();
+ 	}
+ 
++	// The engine clears this area's own monitoring state when it leaves a space.
++	// Never leave its query node attached to the old space after a transfer.
++	monitor_query_list.remove_from_list();
+ 	monitored_objects.clear();
+-
++	monitored_contacts.clear();
++	detected_bodies.clear();
+ 	_set_space(p_space);
+ }
+ 
+-void Box2DArea2D::on_body_enter(b2Fixture *p_collider_handle, Box2DBody2D *p_body, uint32_t p_body_shape, RID p_body_rid, ObjectID p_body_instance_id, b2Fixture *p_area_collider_handle, uint32_t p_area_shape) {
+-	ERR_FAIL_COND(!p_body); // Shouldn't happen after removal
+-
+-	// Add to keep track of currently detected bodies
+-	BodyRefCount &bodyRefCount = detected_bodies[p_body_rid];
+-	if (bodyRefCount.count++ == 0) {
+-		p_body->add_area(this);
+-	}
+-
+-	if (monitor_callback.is_null()) {
+-		return;
++void Box2DArea2D::_queue_monitor(const MonitorKey &p_key, Box2DCollisionObject2D *p_object, int p_state) {
++	auto pending = monitored_objects.find(p_key);
++	if (pending) {
++		pending->value.state += p_state;
++		if (pending->value.state == 0) {
++			monitored_objects.remove(pending);
++		}
++	} else {
++		monitored_objects.insert(p_key, { p_object->get_instance_id(), p_object->get_type(), p_state });
+ 	}
+-
+-	area_detection_counter++;
+-
+-	uint64_t handle_pair_hash = box2d::handle_pair_hash(p_collider_handle, p_area_collider_handle);
+-	ERR_FAIL_COND(monitored_objects.has(handle_pair_hash));
+-	monitored_objects.insert(handle_pair_hash, { p_body_rid, p_body_instance_id, p_body_shape, p_area_shape, Type::TYPE_BODY, 1 });
+-
+-	if (!monitor_query_list.in_list()) {
+-		ERR_FAIL_COND(!get_space());
++	if (!monitored_objects.is_empty() && !monitor_query_list.in_list()) {
++		ERR_FAIL_NULL(get_space());
+ 		get_space()->area_add_to_monitor_query_list(&monitor_query_list);
+ 	}
+ }
+ 
+-void Box2DArea2D::on_body_exit(b2Fixture *p_collider_handle, Box2DBody2D *p_body, uint32_t p_body_shape, RID p_body_rid, ObjectID p_body_instance_id, b2Fixture *p_area_collider_handle, uint32_t p_area_shape, bool p_update_detection) {
+-	if (p_update_detection) {
+-		// Remove from currently detected bodies
+-		auto foundIt = detected_bodies.find(p_body_rid);
+-		ERR_FAIL_COND(foundIt == detected_bodies.end());
+-		ERR_FAIL_COND(foundIt->value.count == 0);
+-		if (foundIt->value.count-- == 1) {
+-			detected_bodies.remove(foundIt);
+-			if (p_body) {
+-				p_body->remove_area(this);
+-			}
++void Box2DArea2D::_monitor_enter(Box2DCollisionObject2D *p_object, uint32_t p_object_shape, uint32_t p_area_shape, bool p_monitoring) {
++	MonitorKey key{ p_object->get_rid(), p_object_shape, p_area_shape };
++	MonitorContact &contact = monitored_contacts[key];
++	if (contact.count++ == 0) {
++		contact.monitoring = p_monitoring;
++		if (contact.monitoring) {
++			_queue_monitor(key, p_object, 1);
+ 		}
+ 	}
++}
+ 
+-	if (monitor_callback.is_null()) {
+-		return;
+-	}
+-
+-	if (p_body) {
+-		area_detection_counter--;
+-	}
+-
+-	uint64_t handle_pair_hash = box2d::handle_pair_hash(p_collider_handle, p_area_collider_handle);
+-
+-	if (monitored_objects.has(handle_pair_hash)) {
+-		ERR_FAIL_COND(monitored_objects[handle_pair_hash].state != 1);
+-		monitored_objects.erase(handle_pair_hash);
+-	} else {
+-		monitored_objects.insert(handle_pair_hash, { p_body_rid, p_body_instance_id, p_body_shape, p_area_shape, Type::TYPE_BODY, -1 });
+-
+-		if (!monitor_query_list.in_list()) {
+-			ERR_FAIL_COND(!get_space());
+-			get_space()->area_add_to_monitor_query_list(&monitor_query_list);
++void Box2DArea2D::_monitor_exit(Box2DCollisionObject2D *p_object, uint32_t p_object_shape, uint32_t p_area_shape) {
++	MonitorKey key{ p_object->get_rid(), p_object_shape, p_area_shape };
++	auto contact = monitored_contacts.find(key);
++	ERR_FAIL_COND(!contact);
++	ERR_FAIL_COND(contact->value.count == 0);
++	if (--contact->value.count == 0) {
++		bool monitoring = contact->value.monitoring;
++		monitored_contacts.remove(contact);
++		if (monitoring) {
++			_queue_monitor(key, p_object, -1);
+ 		}
+ 	}
+ }
+ 
+-void Box2DArea2D::on_area_enter(b2Fixture *p_collider_handle, Box2DArea2D *p_other_area, uint32_t p_other_area_shape, RID p_other_area_rid, ObjectID p_other_area_instance_id, b2Fixture *p_area_collider_handle, uint32_t p_area_shape) {
+-	ERR_FAIL_COND(!p_other_area); // Shouldn't happen after removal
+-
+-	if (area_monitor_callback.is_null()) {
+-		return;
+-	}
+-
+-	if (!p_other_area->is_monitorable()) {
+-		return;
+-	}
+-
+-	p_other_area->area_detection_counter++;
+-
+-	uint64_t handle_pair_hash = box2d::handle_pair_hash(p_collider_handle, p_area_collider_handle);
+-
+-	ERR_FAIL_COND(monitored_objects.has(handle_pair_hash));
+-	monitored_objects.insert(handle_pair_hash, { p_other_area_rid, p_other_area_instance_id, p_other_area_shape, p_area_shape, Type::TYPE_AREA, 1 });
+-
+-	if (!monitor_query_list.in_list()) {
+-		ERR_FAIL_COND(!get_space());
+-		get_space()->area_add_to_monitor_query_list(&monitor_query_list);
++void Box2DArea2D::on_body_enter(Box2DBody2D *p_body, uint32_t p_body_shape, uint32_t p_area_shape) {
++	ERR_FAIL_NULL(p_body);
++	BodyRefCount &body_ref_count = detected_bodies[p_body->get_rid()];
++	if (body_ref_count.count++ == 0) {
++		p_body->add_area(this);
+ 	}
++	_monitor_enter(p_body, p_body_shape, p_area_shape, !monitor_callback.is_null());
+ }
+ 
+-void Box2DArea2D::on_area_exit(b2Fixture *p_collider_handle, Box2DArea2D *p_other_area, uint32_t p_other_area_shape, RID p_other_area_rid, ObjectID p_other_area_instance_id, b2Fixture *p_area_collider_handle, uint32_t p_area_shape) {
+-	if (area_monitor_callback.is_null()) {
+-		return;
++void Box2DArea2D::on_body_exit(Box2DBody2D *p_body, uint32_t p_body_shape, uint32_t p_area_shape) {
++	ERR_FAIL_NULL(p_body);
++	auto body_ref_count = detected_bodies.find(p_body->get_rid());
++	ERR_FAIL_COND(!body_ref_count);
++	ERR_FAIL_COND(body_ref_count->value.count == 0);
++	if (--body_ref_count->value.count == 0) {
++		detected_bodies.remove(body_ref_count);
++		p_body->remove_area(this);
+ 	}
++	_monitor_exit(p_body, p_body_shape, p_area_shape);
++}
+ 
+-	if (p_other_area) {
+-		if (!p_other_area->is_monitorable()) {
+-			return;
+-		}
+-
+-		ERR_FAIL_COND(p_other_area->area_detection_counter == 0);
+-		p_other_area->area_detection_counter--;
+-	}
+-
+-	uint64_t handle_pair_hash = box2d::handle_pair_hash(p_collider_handle, p_area_collider_handle);
+-
+-	if (monitored_objects.has(handle_pair_hash)) {
+-		ERR_FAIL_COND(monitored_objects[handle_pair_hash].state != 1);
+-		monitored_objects.erase(handle_pair_hash);
+-	} else {
+-		monitored_objects.insert(handle_pair_hash, { p_other_area_rid, p_other_area_instance_id, p_other_area_shape, p_area_shape, Type::TYPE_AREA, -1 });
++void Box2DArea2D::on_area_enter(Box2DArea2D *p_other_area, uint32_t p_other_area_shape, uint32_t p_area_shape) {
++	ERR_FAIL_NULL(p_other_area);
++	_monitor_enter(p_other_area, p_other_area_shape, p_area_shape, !area_monitor_callback.is_null() && p_other_area->is_monitorable());
++}
+ 
+-		if (!monitor_query_list.in_list()) {
+-			ERR_FAIL_COND(!get_space());
+-			get_space()->area_add_to_monitor_query_list(&monitor_query_list);
+-		}
+-	}
++void Box2DArea2D::on_area_exit(Box2DArea2D *p_other_area, uint32_t p_other_area_shape, uint32_t p_area_shape) {
++	ERR_FAIL_NULL(p_other_area);
++	_monitor_exit(p_other_area, p_other_area_shape, p_area_shape);
+ }
+ 
+ void Box2DArea2D::update_area_override() {
+@@ -158,34 +108,56 @@ void Box2DArea2D::update_area_override() {
+ 	}
+ }
+ 
+-void Box2DArea2D::set_monitor_callback(const Callable &p_callback) {
+-	uint64_t id = p_callback.get_object_id();
++void Box2DArea2D::_reset_monitoring(Type p_type) {
++	// Pending notifications belong to the previous observer, not its replacement.
++	for (auto entry = monitored_objects.begin(); entry;) {
++		auto next = entry;
++		++next;
++		if (entry->value.type == p_type) {
++			monitored_objects.remove(entry);
++		}
++		entry = next;
++	}
++	if (get_space()) {
++		for (auto entry = monitored_contacts.begin(); entry; ++entry) {
++			Box2DCollisionObject2D *object = nullptr;
++			bool enabled = false;
++			if (p_type == Type::TYPE_BODY) {
++				object = get_space()->get_body_from_rid(entry->key.rid);
++				enabled = !monitor_callback.is_null();
++			} else {
++				Box2DArea2D *area = get_space()->get_area_from_rid(entry->key.rid);
++				object = area;
++				enabled = !area_monitor_callback.is_null() && area && area->is_monitorable();
++			}
++			if (!object) {
++				continue; // This contact belongs to the other monitor category.
++			}
++			entry->value.monitoring = enabled;
++			if (enabled) {
++				_queue_monitor(entry->key, object, 1);
++			}
++		}
++	}
++	if (monitored_objects.is_empty()) {
++		monitor_query_list.remove_from_list();
++	}
++}
+ 
+-	if (id == monitor_callback.get_object_id()) {
+-		monitor_callback = p_callback;
++void Box2DArea2D::set_monitor_callback(const Callable &p_callback) {
++	if (monitor_callback == p_callback) {
+ 		return;
+ 	}
+-
+-	_unregister_shapes();
+-
+ 	monitor_callback = p_callback;
+-
+-	monitored_objects.clear();
++	_reset_monitoring(Type::TYPE_BODY);
+ }
+ 
+ void Box2DArea2D::set_area_monitor_callback(const Callable &p_callback) {
+-	uint64_t id = p_callback.get_object_id();
+-
+-	if (id == area_monitor_callback.get_object_id()) {
+-		area_monitor_callback = p_callback;
++	if (area_monitor_callback == p_callback) {
+ 		return;
+ 	}
+-
+-	_unregister_shapes();
+-
+ 	area_monitor_callback = p_callback;
+-
+-	monitored_objects.clear();
++	_reset_monitoring(Type::TYPE_AREA);
+ }
+ 
+ void Box2DArea2D::_set_space_override_mode(PhysicsServer2D::AreaSpaceOverrideMode &r_mode, PhysicsServer2D::AreaSpaceOverrideMode p_value) {
+@@ -387,6 +359,7 @@ void Box2DArea2D::set_monitorable(bool p_monitorable) {
+ }
+ 
+ void Box2DArea2D::call_queries() {
++	monitor_query_list.remove_from_list();
+ 	if (monitored_objects.is_empty()) {
+ 		return;
+ 	}
+@@ -397,15 +370,19 @@ void Box2DArea2D::call_queries() {
+ 		return array;
+ 	}();
+ 
+-	for (auto E = monitored_objects.begin(); E != monitored_objects.end(); ++E) {
+-		const MonitorInfo &monitor_info = E->value;
+-		ERR_CONTINUE(monitor_info.state == 0);
++	while (!monitored_objects.is_empty()) {
++		auto pending = monitored_objects.begin();
++		const MonitorKey key = pending->key;
++		const MonitorInfo monitor_info = pending->value;
++		// Remove before calling script: an exit may destroy/reuse a fixture or
++		// queue more shape transitions without invalidating our iterator.
++		monitored_objects.remove(pending);
+ 
+ 		arg_array[0] = monitor_info.state > 0 ? PhysicsServer2D::AREA_BODY_ADDED : PhysicsServer2D::AREA_BODY_REMOVED;
+-		arg_array[1] = monitor_info.rid;
++		arg_array[1] = key.rid;
+ 		arg_array[2] = monitor_info.instance_id;
+-		arg_array[3] = monitor_info.object_shape_index;
+-		arg_array[4] = monitor_info.area_shape_index;
++		arg_array[3] = key.object_shape_index;
++		arg_array[4] = key.area_shape_index;
+ 
+ 		if (monitor_info.type == Type::TYPE_BODY) {
+ 			ERR_CONTINUE(monitor_callback.is_null());
+@@ -416,7 +393,6 @@ void Box2DArea2D::call_queries() {
+ 		}
+ 	}
+ 
+-	monitored_objects.clear();
+ }
+ 
+ void Box2DArea2D::compute_gravity(const Vector2 &p_position, Vector2 &r_gravity) const {
+diff --git a/src/bodies/box2d_area_2d.h b/src/bodies/box2d_area_2d.h
+index 086296d..f4ca90c 100644
+--- a/src/bodies/box2d_area_2d.h
++++ b/src/bodies/box2d_area_2d.h
+@@ -28,16 +28,44 @@ class Box2DArea2D : public Box2DCollisionObject2D {
+ 	Callable monitor_callback;
+ 	Callable area_monitor_callback;
+ 
+-	struct MonitorInfo {
++	struct MonitorKey {
+ 		RID rid;
+-		ObjectID instance_id;
+ 		uint32_t object_shape_index = 0;
+ 		uint32_t area_shape_index = 0;
++
++		bool operator==(const MonitorKey &p_other) const {
++			return rid == p_other.rid && object_shape_index == p_other.object_shape_index && area_shape_index == p_other.area_shape_index;
++		}
++	};
++
++	struct MonitorKeyHasher {
++		static uint32_t hash(const MonitorKey &p_key) {
++			uint32_t hash = hash_murmur3_one_64(p_key.rid.get_id());
++			hash = hash_murmur3_one_32(p_key.object_shape_index, hash);
++			return hash_fmix32(hash_murmur3_one_32(p_key.area_shape_index, hash));
++		}
++	};
++
++	struct MonitorContact {
++		uint32_t count = 0;
++		bool monitoring = false;
++	};
++
++	struct MonitorInfo {
++		ObjectID instance_id;
+ 		Type type = Type::TYPE_BODY;
+ 		int state = 0;
+ 	};
+ 
+-	HashMap<uint64_t, MonitorInfo> monitored_objects;
++	// A Godot shape can own several fixtures/contacts. Report only the first
++	// entrance and final exit, keyed by logical shapes rather than reused pointers.
++	HashMap<MonitorKey, MonitorContact, MonitorKeyHasher> monitored_contacts;
++	HashMap<MonitorKey, MonitorInfo, MonitorKeyHasher> monitored_objects;
++
++	void _queue_monitor(const MonitorKey &p_key, Box2DCollisionObject2D *p_object, int p_state);
++	void _monitor_enter(Box2DCollisionObject2D *p_object, uint32_t p_object_shape, uint32_t p_area_shape, bool p_monitoring);
++	void _monitor_exit(Box2DCollisionObject2D *p_object, uint32_t p_object_shape, uint32_t p_area_shape);
++	void _reset_monitoring(Type p_type);
+ 
+ 	struct BodyRefCount {
+ 		uint32_t count = 0;
+@@ -55,11 +83,11 @@ class Box2DArea2D : public Box2DCollisionObject2D {
+ 	void _reset_space_override();
+ 
+ public:
+-	void on_body_enter(b2Fixture *p_collider_handle, Box2DBody2D *p_body, uint32_t p_body_shape, RID p_body_rid, ObjectID p_body_instance_id, b2Fixture *p_area_collider_handle, uint32_t p_area_shape);
+-	void on_body_exit(b2Fixture *p_collider_handle, Box2DBody2D *p_body, uint32_t p_body_shape, RID p_body_rid, ObjectID p_body_instance_id, b2Fixture *p_area_collider_handle, uint32_t p_area_shape, bool p_update_detection = true);
++	void on_body_enter(Box2DBody2D *p_body, uint32_t p_body_shape, uint32_t p_area_shape);
++	void on_body_exit(Box2DBody2D *p_body, uint32_t p_body_shape, uint32_t p_area_shape);
+ 
+-	void on_area_enter(b2Fixture *p_collider_handle, Box2DArea2D *p_other_area, uint32_t p_other_area_shape, RID p_other_area_rid, ObjectID p_other_area_instance_id, b2Fixture *p_area_collider_handle, uint32_t p_area_shape);
+-	void on_area_exit(b2Fixture *p_collider_handle, Box2DArea2D *p_other_area, uint32_t p_other_area_shape, RID p_other_area_rid, ObjectID p_other_area_instance_id, b2Fixture *p_area_collider_handle, uint32_t p_area_shape);
++	void on_area_enter(Box2DArea2D *p_other_area, uint32_t p_other_area_shape, uint32_t p_area_shape);
++	void on_area_exit(Box2DArea2D *p_other_area, uint32_t p_other_area_shape, uint32_t p_area_shape);
+ 
+ 	void update_area_override();
+ 	bool has_any_space_override() const;
+diff --git a/src/bodies/box2d_body_2d.cpp b/src/bodies/box2d_body_2d.cpp
+index 662a11d..4435344 100644
+--- a/src/bodies/box2d_body_2d.cpp
++++ b/src/bodies/box2d_body_2d.cpp
+@@ -515,10 +515,12 @@ void Box2DBody2D::set_space(Box2DSpace2D *p_space) {
+ 		gravity_update_list.remove_from_list();
+ 		active_list.remove_from_list();
+ 		direct_state_query_list.remove_from_list();
+-		area_override_update_list.remove_from_list();
+ 	}
+ 
+ 	_set_space(p_space);
++	// Synchronous EndContact can queue an override update while leaving the old
++	// space; do not retain that node when transferring to another space.
++	area_override_update_list.remove_from_list();
+ 
+ 	if (get_space()) {
+ 		if (mode >= PhysicsServer2D::BODY_MODE_KINEMATIC) {
+@@ -706,18 +708,15 @@ void Box2DBody2D::apply_central_force(const Vector2 &p_force) {
+ 	}
+ 
+ 	if (mass_properties_update_list.in_list()) {
+-		// Force update internal mass properties to calculate proper impulse
++		// Ensure the force is integrated using the current rigidbody mass.
+ 		update_mass_properties(true);
+ 	}
+ 
+ 	b2World *space_handle = get_space()->get_handle();
+ 	ERR_FAIL_COND(!box2d::is_handle_valid(space_handle));
+-	// Note: using last delta assuming constant physics time
+-	real_t last_delta = get_space()->get_last_step();
+-
+ 	ERR_FAIL_COND(!box2d::is_handle_valid(body_handle));
+-	b2Vec2 force = { p_force.x * last_delta, p_force.y * last_delta };
+-	box2d::body_apply_impulse(space_handle, body_handle, force);
++	b2Vec2 applied_force = { p_force.x, p_force.y };
++	box2d::body_apply_central_force(space_handle, body_handle, applied_force);
+ }
+ 
+ void Box2DBody2D::apply_force(const Vector2 &p_force, const Vector2 &p_position) {
+diff --git a/src/bodies/box2d_body_2d.h b/src/bodies/box2d_body_2d.h
+index 31c34b5..b52c044 100644
+--- a/src/bodies/box2d_body_2d.h
++++ b/src/bodies/box2d_body_2d.h
+@@ -89,6 +89,7 @@ class Box2DBody2D : public Box2DCollisionObject2D {
+ 	struct Contact {
+ 		Vector2 local_pos;
+ 		Vector2 local_normal;
++		Vector2 local_velocity_at_pos;
+ 		real_t depth = 0.0;
+ 		int local_shape = 0;
+ 		Vector2 collider_pos;
+@@ -158,7 +159,7 @@ public:
+ 	}
+ 	_FORCE_INLINE_ int get_max_contacts_reported() const { return contacts.size(); }
+ 	_FORCE_INLINE_ bool can_report_contacts() const { return !contacts.is_empty(); }
+-	_FORCE_INLINE_ void add_contact(const Vector2 &p_local_pos, const Vector2 &p_local_normal, real_t p_depth, int p_local_shape, const Vector2 &p_collider_pos, int p_collider_shape, ObjectID p_collider_instance_id, const RID &p_collider, const Vector2 &p_collider_velocity_at_pos, const Vector2 &p_impulse);
++	_FORCE_INLINE_ void add_contact(const Vector2 &p_local_pos, const Vector2 &p_local_normal, const Vector2 &p_local_velocity_at_pos, real_t p_depth, int p_local_shape, const Vector2 &p_collider_pos, int p_collider_shape, ObjectID p_collider_instance_id, const RID &p_collider, const Vector2 &p_collider_velocity_at_pos, const Vector2 &p_impulse);
+ 
+ 	_FORCE_INLINE_ void add_exception(const RID &p_exception) { exceptions.insert(p_exception); }
+ 	_FORCE_INLINE_ void remove_exception(const RID &p_exception) { exceptions.erase(p_exception); }
+@@ -242,7 +243,7 @@ public:
+ 	~Box2DBody2D();
+ };
+ 
+-void Box2DBody2D::add_contact(const Vector2 &p_local_pos, const Vector2 &p_local_normal, real_t p_depth, int p_local_shape, const Vector2 &p_collider_pos, int p_collider_shape, ObjectID p_collider_instance_id, const RID &p_collider, const Vector2 &p_collider_velocity_at_pos, const Vector2 &p_impulse) {
++void Box2DBody2D::add_contact(const Vector2 &p_local_pos, const Vector2 &p_local_normal, const Vector2 &p_local_velocity_at_pos, real_t p_depth, int p_local_shape, const Vector2 &p_collider_pos, int p_collider_shape, ObjectID p_collider_instance_id, const RID &p_collider, const Vector2 &p_collider_velocity_at_pos, const Vector2 &p_impulse) {
+ 	int c_max = contacts.size();
+ 
+ 	if (c_max == 0) {
+@@ -274,6 +275,7 @@ void Box2DBody2D::add_contact(const Vector2 &p_local_pos, const Vector2 &p_local
+ 	}
+ 	c[idx].local_pos = p_local_pos;
+ 	c[idx].local_normal = p_local_normal;
++	c[idx].local_velocity_at_pos = p_local_velocity_at_pos;
+ 	c[idx].depth = p_depth;
+ 	c[idx].local_shape = p_local_shape;
+ 	c[idx].collider_pos = p_collider_pos;
+diff --git a/src/bodies/box2d_collision_object_2d.cpp b/src/bodies/box2d_collision_object_2d.cpp
+index d0a05d0..479d812 100644
+--- a/src/bodies/box2d_collision_object_2d.cpp
++++ b/src/bodies/box2d_collision_object_2d.cpp
+@@ -34,7 +34,9 @@ void Box2DCollisionObject2D::set_shape(int p_index, Box2DShape2D *p_shape) {
+ 
+ 	Shape &shape = shapes[p_index];
+ 
+-	_destroy_shape(shape, p_index);
++	if (!shape.disabled) {
++		_destroy_shape(shape);
++	}
+ 
+ 	shape.shape->remove_owner(this);
+ 	shape.shape = p_shape;
+@@ -83,7 +85,7 @@ void Box2DCollisionObject2D::set_shape_disabled(int p_index, bool p_disabled) {
+ 	shape.disabled = p_disabled;
+ 
+ 	if (shape.disabled) {
+-		_destroy_shape(shape, p_index);
++		_destroy_shape(shape);
+ 	} else {
+ 		_create_shape(shape, p_index);
+ 		_update_shape_transform(shape);
+@@ -121,18 +123,31 @@ void Box2DCollisionObject2D::remove_shape(Box2DShape2D *p_shape) {
+ }
+ 
+ void Box2DCollisionObject2D::remove_shape(int p_index) {
+-	//remove anything from shape to be erased to end, so subindices don't change
++	// End contacts with the old indices before changing the shape array.
+ 	ERR_FAIL_INDEX(p_index, (int)shapes.size());
+ 
+ 	Shape &shape = shapes[p_index];
+ 
+ 	if (!shape.disabled) {
+-		_destroy_shape(shape, p_index);
++		_destroy_shape(shape);
++	}
++	if (space) {
++		space->notify_shape_contacts(this, p_index + 1, false);
+ 	}
+ 
+ 	shape.shape->remove_owner(this);
+ 	shapes.remove_at(p_index);
+ 
++	if (space) {
++		for (uint32_t i = p_index; i < shapes.size(); i++) {
++			const box2d::FixtureHandle &colliders = shapes[i].collider_handle;
++			for (int j = 0; j < colliders.count; j++) {
++				colliders.handles[j]->GetUserData().shape_idx = i;
++			}
++		}
++		space->notify_shape_contacts(this, p_index, true);
++	}
++
+ 	//if (!pending_shape_update_list.in_list()) {
+ 	//	Box2DPhysicsServer2D::singleton->pending_shape_update_list.add(&pending_shape_update_list);
+ 	//}
+@@ -142,8 +157,6 @@ void Box2DCollisionObject2D::remove_shape(int p_index) {
+ 	}
+ }
+ 
+-void Box2DCollisionObject2D::_unregister_shapes() {
+-}
+ 
+ void Box2DCollisionObject2D::_update_transform() {
+ 	if (!space) {
+@@ -222,7 +235,7 @@ void Box2DCollisionObject2D::_create_shape(Shape &shape, uint32_t p_shape_index)
+ 	_init_collider(shape.collider_handle);
+ }
+ 
+-void Box2DCollisionObject2D::_destroy_shape(Shape &shape, uint32_t p_shape_index) {
++void Box2DCollisionObject2D::_destroy_shape(Shape &shape) {
+ 	if (!space) {
+ 		return;
+ 	}
+@@ -232,12 +245,6 @@ void Box2DCollisionObject2D::_destroy_shape(Shape &shape, uint32_t p_shape_index
+ 
+ 	ERR_FAIL_COND(!box2d::is_handle_valid(shape.collider_handle));
+ 
+-	if (area_detection_counter > 0) {
+-		// Keep track of body information for delayed removal
+-		for (int i = 0; i < shape.collider_handle.count; i++) {
+-			space->add_removed_collider(shape.collider_handle.handles[i], this, p_shape_index);
+-		}
+-	}
+ 	box2d::collider_destroy(space_handle, shape.collider_handle);
+ 	shape.collider_handle = box2d::invalid_fixture_handle(); // collider_handle = box2d ID
+ }
+@@ -272,7 +279,7 @@ void Box2DCollisionObject2D::_set_space(Box2DSpace2D *p_space) {
+ 				continue;
+ 			}
+ 
+-			_destroy_shape(shape, i);
++			_destroy_shape(shape);
+ 		}
+ 		// This call also destroys the colliders
+ 		box2d::body_destroy(space_handle, body_handle);
+@@ -351,7 +358,7 @@ void Box2DCollisionObject2D::_shape_changed(Box2DShape2D *p_shape) {
+ 			continue;
+ 		}
+ 
+-		_destroy_shape(shape, i);
++		_destroy_shape(shape);
+ 
+ 		_create_shape(shape, i);
+ 		_update_shape_transform(shape);
+diff --git a/src/bodies/box2d_collision_object_2d.h b/src/bodies/box2d_collision_object_2d.h
+index 3430219..a3e6c02 100644
+--- a/src/bodies/box2d_collision_object_2d.h
++++ b/src/bodies/box2d_collision_object_2d.h
+@@ -32,6 +32,7 @@ private:
+ 		bool disabled = false;
+ 		bool one_way_collision = false;
+ 		real_t one_way_collision_margin = 0.0;
++		Vector2 one_way_collision_direction = Vector2(0, 1);
+ 		box2d::FixtureHandle collider_handle = box2d::invalid_fixture_handle();
+ 	};
+ 
+@@ -44,7 +45,7 @@ private:
+ 	real_t collision_priority = 1.0;
+ 
+ 	void _create_shape(Shape &shape, uint32_t p_shape_index);
+-	void _destroy_shape(Shape &shape, uint32_t p_shape_index);
++	void _destroy_shape(Shape &shape);
+ 	void _update_shape_transform(const Shape &shape);
+ 
+ protected:
+@@ -52,7 +53,6 @@ protected:
+ 	b2Body *body_handle = box2d::invalid_body_handle();
+ 	uint32_t area_detection_counter = 0;
+ 
+-	void _unregister_shapes();
+ 
+ 	void _update_transform();
+ 
+@@ -114,10 +114,11 @@ public:
+ 		return shapes[p_index].disabled;
+ 	}
+ 
+-	_FORCE_INLINE_ void set_shape_as_one_way_collision(int p_idx, bool p_one_way_collision, real_t p_margin) {
++	_FORCE_INLINE_ void set_shape_as_one_way_collision(int p_idx, bool p_one_way_collision, real_t p_margin, const Vector2 &p_direction) {
+ 		CRASH_BAD_INDEX(p_idx, (int)shapes.size());
+ 		shapes[p_idx].one_way_collision = p_one_way_collision;
+ 		shapes[p_idx].one_way_collision_margin = p_margin;
++		shapes[p_idx].one_way_collision_direction = p_direction;
+ 	}
+ 	_FORCE_INLINE_ bool is_shape_set_as_one_way_collision(int p_idx) const {
+ 		CRASH_BAD_INDEX(p_idx, (int)shapes.size());
+@@ -129,6 +130,11 @@ public:
+ 		return shapes[p_idx].one_way_collision_margin;
+ 	}
+ 
++	_FORCE_INLINE_ Vector2 get_shape_one_way_collision_direction(int p_idx) const {
++		CRASH_BAD_INDEX(p_idx, (int)shapes.size());
++		return shapes[p_idx].one_way_collision_direction;
++	}
++
+ 	void set_collision_mask(uint32_t p_mask) {
+ 		collision_mask = p_mask;
+ 	}
+diff --git a/src/bodies/box2d_direct_body_state_2d.cpp b/src/bodies/box2d_direct_body_state_2d.cpp
+index 034c5d1..d83fb15 100644
+--- a/src/bodies/box2d_direct_body_state_2d.cpp
++++ b/src/bodies/box2d_direct_body_state_2d.cpp
+@@ -3,9 +3,10 @@
+ #include "../servers/box2d_physics_server_2d.h"
+ #include "../spaces/box2d_direct_space_state_2d.h"
+ #include "box2d_body_2d.h"
++#include <godot_cpp/core/object.hpp>
+ 
+ Vector2 Box2DDirectBodyState2D::_get_total_gravity() const {
+-	ERR_FAIL_COND_V(body->get_space(), Vector2());
++	ERR_FAIL_COND_V(!body->get_space(), Vector2());
+ 	if (body->using_area_gravity) {
+ 		return body->total_gravity;
+ 	} else {
+@@ -14,13 +15,13 @@ Vector2 Box2DDirectBodyState2D::_get_total_gravity() const {
+ 	}
+ }
+ 
+-double Box2DDirectBodyState2D::_get_total_angular_damp() const {
+-	ERR_FAIL_COND_V(body->get_space(), 0.0);
++real_t Box2DDirectBodyState2D::_get_total_angular_damp() const {
++	ERR_FAIL_COND_V(!body->get_space(), 0.0);
+ 	return body->total_angular_damping;
+ }
+ 
+-double Box2DDirectBodyState2D::_get_total_linear_damp() const {
+-	ERR_FAIL_COND_V(body->get_space(), 0.0);
++real_t Box2DDirectBodyState2D::_get_total_linear_damp() const {
++	ERR_FAIL_COND_V(!body->get_space(), 0.0);
+ 	return body->total_linear_damping;
+ }
+ 
+@@ -32,11 +33,11 @@ Vector2 Box2DDirectBodyState2D::_get_center_of_mass_local() const {
+ 	return body->get_center_of_mass();
+ }
+ 
+-double Box2DDirectBodyState2D::_get_inverse_mass() const {
++real_t Box2DDirectBodyState2D::_get_inverse_mass() const {
+ 	return body->get_inv_mass();
+ }
+ 
+-double Box2DDirectBodyState2D::_get_inverse_inertia() const {
++real_t Box2DDirectBodyState2D::_get_inverse_inertia() const {
+ 	return body->get_inv_inertia();
+ }
+ 
+@@ -48,11 +49,11 @@ Vector2 Box2DDirectBodyState2D::_get_linear_velocity() const {
+ 	return body->get_linear_velocity();
+ }
+ 
+-void Box2DDirectBodyState2D::_set_angular_velocity(double p_velocity) {
++void Box2DDirectBodyState2D::_set_angular_velocity(real_t p_velocity) {
+ 	body->set_angular_velocity(p_velocity);
+ }
+ 
+-double Box2DDirectBodyState2D::_get_angular_velocity() const {
++real_t Box2DDirectBodyState2D::_get_angular_velocity() const {
+ 	return body->get_angular_velocity();
+ }
+ 
+@@ -76,7 +77,7 @@ void Box2DDirectBodyState2D::_apply_impulse(const Vector2 &p_impulse, const Vect
+ 	body->apply_impulse(p_impulse, p_position);
+ }
+ 
+-void Box2DDirectBodyState2D::_apply_torque_impulse(double p_torque) {
++void Box2DDirectBodyState2D::_apply_torque_impulse(real_t p_torque) {
+ 	body->apply_torque_impulse(p_torque);
+ }
+ 
+@@ -88,7 +89,7 @@ void Box2DDirectBodyState2D::_apply_force(const Vector2 &p_force, const Vector2
+ 	body->apply_force(p_force, p_position);
+ }
+ 
+-void Box2DDirectBodyState2D::_apply_torque(double p_torque) {
++void Box2DDirectBodyState2D::_apply_torque(real_t p_torque) {
+ 	body->apply_torque(p_torque);
+ }
+ 
+@@ -100,7 +101,7 @@ void Box2DDirectBodyState2D::_add_constant_force(const Vector2 &p_force, const V
+ 	body->add_constant_force(p_force, p_position);
+ }
+ 
+-void Box2DDirectBodyState2D::_add_constant_torque(double p_torque) {
++void Box2DDirectBodyState2D::_add_constant_torque(real_t p_torque) {
+ 	body->add_constant_torque(p_torque);
+ }
+ 
+@@ -112,11 +113,11 @@ Vector2 Box2DDirectBodyState2D::_get_constant_force() const {
+ 	return body->get_constant_force();
+ }
+ 
+-void Box2DDirectBodyState2D::_set_constant_torque(double p_torque) {
++void Box2DDirectBodyState2D::_set_constant_torque(real_t p_torque) {
+ 	body->set_constant_torque(p_torque);
+ }
+ 
+-double Box2DDirectBodyState2D::_get_constant_torque() const {
++real_t Box2DDirectBodyState2D::_get_constant_torque() const {
+ 	return body->get_constant_torque();
+ }
+ 
+@@ -128,6 +129,22 @@ bool Box2DDirectBodyState2D::_is_sleeping() const {
+ 	return !body->is_active();
+ }
+ 
++void Box2DDirectBodyState2D::_set_collision_layer(uint32_t p_layer) {
++	body->set_collision_layer(p_layer);
++}
++
++uint32_t Box2DDirectBodyState2D::_get_collision_layer() const {
++	return body->get_collision_layer();
++}
++
++void Box2DDirectBodyState2D::_set_collision_mask(uint32_t p_mask) {
++	body->set_collision_mask(p_mask);
++}
++
++uint32_t Box2DDirectBodyState2D::_get_collision_mask() const {
++	return body->get_collision_mask();
++}
++
+ int Box2DDirectBodyState2D::_get_contact_count() const {
+ 	return body->contact_count;
+ }
+@@ -147,6 +164,11 @@ int Box2DDirectBodyState2D::_get_contact_local_shape(int p_contact_idx) const {
+ 	return body->contacts[p_contact_idx].local_shape;
+ }
+ 
++Vector2 Box2DDirectBodyState2D::_get_contact_local_velocity_at_position(int p_contact_idx) const {
++	ERR_FAIL_INDEX_V(p_contact_idx, body->contact_count, Vector2());
++	return body->contacts[p_contact_idx].local_velocity_at_pos;
++}
++
+ RID Box2DDirectBodyState2D::_get_contact_collider(int p_contact_idx) const {
+ 	ERR_FAIL_INDEX_V(p_contact_idx, body->contact_count, RID());
+ 	return body->contacts[p_contact_idx].collider;
+@@ -161,6 +183,11 @@ uint64_t Box2DDirectBodyState2D::_get_contact_collider_id(int p_contact_idx) con
+ 	return body->contacts[p_contact_idx].collider_instance_id;
+ }
+ 
++Object *Box2DDirectBodyState2D::_get_contact_collider_object(int p_contact_idx) const {
++	ERR_FAIL_INDEX_V(p_contact_idx, body->contact_count, nullptr);
++	return ObjectDB::get_instance(body->contacts[p_contact_idx].collider_instance_id);
++}
++
+ int Box2DDirectBodyState2D::_get_contact_collider_shape(int p_contact_idx) const {
+ 	ERR_FAIL_INDEX_V(p_contact_idx, body->contact_count, 0);
+ 	return body->contacts[p_contact_idx].collider_shape;
+@@ -180,6 +207,14 @@ PhysicsDirectSpaceState2D *Box2DDirectBodyState2D::_get_space_state() {
+ 	return body->get_space()->get_direct_state();
+ }
+ 
+-double Box2DDirectBodyState2D::_get_step() const {
++real_t Box2DDirectBodyState2D::_get_step() const {
+ 	return body->get_space()->get_last_step();
+ }
++
++void Box2DDirectBodyState2D::_integrate_forces() {
++	const real_t step = _get_step();
++	Vector2 linear_velocity = _get_linear_velocity() + _get_total_gravity() * step;
++	linear_velocity *= MAX(real_t(0.0), real_t(1.0) - step * _get_total_linear_damp());
++	_set_linear_velocity(linear_velocity);
++	_set_angular_velocity(_get_angular_velocity() * MAX(real_t(0.0), real_t(1.0) - step * _get_total_angular_damp()));
++}
+diff --git a/src/bodies/box2d_direct_body_state_2d.h b/src/bodies/box2d_direct_body_state_2d.h
+index ad625e1..7d5b70e 100644
+--- a/src/bodies/box2d_direct_body_state_2d.h
++++ b/src/bodies/box2d_direct_body_state_2d.h
+@@ -19,19 +19,19 @@ public:
+ 	Box2DBody2D *body = nullptr;
+ 
+ 	virtual Vector2 _get_total_gravity() const override;
+-	virtual double _get_total_angular_damp() const override;
+-	virtual double _get_total_linear_damp() const override;
++	virtual real_t _get_total_angular_damp() const override;
++	virtual real_t _get_total_linear_damp() const override;
+ 
+ 	virtual Vector2 _get_center_of_mass() const override;
+ 	virtual Vector2 _get_center_of_mass_local() const override;
+-	virtual double _get_inverse_mass() const override;
+-	virtual double _get_inverse_inertia() const override;
++	virtual real_t _get_inverse_mass() const override;
++	virtual real_t _get_inverse_inertia() const override;
+ 
+ 	virtual void _set_linear_velocity(const Vector2 &p_velocity) override;
+ 	virtual Vector2 _get_linear_velocity() const override;
+ 
+-	virtual void _set_angular_velocity(double p_velocity) override;
+-	virtual double _get_angular_velocity() const override;
++	virtual void _set_angular_velocity(real_t p_velocity) override;
++	virtual real_t _get_angular_velocity() const override;
+ 
+ 	virtual void _set_transform(const Transform2D &p_transform) override;
+ 	virtual Transform2D _get_transform() const override;
+@@ -40,34 +40,41 @@ public:
+ 
+ 	virtual void _apply_central_impulse(const Vector2 &p_impulse) override;
+ 	virtual void _apply_impulse(const Vector2 &p_impulse, const Vector2 &p_position = Vector2()) override;
+-	virtual void _apply_torque_impulse(double p_torque) override;
++	virtual void _apply_torque_impulse(real_t p_torque) override;
+ 
+ 	virtual void _apply_central_force(const Vector2 &p_force) override;
+ 	virtual void _apply_force(const Vector2 &p_force, const Vector2 &p_position = Vector2()) override;
+-	virtual void _apply_torque(double p_torque) override;
++	virtual void _apply_torque(real_t p_torque) override;
+ 
+ 	virtual void _add_constant_central_force(const Vector2 &p_force) override;
+ 	virtual void _add_constant_force(const Vector2 &p_force, const Vector2 &p_position = Vector2()) override;
+-	virtual void _add_constant_torque(double p_torque) override;
++	virtual void _add_constant_torque(real_t p_torque) override;
+ 
+ 	virtual void _set_constant_force(const Vector2 &p_force) override;
+ 	virtual Vector2 _get_constant_force() const override;
+ 
+-	virtual void _set_constant_torque(double p_torque) override;
+-	virtual double _get_constant_torque() const override;
++	virtual void _set_constant_torque(real_t p_torque) override;
++	virtual real_t _get_constant_torque() const override;
+ 
+ 	virtual void _set_sleep_state(bool p_enable) override;
+ 	virtual bool _is_sleeping() const override;
+ 
++	virtual void _set_collision_layer(uint32_t p_layer) override;
++	virtual uint32_t _get_collision_layer() const override;
++	virtual void _set_collision_mask(uint32_t p_mask) override;
++	virtual uint32_t _get_collision_mask() const override;
++
+ 	virtual int _get_contact_count() const override;
+ 
+ 	virtual Vector2 _get_contact_local_position(int p_contact_idx) const override;
+ 	virtual Vector2 _get_contact_local_normal(int p_contact_idx) const override;
+ 	virtual int _get_contact_local_shape(int p_contact_idx) const override;
++	virtual Vector2 _get_contact_local_velocity_at_position(int p_contact_idx) const override;
+ 
+ 	virtual RID _get_contact_collider(int p_contact_idx) const override;
+ 	virtual Vector2 _get_contact_collider_position(int p_contact_idx) const override;
+ 	virtual uint64_t _get_contact_collider_id(int p_contact_idx) const override;
++	virtual Object *_get_contact_collider_object(int p_contact_idx) const override;
+ 	virtual int _get_contact_collider_shape(int p_contact_idx) const override;
+ 	virtual Vector2 _get_contact_impulse(int p_contact_idx) const override;
+ 
+@@ -75,7 +82,8 @@ public:
+ 
+ 	virtual PhysicsDirectSpaceState2D *_get_space_state() override;
+ 
+-	virtual double _get_step() const override;
++	virtual real_t _get_step() const override;
++	virtual void _integrate_forces() override;
+ };
+ 
+ #endif // BOX2D_DIRECT_BODY_STATE_2D_H
+diff --git a/src/box2d-wrapper/box2d_wrapper.cpp b/src/box2d-wrapper/box2d_wrapper.cpp
+index f2dedb9..90d1f1d 100644
+--- a/src/box2d-wrapper/box2d_wrapper.cpp
++++ b/src/box2d-wrapper/box2d_wrapper.cpp
+@@ -248,6 +248,10 @@ void box2d::body_add_torque(b2World *world_handle, b2Body *body_handle, real_t t
+ 	body_handle->GetUserData().constant_torque += torque;
+ }
+ 
++void box2d::body_apply_central_force(b2World *world_handle, b2Body *body_handle, const b2Vec2 force) {
++	body_handle->ApplyForceToCenter(force, true);
++}
++
+ void box2d::body_apply_impulse(b2World *world_handle, b2Body *body_handle, const b2Vec2 impulse) {
+ 	body_handle->ApplyLinearImpulseToCenter(impulse, true);
+ }
+@@ -472,18 +476,13 @@ FixtureHandle box2d::collider_create_solid(b2World *world_handle,
+ 
+ void box2d::collider_destroy(b2World *world_handle, FixtureHandle handle) {
+ 	ERR_FAIL_COND(!is_handle_valid(handle));
+-	b2Body *body = handle.handles[0]->GetBody();
+-	if (!is_handle_valid(body)) {
+-		// already destroyed
+-		return;
+-	}
+-	for (b2Fixture *fixture = body->GetFixtureList(); fixture != nullptr; fixture = fixture->GetNext()) {
+-		for (int i = 0; i < handle.count; i++) {
+-			if (fixture == handle.handles[i]) {
+-				body->DestroyFixture(fixture);
+-			}
+-		}
++	// Each handle owns a live fixture. DestroyFixture synchronously ends its
++	// contacts, then frees the fixture; never follow its linked-list next pointer.
++	for (int i = 0; i < handle.count; i++) {
++		b2Fixture *fixture = handle.handles[i];
++		fixture->GetBody()->DestroyFixture(fixture);
+ 	}
++	memfree(handle.handles);
+ }
+ 
+ b2Vec2 box2d::Vector2_to_b2Vec2(Vector2 vec) {
+@@ -530,6 +529,17 @@ void box2d::collider_set_transform(b2World *world_handle, FixtureHandle handles,
+ 					circle_shape->m_radius = transform.get_scale().x * circle_shape_template->m_radius;
+ 				}
+ 			} break;
++			case b2Shape::Type::e_edge: {
++				const b2EdgeShape *edge_template = static_cast<const b2EdgeShape *>(shape_template);
++				b2EdgeShape *edge = static_cast<b2EdgeShape *>(shape);
++				const b2Vec2 a = xform_b2Vec2(edge_template->m_vertex1, transform);
++				const b2Vec2 b = xform_b2Vec2(edge_template->m_vertex2, transform);
++				if (edge_template->m_oneSided) {
++					edge->SetOneSided(xform_b2Vec2(edge_template->m_vertex0, transform), a, b, xform_b2Vec2(edge_template->m_vertex3, transform));
++				} else {
++					edge->SetTwoSided(a, b);
++				}
++			} break;
+ 			case b2Shape::Type::e_chain: {
+ 				b2ChainShape *chain_shape_template = (b2ChainShape *)shape_template;
+ 				b2ChainShape *chain_shape = (b2ChainShape *)shape;
+@@ -566,6 +576,10 @@ void box2d::collider_set_transform(b2World *world_handle, FixtureHandle handles,
+ 				ERR_FAIL_MSG("Invalid Shape Type");
+ 			}
+ 		}
++		// Fixture geometry is baked locally after creation. Static bodies do not
++		// move to refresh proxies, so synchronize this fixture without rebuilding
++		// contacts or repeatedly traversing every fixture on a terrain body.
++		handle->SynchronizeShape();
+ 	}
+ }
+ 
+@@ -905,6 +919,7 @@ ShapeCastResult box2d::shape_casting(b2World *world_handle,
+ 		QueryHandleExcludedCallback handle_excluded_callback,
+ 		const QueryExcludedInfo *handle_excluded_info,
+ 		double margin) {
++	const bool stationary = motion.x == 0.0f && motion.y == 0.0f;
+ 	for (int i = 0; i < shape_info.handle.count; i++) {
+ 		shape_info.handle.handles[i]->m_radius += margin;
+ 		b2AABB shape_aabb;
+@@ -933,13 +948,18 @@ ShapeCastResult box2d::shape_casting(b2World *world_handle,
+ 		result.collided = false;
+ 		for (int j = 0; j < count; j++) {
+ 			b2Body *other_body = hit_info_array[j].collider->GetBody();
+-			Transform2D other_transform = collider_get_transform(world_handle, hit_info_array[j].collider);
+-			// TODO take into consideration scale here?
+-			Transform2D other_body_transform = b2Transform_to_Transform2D(other_body->GetTransform());
+-
+-			other_transform = other_body_transform * other_transform;
+-			b2Transform other_body_transform_b2 = Transform2D_to_b2Transform(other_transform);
+-			b2TOIOutput toi_output = _time_of_impact(shape_info.handle.handles[i], shape_transform, b2Vec2_zero, motion, hit_info_array[j].collider->GetShape(), other_body_transform_b2, other_body->GetLocalCenter(), b2Vec2_zero);
++			// Fixture vertices already include their collider-local transform.
++			// Applying the saved transform again displaces offset terrain shapes.
++			const b2Transform &other_body_transform_b2 = other_body->GetTransform();
++			// TOI targets a reduced separation for moving sweeps. A stationary
++			// overlap must retain the full polygon skin used by sensor contacts.
++			b2TOIOutput toi_output;
++			if (stationary) {
++				toi_output.state = b2TOIOutput::e_touching;
++				toi_output.t = 0.0f;
++			} else {
++				toi_output = _time_of_impact(shape_info.handle.handles[i], shape_transform, b2Vec2_zero, motion, hit_info_array[j].collider->GetShape(), other_body_transform_b2, other_body->GetLocalCenter(), b2Vec2_zero);
++			}
+ 			if (is_toi_intersected(toi_output)) {
+ 				b2Transform shape_transform_moved = shape_transform;
+ 				shape_transform_moved.p += toi_output.t * motion;
+@@ -972,10 +992,27 @@ ShapeCollideResult box2d::shape_collide(const b2Vec2 motion1,
+ 		ShapeInfo shape_info1,
+ 		const b2Vec2 motion2,
+ 		ShapeInfo shape_info2) {
++	const bool stationary = motion1.x == 0.0f && motion1.y == 0.0f && motion2.x == 0.0f && motion2.y == 0.0f;
+ 	for (int i = 0; i < shape_info1.handle.count; i++) {
+ 		for (int j = 0; j < shape_info2.handle.count; j++) {
+ 			b2Transform transformA = Transform2D_to_b2Transform(shape_info1.body_transform * shape_info1.transform);
+ 			b2Transform transformB = Transform2D_to_b2Transform(shape_info2.body_transform * shape_info2.transform);
++			if (stationary) {
++				b2Shape *shape_A = shape_info1.handle.handles[i];
++				b2Shape *shape_B = shape_info2.handle.handles[j];
++				const int children_A = shape_A->GetChildCount();
++				const int children_B = shape_B->GetChildCount();
++				for (int a = 0; a < children_A; ++a) {
++					for (int b = 0; b < children_B; ++b) {
++						const b2DistanceOutput distance = _call_b2_distance(transformA, shape_A, a, transformB, shape_B, b);
++						// Match b2TestOverlap's sensor-contact tolerance.
++						if (distance.distance < 10.0f * b2_epsilon) {
++							return ShapeCollideResult{ true, distance.pointA, distance.pointB };
++						}
++					}
++				}
++				continue;
++			}
+ 			b2TOIOutput toi_output = _time_of_impact(shape_info1.handle.handles[i],
+ 					transformA,
+ 					b2Vec2_zero,
+@@ -1053,23 +1090,37 @@ ShapeHandle box2d::shape_create_circle(real_t radius, b2Vec2 pos) {
+ 	};
+ }
+ 
+-ShapeHandle box2d::shape_create_concave_polyline(const b2Vec2 *points, size_t point_count) {
+-	b2Shape **shapes = (b2Shape **)memalloc((1) * sizeof(b2Shape *));
+-	b2ChainShape *shape = memnew(b2ChainShape);
+-	shape->CreateLoop(points, point_count);
+-	shapes[0] = shape;
+-	ERR_FAIL_COND_V(!shape->m_count, invalid_shape_handle());
+-	return ShapeHandle{
+-		shapes,
+-		1
+-	};
++ShapeHandle box2d::shape_create_segment(const b2Vec2 &a, const b2Vec2 &b) {
++	const b2Vec2 points[2] = { a, b };
++	return shape_create_segments(points, 2);
++}
++
++ShapeHandle box2d::shape_create_segments(const b2Vec2 *points, size_t point_count) {
++	ERR_FAIL_COND_V(point_count < 2 || point_count % 2 != 0, invalid_shape_handle());
++	for (size_t i = 0; i < point_count; i += 2) {
++		ERR_FAIL_COND_V_MSG((points[i + 1] - points[i]).LengthSquared() <= b2_epsilon * b2_epsilon, invalid_shape_handle(), "A Box2D segment needs two distinct endpoints.");
++	}
++	const size_t segment_count = point_count / 2;
++	b2Shape **shapes = (b2Shape **)memalloc(segment_count * sizeof(b2Shape *));
++	for (size_t i = 0; i < segment_count; i++) {
++		b2EdgeShape *shape = memnew(b2EdgeShape);
++		shape->SetTwoSided(points[i * 2], points[i * 2 + 1]);
++		shapes[i] = shape;
++	}
++	return ShapeHandle{ shapes, static_cast<int>(segment_count) };
+ }
+ 
+ ShapeHandle box2d::shape_create_convex_polyline(const b2Vec2 *points, size_t point_count) {
++	if (point_count == 2) {
++		return shape_create_segment(points[0], points[1]);
++	}
++	ERR_FAIL_COND_V_MSG(point_count < 3 || point_count > b2_maxPolygonVertices, invalid_shape_handle(), "Box2D convex polygons require 3 to b2_maxPolygonVertices vertices.");
+ 	b2Shape **shapes = (b2Shape **)memalloc((1) * sizeof(b2Shape *));
+ 	b2PolygonShape *shape = memnew(b2PolygonShape);
+ 	shape->Set(points, point_count);
+ 	if (shape->m_count == 0) {
++		memdelete(shape);
++		memfree(shapes);
+ 		ERR_FAIL_V(invalid_shape_handle());
+ 	}
+ 	shapes[0] = shape;
+@@ -1104,6 +1155,9 @@ ShapeHandle box2d::shape_create_halfspace(const b2Vec2 normal, real_t distance)
+ }
+ 
+ void box2d::shape_destroy(ShapeHandle shape_handle) {
++	for (size_t i = 0; i < shape_handle.count; i++) {
++		memdelete(shape_handle.handles[i]);
++	}
+ 	memfree(shape_handle.handles);
+ }
+ 
+diff --git a/src/box2d-wrapper/box2d_wrapper.h b/src/box2d-wrapper/box2d_wrapper.h
+index d612a56..f228a4c 100644
+--- a/src/box2d-wrapper/box2d_wrapper.h
++++ b/src/box2d-wrapper/box2d_wrapper.h
+@@ -118,7 +118,6 @@ struct CollisionEventInfo {
+ 	b2FixtureUserData user_data2;
+ 	bool is_sensor;
+ 	bool is_started;
+-	bool is_removed;
+ 	bool is_valid;
+ };
+ 
+@@ -186,6 +185,8 @@ void body_add_force(b2World *world_handle, b2Body *body_handle, const b2Vec2 for
+ 
+ void body_add_torque(b2World *world_handle, b2Body *body_handle, real_t torque);
+ 
++void body_apply_central_force(b2World *world_handle, b2Body *body_handle, const b2Vec2 force);
++
+ void body_apply_impulse(b2World *world_handle, b2Body *body_handle, const b2Vec2 impulse);
+ 
+ void body_apply_impulse_at_point(b2World *world_handle,
+@@ -415,7 +416,10 @@ ShapeHandle shape_create_capsule(real_t half_height, real_t radius);
+ 
+ ShapeHandle shape_create_circle(real_t radius, b2Vec2 = b2Vec2_zero);
+ 
+-ShapeHandle shape_create_concave_polyline(const b2Vec2 *points, size_t point_count);
++ShapeHandle shape_create_segment(const b2Vec2 &a, const b2Vec2 &b);
++
++// Godot concave polygons contain independent endpoint pairs, not a closed loop.
++ShapeHandle shape_create_segments(const b2Vec2 *points, size_t point_count);
+ 
+ ShapeHandle shape_create_convex_polyline(const b2Vec2 *points, size_t point_count);
+ 
+diff --git a/src/register_types.cpp b/src/register_types.cpp
+index 7ef9d6e..c34e35a 100644
+--- a/src/register_types.cpp
++++ b/src/register_types.cpp
+@@ -30,10 +30,10 @@ static Box2DPhysicsServer2DFactory *box2d_factory = nullptr;
+ void initialize_box2d_module(ModuleInitializationLevel p_level) {
+ 	switch (p_level) {
+ 		case MODULE_INITIALIZATION_LEVEL_SERVERS: {
+-			ClassDB::register_class<Box2DDirectBodyState2D>(true);
+-			ClassDB::register_class<Box2DDirectSpaceState2D>(true);
+-			ClassDB::register_class<Box2DPhysicsServer2D>();
+-			ClassDB::register_class<Box2DPhysicsServer2DFactory>();
++			ClassDB::register_internal_class<Box2DDirectBodyState2D>();
++			ClassDB::register_internal_class<Box2DDirectSpaceState2D>();
++			ClassDB::register_internal_class<Box2DPhysicsServer2D>();
++			ClassDB::register_internal_class<Box2DPhysicsServer2DFactory>();
+ 
+ 			box2d_factory = memnew(Box2DPhysicsServer2DFactory());
+ 			PhysicsServer2DManager::get_singleton()->register_server("Box2D", Callable(box2d_factory, "create_box2d_callback"));
+diff --git a/src/servers/box2d_body_utils_2d.cpp b/src/servers/box2d_body_utils_2d.cpp
+index 1dbf3b6..3bf19bf 100644
+--- a/src/servers/box2d_body_utils_2d.cpp
++++ b/src/servers/box2d_body_utils_2d.cpp
+@@ -13,7 +13,7 @@ bool should_skip_collision_one_dir(box2d::ContactResult contact, Box2DShape2D *b
+ 	real_t dist = contact.distance;
+ 	if (contact.collided && body_shape->allows_one_way_collision() && collision_body->is_shape_set_as_one_way_collision(shape_index)) {
+ 		real_t valid_depth = 10e20;
+-		Vector2 valid_dir = col_shape_transform.columns[1].normalized();
++		Vector2 valid_dir = (collision_body->get_transform() * col_shape_transform).basis_xform(collision_body->get_shape_one_way_collision_direction(shape_index)).normalized();
+ 
+ 		real_t owc_margin = collision_body->get_shape_one_way_collision_margin(shape_index);
+ 		valid_depth = MAX(owc_margin, p_margin);
+@@ -191,7 +191,7 @@ void Box2DBodyUtils2D::cast_motion(const Box2DSpace2D &p_space, Box2DBody2D &p_b
+ 			box2d::ContactResult step_contact = box2d::shapes_contact(p_space.get_handle(), body_shape_info, col_shape_info, 0.0);
+ 			if (step_contact.collided) {
+ 				if (body_shape->allows_one_way_collision() && collision_body->is_shape_set_as_one_way_collision(shape_index)) {
+-					Vector2 direction = col_shape_transform.columns[1].normalized();
++					Vector2 direction = (collision_body->get_transform() * col_shape_transform).basis_xform(collision_body->get_shape_one_way_collision_direction(shape_index)).normalized();
+ 					if (p_motion.normalized().dot(direction) < 0) {
+ 						continue;
+ 					}
+diff --git a/src/servers/box2d_physics_server_2d.cpp b/src/servers/box2d_physics_server_2d.cpp
+index 8120d28..ad9ccb5 100644
+--- a/src/servers/box2d_physics_server_2d.cpp
++++ b/src/servers/box2d_physics_server_2d.cpp
+@@ -98,7 +98,7 @@ void Box2DPhysicsServer2D::_shape_set_data(const RID &p_shape, const Variant &p_
+ 	shape->set_data(p_data);
+ };
+ 
+-void Box2DPhysicsServer2D::_shape_set_custom_solver_bias(const RID &p_shape, double p_bias) {
++void Box2DPhysicsServer2D::_shape_set_custom_solver_bias(const RID &p_shape, real_t p_bias) {
+ 	if (p_bias != 0.0) {
+ 		WARN_PRINT_ONCE("Shape custom solver bias is not supported with Box2D");
+ 	}
+@@ -117,7 +117,7 @@ Variant Box2DPhysicsServer2D::_shape_get_data(const RID &p_shape) const {
+ 	return shape->get_data();
+ };
+ 
+-double Box2DPhysicsServer2D::_shape_get_custom_solver_bias(const RID &p_shape) const {
++real_t Box2DPhysicsServer2D::_shape_get_custom_solver_bias(const RID &p_shape) const {
+ 	return 0.0;
+ }
+ 
+@@ -187,14 +187,14 @@ bool Box2DPhysicsServer2D::_space_is_active(const RID &p_space) const {
+ 	return active_spaces.has(box2d::handle_hash(space->get_handle()));
+ }
+ 
+-void Box2DPhysicsServer2D::_space_set_param(const RID &p_space, SpaceParameter p_param, double p_value) {
++void Box2DPhysicsServer2D::_space_set_param(const RID &p_space, SpaceParameter p_param, real_t p_value) {
+ 	Box2DSpace2D *space = space_owner.get_or_null(p_space);
+ 	ERR_FAIL_COND(!space);
+ 
+ 	space->set_param(p_param, p_value);
+ }
+ 
+-double Box2DPhysicsServer2D::_space_get_param(const RID &p_space, SpaceParameter p_param) const {
++real_t Box2DPhysicsServer2D::_space_get_param(const RID &p_space, SpaceParameter p_param) const {
+ 	const Box2DSpace2D *space = space_owner.get_or_null(p_space);
+ 	ERR_FAIL_COND_V(!space, 0);
+ 	return space->get_param(p_param);
+@@ -336,7 +336,7 @@ void Box2DPhysicsServer2D::_area_clear_shapes(const RID &p_area) {
+ 	ERR_FAIL_COND(!area);
+ 
+ 	while (area->get_shape_count()) {
+-		area->remove_shape(0);
++		area->remove_shape(area->get_shape_count() - 1);
+ 	}
+ }
+ 
+@@ -573,7 +573,7 @@ void Box2DPhysicsServer2D::_body_clear_shapes(const RID &p_body) {
+ 	ERR_FAIL_COND(!body);
+ 
+ 	while (body->get_shape_count()) {
+-		body->remove_shape(0);
++		body->remove_shape(body->get_shape_count() - 1);
+ 	}
+ }
+ 
+@@ -586,13 +586,13 @@ void Box2DPhysicsServer2D::_body_set_shape_disabled(const RID &p_body, int p_sha
+ 	body->set_shape_disabled(p_shape_idx, p_disabled);
+ }
+ 
+-void Box2DPhysicsServer2D::_body_set_shape_as_one_way_collision(const RID &p_body, int p_shape_idx, bool p_enable, double p_margin) {
++void Box2DPhysicsServer2D::_body_set_shape_as_one_way_collision(const RID &p_body, int p_shape_idx, bool p_enable, real_t p_margin, const Vector2 &p_direction) {
+ 	Box2DBody2D *body = body_owner.get_or_null(p_body);
+ 	ERR_FAIL_COND(!body);
+ 	ERR_FAIL_INDEX(p_shape_idx, body->get_shape_count());
+ 	FLUSH_QUERY_CHECK(body);
+ 
+-	body->set_shape_as_one_way_collision(p_shape_idx, p_enable, p_margin);
++	body->set_shape_as_one_way_collision(p_shape_idx, p_enable, p_margin, p_direction);
+ }
+ 
+ void Box2DPhysicsServer2D::_body_set_continuous_collision_detection_mode(const RID &p_body, CCDMode p_mode) {
+@@ -662,14 +662,14 @@ uint32_t Box2DPhysicsServer2D::_body_get_collision_mask(const RID &p_body) const
+ 	return body->get_collision_mask();
+ }
+ 
+-void Box2DPhysicsServer2D::_body_set_collision_priority(const RID &p_body, double p_priority) {
++void Box2DPhysicsServer2D::_body_set_collision_priority(const RID &p_body, real_t p_priority) {
+ 	Box2DBody2D *body = body_owner.get_or_null(p_body);
+ 	ERR_FAIL_COND(!body);
+ 
+ 	body->set_collision_priority(p_priority);
+ }
+ 
+-double Box2DPhysicsServer2D::_body_get_collision_priority(const RID &p_body) const {
++real_t Box2DPhysicsServer2D::_body_get_collision_priority(const RID &p_body) const {
+ 	const Box2DBody2D *body = body_owner.get_or_null(p_body);
+ 	ERR_FAIL_COND_V(!body, 0);
+ 
+@@ -724,7 +724,7 @@ void Box2DPhysicsServer2D::_body_apply_central_impulse(const RID &p_body, const
+ 	body->apply_central_impulse(p_impulse);
+ }
+ 
+-void Box2DPhysicsServer2D::_body_apply_torque_impulse(const RID &p_body, double p_torque) {
++void Box2DPhysicsServer2D::_body_apply_torque_impulse(const RID &p_body, real_t p_torque) {
+ 	Box2DBody2D *body = body_owner.get_or_null(p_body);
+ 	ERR_FAIL_COND(!body);
+ 
+@@ -752,7 +752,7 @@ void Box2DPhysicsServer2D::_body_apply_force(const RID &p_body, const Vector2 &p
+ 	body->apply_force(p_force, p_position);
+ }
+ 
+-void Box2DPhysicsServer2D::_body_apply_torque(const RID &p_body, double p_torque) {
++void Box2DPhysicsServer2D::_body_apply_torque(const RID &p_body, real_t p_torque) {
+ 	Box2DBody2D *body = body_owner.get_or_null(p_body);
+ 	ERR_FAIL_COND(!body);
+ 
+@@ -773,7 +773,7 @@ void Box2DPhysicsServer2D::_body_add_constant_force(const RID &p_body, const Vec
+ 	body->add_constant_force(p_force, p_position);
+ }
+ 
+-void Box2DPhysicsServer2D::_body_add_constant_torque(const RID &p_body, double p_torque) {
++void Box2DPhysicsServer2D::_body_add_constant_torque(const RID &p_body, real_t p_torque) {
+ 	Box2DBody2D *body = body_owner.get_or_null(p_body);
+ 	ERR_FAIL_COND(!body);
+ 
+@@ -794,14 +794,14 @@ Vector2 Box2DPhysicsServer2D::_body_get_constant_force(const RID &p_body) const
+ 	return body->get_constant_force();
+ }
+ 
+-void Box2DPhysicsServer2D::_body_set_constant_torque(const RID &p_body, double p_torque) {
++void Box2DPhysicsServer2D::_body_set_constant_torque(const RID &p_body, real_t p_torque) {
+ 	Box2DBody2D *body = body_owner.get_or_null(p_body);
+ 	ERR_FAIL_COND(!body);
+ 
+ 	body->set_constant_torque(p_torque);
+ }
+ 
+-double Box2DPhysicsServer2D::_body_get_constant_torque(const RID &p_body) const {
++real_t Box2DPhysicsServer2D::_body_get_constant_torque(const RID &p_body) const {
+ 	Box2DBody2D *body = body_owner.get_or_null(p_body);
+ 	ERR_FAIL_COND_V(!body, 0);
+ 
+@@ -852,12 +852,12 @@ TypedArray<RID> Box2DPhysicsServer2D::_body_get_collision_exceptions(const RID &
+ 	return array;
+ };
+ 
+-void Box2DPhysicsServer2D::_body_set_contacts_reported_depth_threshold(const RID &p_body, double p_threshold) {
++void Box2DPhysicsServer2D::_body_set_contacts_reported_depth_threshold(const RID &p_body, real_t p_threshold) {
+ 	Box2DBody2D *body = body_owner.get_or_null(p_body);
+ 	ERR_FAIL_COND(!body);
+ };
+ 
+-double Box2DPhysicsServer2D::_body_get_contacts_reported_depth_threshold(const RID &p_body) const {
++real_t Box2DPhysicsServer2D::_body_get_contacts_reported_depth_threshold(const RID &p_body) const {
+ 	Box2DBody2D *body = body_owner.get_or_null(p_body);
+ 	ERR_FAIL_COND_V(!body, 0);
+ 	return 0;
+@@ -914,7 +914,7 @@ void Box2DPhysicsServer2D::_body_set_pickable(const RID &p_body, bool p_pickable
+ 	body->set_pickable(p_pickable);
+ }
+ 
+-bool Box2DPhysicsServer2D::_body_test_motion(const RID &p_body, const Transform2D &p_from, const Vector2 &p_motion, double p_margin, bool p_collide_separation_ray, bool p_recovery_as_collision, PhysicsServer2DExtensionMotionResult *r_result) const {
++bool Box2DPhysicsServer2D::_body_test_motion(const RID &p_body, const Transform2D &p_from, const Vector2 &p_motion, real_t p_margin, bool p_collide_separation_ray, bool p_recovery_as_collision, PhysicsServer2DExtensionMotionResult *r_result) const {
+ 	Box2DBody2D *body = body_owner.get_or_null(p_body);
+ 	ERR_FAIL_COND_V(!body, false);
+ 	ERR_FAIL_COND_V(!body->get_space(), false);
+@@ -962,7 +962,7 @@ void Box2DPhysicsServer2D::_joint_clear(const RID &p_joint) {
+ 	}
+ }
+ 
+-void Box2DPhysicsServer2D::_joint_set_param(const RID &p_joint, JointParam p_param, double p_value) {
++void Box2DPhysicsServer2D::_joint_set_param(const RID &p_joint, JointParam p_param, real_t p_value) {
+ 	Box2DJoint2D *joint = joint_owner.get_or_null(p_joint);
+ 	ERR_FAIL_COND(!joint);
+ 
+@@ -979,7 +979,7 @@ void Box2DPhysicsServer2D::_joint_set_param(const RID &p_joint, JointParam p_par
+ 	}
+ }
+ 
+-double Box2DPhysicsServer2D::_joint_get_param(const RID &p_joint, JointParam p_param) const {
++real_t Box2DPhysicsServer2D::_joint_get_param(const RID &p_joint, JointParam p_param) const {
+ 	const Box2DJoint2D *joint = joint_owner.get_or_null(p_joint);
+ 	ERR_FAIL_COND_V(!joint, -1);
+ 
+@@ -1082,7 +1082,7 @@ bool Box2DPhysicsServer2D::_pin_joint_get_flag(const RID &p_joint, PhysicsServer
+ 	return pin_joint->get_flag(p_flag);
+ }
+ 
+-void Box2DPhysicsServer2D::_pin_joint_set_param(const RID &p_joint, PinJointParam p_param, double p_value) {
++void Box2DPhysicsServer2D::_pin_joint_set_param(const RID &p_joint, PinJointParam p_param, real_t p_value) {
+ 	Box2DJoint2D *j = joint_owner.get_or_null(p_joint);
+ 	ERR_FAIL_COND(!j);
+ 	ERR_FAIL_COND(j->get_type() != JOINT_TYPE_PIN);
+@@ -1091,7 +1091,7 @@ void Box2DPhysicsServer2D::_pin_joint_set_param(const RID &p_joint, PinJointPara
+ 	pin_joint->set_param(p_param, p_value);
+ }
+ 
+-double Box2DPhysicsServer2D::_pin_joint_get_param(const RID &p_joint, PinJointParam p_param) const {
++real_t Box2DPhysicsServer2D::_pin_joint_get_param(const RID &p_joint, PinJointParam p_param) const {
+ 	Box2DJoint2D *j = joint_owner.get_or_null(p_joint);
+ 	ERR_FAIL_COND_V(!j, 0);
+ 	ERR_FAIL_COND_V(j->get_type() != JOINT_TYPE_PIN, 0);
+@@ -1100,7 +1100,7 @@ double Box2DPhysicsServer2D::_pin_joint_get_param(const RID &p_joint, PinJointPa
+ 	return pin_joint->get_param(p_param);
+ }
+ 
+-void Box2DPhysicsServer2D::_damped_spring_joint_set_param(const RID &p_joint, DampedSpringParam p_param, double p_value) {
++void Box2DPhysicsServer2D::_damped_spring_joint_set_param(const RID &p_joint, DampedSpringParam p_param, real_t p_value) {
+ 	Box2DJoint2D *j = joint_owner.get_or_null(p_joint);
+ 	ERR_FAIL_COND(!j);
+ 	ERR_FAIL_COND(j->get_type() != JOINT_TYPE_DAMPED_SPRING);
+@@ -1109,7 +1109,7 @@ void Box2DPhysicsServer2D::_damped_spring_joint_set_param(const RID &p_joint, Da
+ 	dsj->set_param(p_param, p_value);
+ }
+ 
+-double Box2DPhysicsServer2D::_damped_spring_joint_get_param(const RID &p_joint, DampedSpringParam p_param) const {
++real_t Box2DPhysicsServer2D::_damped_spring_joint_get_param(const RID &p_joint, DampedSpringParam p_param) const {
+ 	Box2DJoint2D *j = joint_owner.get_or_null(p_joint);
+ 	ERR_FAIL_COND_V(!j, 0);
+ 	ERR_FAIL_COND_V(j->get_type() != JOINT_TYPE_DAMPED_SPRING, 0);
+@@ -1142,7 +1142,7 @@ void Box2DPhysicsServer2D::_free_rid(const RID &p_rid) {
+ 		body->set_space(nullptr);
+ 
+ 		while (body->get_shape_count()) {
+-			body->remove_shape(0);
++			body->remove_shape(body->get_shape_count() - 1);
+ 		}
+ 
+ 		body_owner.free(p_rid);
+@@ -1153,7 +1153,7 @@ void Box2DPhysicsServer2D::_free_rid(const RID &p_rid) {
+ 		area->set_space(nullptr);
+ 
+ 		while (area->get_shape_count()) {
+-			area->remove_shape(0);
++			area->remove_shape(area->get_shape_count() - 1);
+ 		}
+ 
+ 		area_owner.free(p_rid);
+@@ -1189,7 +1189,7 @@ void Box2DPhysicsServer2D::_init() {
+ 	doing_sync = false;
+ }
+ 
+-void Box2DPhysicsServer2D::_step(double p_step) {
++void Box2DPhysicsServer2D::_step(real_t p_step) {
+ 	if (!active) {
+ 		return;
+ 	}
+diff --git a/src/servers/box2d_physics_server_2d.h b/src/servers/box2d_physics_server_2d.h
+index 89bb0ad..953bc61 100644
+--- a/src/servers/box2d_physics_server_2d.h
++++ b/src/servers/box2d_physics_server_2d.h
+@@ -78,11 +78,11 @@ public:
+ 	static void _shape_col_cbk(const Vector2 &p_point_A, const Vector2 &p_point_B, void *p_userdata);
+ 
+ 	virtual void _shape_set_data(const RID &p_shape, const Variant &p_data) override;
+-	virtual void _shape_set_custom_solver_bias(const RID &p_shape, double p_bias) override;
++	virtual void _shape_set_custom_solver_bias(const RID &p_shape, real_t p_bias) override;
+ 
+ 	virtual ShapeType _shape_get_type(const RID &p_shape) const override;
+ 	virtual Variant _shape_get_data(const RID &p_shape) const override;
+-	virtual double _shape_get_custom_solver_bias(const RID &p_shape) const override;
++	virtual real_t _shape_get_custom_solver_bias(const RID &p_shape) const override;
+ 
+ 	virtual bool _shape_collide(const RID &p_shape_A, const Transform2D &p_xform_A, const Vector2 &p_motion_A, const RID &p_shape_B, const Transform2D &p_xform_B, const Vector2 &p_motion_B, void *r_results, int32_t p_result_max, int32_t *p_result_count) override;
+ 
+@@ -92,8 +92,8 @@ public:
+ 	virtual void _space_set_active(const RID &p_space, bool p_active) override;
+ 	virtual bool _space_is_active(const RID &p_space) const override;
+ 
+-	virtual void _space_set_param(const RID &p_space, SpaceParameter p_param, double p_value) override;
+-	virtual double _space_get_param(const RID &p_space, SpaceParameter p_param) const override;
++	virtual void _space_set_param(const RID &p_space, SpaceParameter p_param, real_t p_value) override;
++	virtual real_t _space_get_param(const RID &p_space, SpaceParameter p_param) const override;
+ 
+ 	virtual void _space_set_debug_contacts(const RID &p_space, int p_max_contacts) override;
+ 	virtual PackedVector2Array _space_get_contacts(const RID &p_space) const override;
+@@ -170,7 +170,7 @@ public:
+ 	virtual void _body_clear_shapes(const RID &p_body) override;
+ 
+ 	virtual void _body_set_shape_disabled(const RID &p_body, int p_shape_idx, bool p_disabled) override;
+-	virtual void _body_set_shape_as_one_way_collision(const RID &p_body, int p_shape_idx, bool p_enable, double p_margin) override;
++	virtual void _body_set_shape_as_one_way_collision(const RID &p_body, int p_shape_idx, bool p_enable, real_t p_margin, const Vector2 &p_direction) override;
+ 
+ 	virtual void _body_attach_object_instance_id(const RID &p_body, uint64_t p_id) override;
+ 	virtual uint64_t _body_get_object_instance_id(const RID &p_body) const override;
+@@ -187,8 +187,8 @@ public:
+ 	virtual void _body_set_collision_mask(const RID &p_body, uint32_t p_mask) override;
+ 	virtual uint32_t _body_get_collision_mask(const RID &p_body) const override;
+ 
+-	virtual void _body_set_collision_priority(const RID &p_body, double p_priority) override;
+-	virtual double _body_get_collision_priority(const RID &p_body) const override;
++	virtual void _body_set_collision_priority(const RID &p_body, real_t p_priority) override;
++	virtual real_t _body_get_collision_priority(const RID &p_body) const override;
+ 
+ 	virtual void _body_set_param(const RID &p_body, BodyParameter p_param, const Variant &p_value) override;
+ 	virtual Variant _body_get_param(const RID &p_body, BodyParameter p_param) const override;
+@@ -199,22 +199,22 @@ public:
+ 	virtual Variant _body_get_state(const RID &p_body, BodyState p_state) const override;
+ 
+ 	virtual void _body_apply_central_impulse(const RID &p_body, const Vector2 &p_impulse) override;
+-	virtual void _body_apply_torque_impulse(const RID &p_body, double p_torque) override;
++	virtual void _body_apply_torque_impulse(const RID &p_body, real_t p_torque) override;
+ 	virtual void _body_apply_impulse(const RID &p_body, const Vector2 &p_impulse, const Vector2 &p_position = Vector2()) override;
+ 
+ 	virtual void _body_apply_central_force(const RID &p_body, const Vector2 &p_force) override;
+ 	virtual void _body_apply_force(const RID &p_body, const Vector2 &p_force, const Vector2 &p_position = Vector2()) override;
+-	virtual void _body_apply_torque(const RID &p_body, double p_torque) override;
++	virtual void _body_apply_torque(const RID &p_body, real_t p_torque) override;
+ 
+ 	virtual void _body_add_constant_central_force(const RID &p_body, const Vector2 &p_force) override;
+ 	virtual void _body_add_constant_force(const RID &p_body, const Vector2 &p_force, const Vector2 &p_position = Vector2()) override;
+-	virtual void _body_add_constant_torque(const RID &p_body, double p_torque) override;
++	virtual void _body_add_constant_torque(const RID &p_body, real_t p_torque) override;
+ 
+ 	virtual void _body_set_constant_force(const RID &p_body, const Vector2 &p_force) override;
+ 	virtual Vector2 _body_get_constant_force(const RID &p_body) const override;
+ 
+-	virtual void _body_set_constant_torque(const RID &p_body, double p_torque) override;
+-	virtual double _body_get_constant_torque(const RID &p_body) const override;
++	virtual void _body_set_constant_torque(const RID &p_body, real_t p_torque) override;
++	virtual real_t _body_get_constant_torque(const RID &p_body) const override;
+ 
+ 	virtual void _body_set_axis_velocity(const RID &p_body, const Vector2 &p_axis_velocity) override;
+ 
+@@ -222,8 +222,8 @@ public:
+ 	virtual void _body_remove_collision_exception(const RID &p_body, const RID &p_body_b) override;
+ 	virtual TypedArray<RID> _body_get_collision_exceptions(const RID &p_body) const override;
+ 
+-	virtual void _body_set_contacts_reported_depth_threshold(const RID &p_body, double p_threshold) override;
+-	virtual double _body_get_contacts_reported_depth_threshold(const RID &p_body) const override;
++	virtual void _body_set_contacts_reported_depth_threshold(const RID &p_body, real_t p_threshold) override;
++	virtual real_t _body_get_contacts_reported_depth_threshold(const RID &p_body) const override;
+ 
+ 	virtual void _body_set_omit_force_integration(const RID &p_body, bool p_omit) override;
+ 	virtual bool _body_is_omitting_force_integration(const RID &p_body) const override;
+@@ -238,7 +238,7 @@ public:
+ 
+ 	virtual void _body_set_pickable(const RID &p_body, bool p_pickable) override;
+ 
+-	virtual bool _body_test_motion(const RID &p_body, const Transform2D &p_from, const Vector2 &p_motion, double p_margin, bool p_collide_separation_ray, bool p_recovery_as_collision, PhysicsServer2DExtensionMotionResult *r_result) const override;
++	virtual bool _body_test_motion(const RID &p_body, const Transform2D &p_from, const Vector2 &p_motion, real_t p_margin, bool p_collide_separation_ray, bool p_recovery_as_collision, PhysicsServer2DExtensionMotionResult *r_result) const override;
+ 
+ 	// this function only works on physics process, errors and returns null otherwise
+ 	virtual PhysicsDirectBodyState2D *_body_get_direct_state(const RID &p_body) override;
+@@ -249,8 +249,8 @@ public:
+ 
+ 	virtual void _joint_clear(const RID &p_joint) override;
+ 
+-	virtual void _joint_set_param(const RID &p_joint, JointParam p_param, double p_value) override;
+-	virtual double _joint_get_param(const RID &p_joint, JointParam p_param) const override;
++	virtual void _joint_set_param(const RID &p_joint, JointParam p_param, real_t p_value) override;
++	virtual real_t _joint_get_param(const RID &p_joint, JointParam p_param) const override;
+ 
+ 	virtual void _joint_disable_collisions_between_bodies(const RID &p_joint, const bool p_disabled) override;
+ 	virtual bool _joint_is_disabled_collisions_between_bodies(const RID &p_joint) const override;
+@@ -261,10 +261,10 @@ public:
+ 
+ 	virtual void _pin_joint_set_flag(const RID &joint, PhysicsServer2D::PinJointFlag flag, bool enabled) override;
+ 	virtual bool _pin_joint_get_flag(const RID &joint, PhysicsServer2D::PinJointFlag flag) const override;
+-	virtual void _pin_joint_set_param(const RID &p_joint, PinJointParam p_param, double p_value) override;
+-	virtual double _pin_joint_get_param(const RID &p_joint, PinJointParam p_param) const override;
+-	virtual void _damped_spring_joint_set_param(const RID &p_joint, DampedSpringParam p_param, double p_value) override;
+-	virtual double _damped_spring_joint_get_param(const RID &p_joint, DampedSpringParam p_param) const override;
++	virtual void _pin_joint_set_param(const RID &p_joint, PinJointParam p_param, real_t p_value) override;
++	virtual real_t _pin_joint_get_param(const RID &p_joint, PinJointParam p_param) const override;
++	virtual void _damped_spring_joint_set_param(const RID &p_joint, DampedSpringParam p_param, real_t p_value) override;
++	virtual real_t _damped_spring_joint_get_param(const RID &p_joint, DampedSpringParam p_param) const override;
+ 
+ 	virtual JointType _joint_get_type(const RID &p_joint) const override;
+ 
+@@ -274,7 +274,7 @@ public:
+ 
+ 	virtual void _set_active(bool p_active) override;
+ 	virtual void _init() override;
+-	virtual void _step(double p_step) override;
++	virtual void _step(real_t p_step) override;
+ 	virtual void _sync() override;
+ 	virtual void _flush_queries() override;
+ 	virtual void _end_sync() override;
+diff --git a/src/shapes/box2d_concave_polygon_shape_2d.cpp b/src/shapes/box2d_concave_polygon_shape_2d.cpp
+index 73040b2..b69d8dc 100644
+--- a/src/shapes/box2d_concave_polygon_shape_2d.cpp
++++ b/src/shapes/box2d_concave_polygon_shape_2d.cpp
+@@ -1,13 +1,18 @@
+ #include "box2d_concave_polygon_shape_2d.h"
+ 
+ box2d::ShapeHandle Box2DConcavePolygonShape2D::create_box2d_shape() const {
+-	int point_count = points.size();
+-	ERR_FAIL_COND_V(point_count < 3, box2d::invalid_shape_handle());
++	const int point_count = segments.size() * 2;
++	ERR_FAIL_COND_V(point_count < 2, box2d::invalid_shape_handle());
+ 	b2Vec2 *box2d_points = (b2Vec2 *)memalloc(point_count * sizeof(b2Vec2));
+-	for (int i = 0; i < point_count; i++) {
+-		box2d_points[i] = b2Vec2{ (points[i].x), (points[i].y) };
++	for (int i = 0; i < (int)segments.size(); i++) {
++		for (int endpoint = 0; endpoint < 2; endpoint++) {
++			const Vector2 &point = points[segments[i].points[endpoint]];
++			box2d_points[i * 2 + endpoint] = b2Vec2(point.x, point.y);
++		}
+ 	}
+-	return box2d::shape_create_concave_polyline(box2d_points, point_count);
++	box2d::ShapeHandle result = box2d::shape_create_segments(box2d_points, point_count);
++	memfree(box2d_points);
++	return result;
+ }
+ 
+ void Box2DConcavePolygonShape2D::set_data(const Variant &p_data) {
+diff --git a/src/shapes/box2d_convex_polygon_shape_2d.cpp b/src/shapes/box2d_convex_polygon_shape_2d.cpp
+index f913a64..ad71168 100644
+--- a/src/shapes/box2d_convex_polygon_shape_2d.cpp
++++ b/src/shapes/box2d_convex_polygon_shape_2d.cpp
+@@ -1,8 +1,8 @@
+ #include "box2d_convex_polygon_shape_2d.h"
+ 
+ box2d::ShapeHandle Box2DConvexPolygonShape2D::create_box2d_shape() const {
+-	ERR_FAIL_COND_V(point_count < 3, box2d::invalid_shape_handle());
+-	b2Vec2 *box2d_points = (b2Vec2 *)memalloc(point_count * sizeof(b2Vec2));
++	ERR_FAIL_COND_V(point_count < 2 || point_count > b2_maxPolygonVertices, box2d::invalid_shape_handle());
++	b2Vec2 box2d_points[b2_maxPolygonVertices];
+ 	for (int i = 0; i < point_count; i++) {
+ 		box2d_points[i] = b2Vec2{ (points[i].pos.x), (points[i].pos.y) };
+ 	}
+diff --git a/src/shapes/box2d_segment_shape_2d.cpp b/src/shapes/box2d_segment_shape_2d.cpp
+index 61c9d35..1bbb5f5 100644
+--- a/src/shapes/box2d_segment_shape_2d.cpp
++++ b/src/shapes/box2d_segment_shape_2d.cpp
+@@ -1,24 +1,7 @@
+ #include "box2d_segment_shape_2d.h"
+ 
+ box2d::ShapeHandle Box2DSegmentShape2D::create_box2d_shape() const {
+-	Vector2 direction = b - a;
+-	direction.normalize();
+-
+-	Vector2 perpendicular = Vector2(-direction.y, direction.x);
+-	double height = 1;
+-
+-	Vector2 p1 = a + perpendicular * height;
+-	Vector2 p2 = a - perpendicular * height;
+-	Vector2 p3 = b + perpendicular * height;
+-	Vector2 p4 = b - perpendicular * height;
+-
+-	b2Vec2 box2d_points[4];
+-	box2d_points[0] = b2Vec2{ p1.x, p1.y };
+-	box2d_points[1] = b2Vec2{ p2.x, p2.y };
+-	box2d_points[2] = b2Vec2{ p3.x, p3.y };
+-	box2d_points[3] = b2Vec2{ p4.x, p4.y };
+-
+-	return box2d::shape_create_convex_polyline(box2d_points, 4);
++	return box2d::shape_create_segment(b2Vec2(a.x, a.y), b2Vec2(b.x, b.y));
+ }
+ 
+ void Box2DSegmentShape2D::set_data(const Variant &p_data) {
+diff --git a/src/spaces/box2d_direct_space_state_2d.cpp b/src/spaces/box2d_direct_space_state_2d.cpp
+index 7e409f7..a9579d1 100644
+--- a/src/spaces/box2d_direct_space_state_2d.cpp
++++ b/src/spaces/box2d_direct_space_state_2d.cpp
+@@ -34,7 +34,7 @@ int Box2DDirectSpaceState2D::_intersect_point(const Vector2 &position, uint64_t
+ 		result.rid = collision_object_2d->get_rid();
+ 
+ 		if (result.collider_id.is_valid()) {
+-			result.collider = Box2DSpace2D::_get_object_instance_hack(result.collider_id);
++			result.collider = Box2DSpace2D::_get_native_object_instance(result.collider_id);
+ 		}
+ 	}
+ 	memfree(hit_info_array);
+@@ -87,7 +87,7 @@ bool Box2DDirectSpaceState2D::_intersect_ray(const Vector2 &from, const Vector2
+ 			r_result->rid = collision_object_2d->get_rid();
+ 
+ 			if (r_result->collider_id.is_valid()) {
+-				r_result->collider = Box2DSpace2D::_get_object_instance_hack(r_result->collider_id);
++				r_result->collider = Box2DSpace2D::_get_native_object_instance(r_result->collider_id);
+ 			}
+ 		}
+ 
+@@ -97,7 +97,7 @@ bool Box2DDirectSpaceState2D::_intersect_ray(const Vector2 &from, const Vector2
+ 	return false;
+ }
+ 
+-bool Box2DDirectSpaceState2D::_cast_motion(const RID &shape_rid, const Transform2D &transform, const Vector2 &motion, double margin, uint32_t collision_mask, bool collide_with_bodies, bool collide_with_areas, float *p_closest_safe, float *p_closest_unsafe) {
++bool Box2DDirectSpaceState2D::_cast_motion(const RID &shape_rid, const Transform2D &transform, const Vector2 &motion, real_t margin, uint32_t collision_mask, bool collide_with_bodies, bool collide_with_areas, float *p_closest_safe, float *p_closest_unsafe) {
+ 	Box2DShape2D *shape = space->get_shape_from_rid(shape_rid);
+ 	ERR_FAIL_COND_V(!shape, false);
+ 	box2d::ShapeHandle shape_handle = shape->get_box2d_shape();
+@@ -118,7 +118,7 @@ bool Box2DDirectSpaceState2D::_cast_motion(const RID &shape_rid, const Transform
+ 	return true;
+ }
+ 
+-bool Box2DDirectSpaceState2D::_collide_shape(const RID &shape_rid, const Transform2D &transform, const Vector2 &motion, double margin, uint32_t collision_mask, bool collide_with_bodies, bool collide_with_areas, void *results, int32_t max_results, int32_t *result_count) {
++bool Box2DDirectSpaceState2D::_collide_shape(const RID &shape_rid, const Transform2D &transform, const Vector2 &motion, real_t margin, uint32_t collision_mask, bool collide_with_bodies, bool collide_with_areas, void *results, int32_t max_results, int32_t *result_count) {
+ 	Box2DShape2D *shape = space->get_shape_from_rid(shape_rid);
+ 	ERR_FAIL_COND_V(!shape, false);
+ 	box2d::ShapeHandle shape_handle = shape->get_box2d_shape();
+@@ -153,7 +153,7 @@ bool Box2DDirectSpaceState2D::_collide_shape(const RID &shape_rid, const Transfo
+ 	return array_idx > 0;
+ }
+ 
+-int Box2DDirectSpaceState2D::_intersect_shape(const RID &shape_rid, const Transform2D &transform, const Vector2 &motion, double margin, uint32_t collision_mask, bool collide_with_bodies, bool collide_with_areas, PhysicsServer2DExtensionShapeResult *r_results, int32_t p_result_max) {
++int Box2DDirectSpaceState2D::_intersect_shape(const RID &shape_rid, const Transform2D &transform, const Vector2 &motion, real_t margin, uint32_t collision_mask, bool collide_with_bodies, bool collide_with_areas, PhysicsServer2DExtensionShapeResult *r_results, int32_t p_result_max) {
+ 	Box2DShape2D *shape = space->get_shape_from_rid(shape_rid);
+ 	ERR_FAIL_COND_V(!shape, false);
+ 	box2d::ShapeHandle shape_handle = shape->get_box2d_shape();
+@@ -187,7 +187,7 @@ int Box2DDirectSpaceState2D::_intersect_shape(const RID &shape_rid, const Transf
+ 		result_out.collider_id = collision_object_2d->get_instance_id();
+ 
+ 		if (result_out.collider_id.is_valid()) {
+-			result_out.collider = Box2DSpace2D::_get_object_instance_hack(result_out.collider_id);
++			result_out.collider = Box2DSpace2D::_get_native_object_instance(result_out.collider_id);
+ 		}
+ 
+ 		cpt++;
+@@ -198,7 +198,7 @@ int Box2DDirectSpaceState2D::_intersect_shape(const RID &shape_rid, const Transf
+ 	return cpt;
+ }
+ 
+-bool Box2DDirectSpaceState2D::_rest_info(const RID &shape_rid, const Transform2D &transform, const Vector2 &motion, double margin, uint32_t collision_mask, bool collide_with_bodies, bool collide_with_areas, PhysicsServer2DExtensionShapeRestInfo *r_info) {
++bool Box2DDirectSpaceState2D::_rest_info(const RID &shape_rid, const Transform2D &transform, const Vector2 &motion, real_t margin, uint32_t collision_mask, bool collide_with_bodies, bool collide_with_areas, PhysicsServer2DExtensionShapeRestInfo *r_info) {
+ 	Box2DShape2D *shape = space->get_shape_from_rid(shape_rid);
+ 	ERR_FAIL_COND_V(!shape, false);
+ 	box2d::ShapeHandle shape_handle = shape->get_box2d_shape();
+diff --git a/src/spaces/box2d_direct_space_state_2d.h b/src/spaces/box2d_direct_space_state_2d.h
+index bfa0735..8dc3c69 100644
+--- a/src/spaces/box2d_direct_space_state_2d.h
++++ b/src/spaces/box2d_direct_space_state_2d.h
+@@ -28,10 +28,10 @@ public:
+ 	Box2DSpace2D *space = nullptr;
+ 	virtual int _intersect_point(const Vector2 &position, uint64_t canvas_instance_id, uint32_t collision_mask, bool collide_with_bodies, bool collide_with_areas, PhysicsServer2DExtensionShapeResult *r_results, int32_t p_result_max) override;
+ 	virtual bool _intersect_ray(const Vector2 &from, const Vector2 &to, uint32_t collision_mask, bool collide_with_bodies, bool collide_with_areas, bool hit_from_inside, PhysicsServer2DExtensionRayResult *r_result) override;
+-	virtual int _intersect_shape(const RID &shape_rid, const Transform2D &transform, const Vector2 &motion, double margin, uint32_t collision_mask, bool collide_with_bodies, bool collide_with_areas, PhysicsServer2DExtensionShapeResult *r_results, int32_t p_result_max) override;
+-	virtual bool _cast_motion(const RID &shape_rid, const Transform2D &transform, const Vector2 &motion, double margin, uint32_t collision_mask, bool collide_with_bodies, bool collide_with_areas, float *p_closest_safe, float *p_closest_unsafe) override;
+-	virtual bool _collide_shape(const RID &shape_rid, const Transform2D &transform, const Vector2 &motion, double margin, uint32_t collision_mask, bool collide_with_bodies, bool collide_with_areas, void *results, int32_t max_results, int32_t *result_count) override;
+-	virtual bool _rest_info(const RID &shape_rid, const Transform2D &transform, const Vector2 &motion, double margin, uint32_t collision_mask, bool collide_with_bodies, bool collide_with_areas, PhysicsServer2DExtensionShapeRestInfo *r_info) override;
++	virtual int _intersect_shape(const RID &shape_rid, const Transform2D &transform, const Vector2 &motion, real_t margin, uint32_t collision_mask, bool collide_with_bodies, bool collide_with_areas, PhysicsServer2DExtensionShapeResult *r_results, int32_t p_result_max) override;
++	virtual bool _cast_motion(const RID &shape_rid, const Transform2D &transform, const Vector2 &motion, real_t margin, uint32_t collision_mask, bool collide_with_bodies, bool collide_with_areas, float *p_closest_safe, float *p_closest_unsafe) override;
++	virtual bool _collide_shape(const RID &shape_rid, const Transform2D &transform, const Vector2 &motion, real_t margin, uint32_t collision_mask, bool collide_with_bodies, bool collide_with_areas, void *results, int32_t max_results, int32_t *result_count) override;
++	virtual bool _rest_info(const RID &shape_rid, const Transform2D &transform, const Vector2 &motion, real_t margin, uint32_t collision_mask, bool collide_with_bodies, bool collide_with_areas, PhysicsServer2DExtensionShapeRestInfo *r_info) override;
+ 
+ 	Box2DDirectSpaceState2D() {}
+ };
+diff --git a/src/spaces/box2d_space_2d.cpp b/src/spaces/box2d_space_2d.cpp
+index 5b6cfed..ad8f04a 100644
+--- a/src/spaces/box2d_space_2d.cpp
++++ b/src/spaces/box2d_space_2d.cpp
+@@ -37,25 +37,6 @@ void Box2DSpace2D::body_add_to_area_update_list(SelfList<Box2DBody2D> *p_body) {
+ 	body_area_update_list.add(p_body);
+ }
+ 
+-void Box2DSpace2D::add_removed_collider(b2Fixture *p_handle, Box2DCollisionObject2D *p_object, uint32_t p_shape_index) {
+-	uint64_t handle_hash = box2d::handle_hash(p_handle);
+-	ERR_FAIL_COND(removed_colliders.has(handle_hash));
+-	removed_colliders.insert(handle_hash, { p_object->get_rid(), p_object->get_instance_id(), p_shape_index, p_object->get_type() });
+-}
+-
+-bool Box2DSpace2D::get_removed_collider_info(b2Fixture *p_handle, RID &r_rid, ObjectID &r_instance_id, uint32_t &r_shape_index, Box2DCollisionObject2D::Type &r_type) const {
+-	uint64_t handle_hash = box2d::handle_hash(p_handle);
+-	auto foundIt = removed_colliders.find(handle_hash);
+-	if (foundIt == removed_colliders.end()) {
+-		return false;
+-	}
+-
+-	r_rid = foundIt->value.rid;
+-	r_instance_id = foundIt->value.instance_id;
+-	r_shape_index = foundIt->value.shape_index;
+-	r_type = foundIt->value.type;
+-	return true;
+-}
+ 
+ void Box2DSpace2D::active_body_callback(const box2d::ActiveBodyInfo &active_body_info) {
+ 	Box2DCollisionObject2D *pObject = nullptr;
+@@ -118,7 +99,7 @@ bool Box2DSpace2D::ShouldCollide(b2Fixture *fixtureA, b2Fixture *fixtureB) {
+ 	return true;
+ }
+ box2d::CollisionEventInfo event_info_from_contact(b2Contact *contact) {
+-	box2d::CollisionEventInfo event_info;
++	box2d::CollisionEventInfo event_info{};
+ 	event_info.is_sensor = false;
+ 	event_info.is_valid = false;
+ 	event_info.collider1 = contact->GetFixtureA();
+@@ -165,7 +146,7 @@ void Box2DSpace2D::BeginContact(b2Contact *contact) {
+ 		return;
+ 	}
+ 	event_info.is_started = true;
+-	collision_event_callback(handle, &event_info);
++	collision_event_callback(&event_info);
+ }
+ 
+ void Box2DSpace2D::EndContact(b2Contact *contact) {
+@@ -174,7 +155,29 @@ void Box2DSpace2D::EndContact(b2Contact *contact) {
+ 		return;
+ 	}
+ 	event_info.is_started = false;
+-	collision_event_callback(handle, &event_info);
++	collision_event_callback(&event_info);
++}
++
++void Box2DSpace2D::notify_shape_contacts(Box2DCollisionObject2D *p_object, uint32_t p_first_shape, bool p_started) {
++	for (b2ContactEdge *edge = p_object->get_body_handle()->GetContactList(); edge; edge = edge->next) {
++		b2Contact *contact = edge->contact;
++		if (!contact->IsTouching()) {
++			continue;
++		}
++		b2Fixture *fixture = contact->GetFixtureA();
++		if (fixture->GetBody() != p_object->get_body_handle()) {
++			fixture = contact->GetFixtureB();
++		}
++		if (fixture->GetUserData().shape_idx < p_first_shape) {
++			continue;
++		}
++		box2d::CollisionEventInfo event_info = event_info_from_contact(contact);
++		if (!event_info.is_valid) {
++			continue;
++		}
++		event_info.is_started = p_started;
++		collision_event_callback(&event_info);
++	}
+ }
+ void Box2DSpace2D::PreSolve(b2Contact *contact, const b2Manifold *oldManifold) {
+ 	uint32_t shape1;
+@@ -186,10 +189,10 @@ void Box2DSpace2D::PreSolve(b2Contact *contact, const b2Manifold *oldManifold) {
+ 	if (collision_object_1->interacts_with(collision_object_2)) {
+ 		b2Body *body1 = contact->GetFixtureA()->GetBody();
+ 		b2Body *body2 = contact->GetFixtureB()->GetBody();
+-		Transform2D transform_a = box2d::collider_get_transform(handle, contact->GetFixtureA()) * collision_object_1->get_transform();
+-		Transform2D transform_b = box2d::collider_get_transform(handle, contact->GetFixtureB()) * collision_object_2->get_transform();
+-		Vector2 allowed_local_n1 = transform_a.columns[1].normalized();
+-		Vector2 allowed_local_n2 = transform_b.columns[1].normalized();
++		Transform2D transform_a = collision_object_1->get_transform() * box2d::collider_get_transform(handle, contact->GetFixtureA());
++		Transform2D transform_b = collision_object_2->get_transform() * box2d::collider_get_transform(handle, contact->GetFixtureB());
++		Vector2 allowed_local_n1 = transform_a.basis_xform(collision_object_1->get_shape_one_way_collision_direction(shape1)).normalized();
++		Vector2 allowed_local_n2 = transform_b.basis_xform(collision_object_2->get_shape_one_way_collision_direction(shape2)).normalized();
+ 		bool contact_is_pass_through = false;
+ 		b2WorldManifold worldManifold;
+ 		contact->GetWorldManifold(&worldManifold);
+@@ -268,127 +271,40 @@ void Box2DSpace2D::PostSolve(b2Contact *contact, const b2ContactImpulse *impulse
+ 	}
+ }
+ 
+-void Box2DSpace2D::collision_event_callback(b2World *world_handle, const box2d::CollisionEventInfo *event_info) {
+-	Box2DSpace2D *space = Box2DPhysicsServer2D::singleton->get_active_space(world_handle);
+-	ERR_FAIL_COND(!space);
+-
++void Box2DSpace2D::collision_event_callback(const box2d::CollisionEventInfo *event_info) {
++	// Box2D calls EndContact synchronously before freeing either fixture or
++	// collision object. No delayed pointer/address-based removal cache is needed.
+ 	uint32_t shape1 = 0;
+-	Box2DCollisionObject2D *pObject1 = nullptr;
+-	if (box2d::is_user_data_valid(event_info->user_data1)) {
+-		pObject1 = Box2DCollisionObject2D::get_collider_user_data(event_info->user_data1, shape1);
+-	}
+-
+ 	uint32_t shape2 = 0;
+-	Box2DCollisionObject2D *pObject2 = nullptr;
+-	if (box2d::is_user_data_valid(event_info->user_data2)) {
+-		pObject2 = Box2DCollisionObject2D::get_collider_user_data(event_info->user_data2, shape2);
+-	}
+-
+-	b2Fixture *collider_handle1 = event_info->collider1;
+-	b2Fixture *collider_handle2 = event_info->collider2;
+-
+-	RID rid1, rid2;
+-	ObjectID instanceId1;
+-	ObjectID instanceId2;
+-	Box2DCollisionObject2D::Type type1, type2;
+-
+-	if (event_info->is_removed) {
+-		// Try to get backup info for missing objects
+-		if (!pObject1) {
+-			space->get_removed_collider_info(collider_handle1, rid1, instanceId1, shape1, type1);
++	Box2DCollisionObject2D *object1 = Box2DCollisionObject2D::get_collider_user_data(event_info->user_data1, shape1);
++	Box2DCollisionObject2D *object2 = Box2DCollisionObject2D::get_collider_user_data(event_info->user_data2, shape2);
++	ERR_FAIL_NULL(object1);
++	ERR_FAIL_NULL(object2);
++	ERR_FAIL_COND(!event_info->is_sensor);
++
++	if (object1->get_type() != Box2DCollisionObject2D::TYPE_AREA) {
++		SWAP(object1, object2);
++		SWAP(shape1, shape2);
++	}
++	ERR_FAIL_COND(object1->get_type() != Box2DCollisionObject2D::TYPE_AREA);
++
++	Box2DArea2D *area1 = static_cast<Box2DArea2D *>(object1);
++	if (object2->get_type() == Box2DCollisionObject2D::TYPE_AREA) {
++		Box2DArea2D *area2 = static_cast<Box2DArea2D *>(object2);
++		if (event_info->is_started) {
++			area1->on_area_enter(area2, shape2, shape1);
++			area2->on_area_enter(area1, shape1, shape2);
+ 		} else {
+-			rid1 = pObject1->get_rid();
+-			instanceId1 = pObject1->get_instance_id();
+-			type1 = pObject1->get_type();
+-		}
+-		if (!pObject2) {
+-			space->get_removed_collider_info(collider_handle2, rid2, instanceId2, shape2, type2);
+-		} else {
+-			rid2 = pObject2->get_rid();
+-			instanceId2 = pObject2->get_instance_id();
+-			type2 = pObject2->get_type();
++			area1->on_area_exit(area2, shape2, shape1);
++			area2->on_area_exit(area1, shape1, shape2);
+ 		}
+ 	} else {
+-		ERR_FAIL_COND(!pObject1);
+-		rid1 = pObject1->get_rid();
+-		instanceId1 = pObject1->get_instance_id();
+-		type1 = pObject1->get_type();
+-
+-		ERR_FAIL_COND(!pObject2);
+-		rid2 = pObject2->get_rid();
+-		instanceId2 = pObject2->get_instance_id();
+-		type2 = pObject2->get_type();
+-	}
+-
+-	if (event_info->is_sensor) {
+-		if (!instanceId1.is_valid()) {
+-			ERR_FAIL_COND_MSG(pObject2, "Should be able to get info about a removed object if the other one is still valid.");
+-			return;
+-		}
+-		if (!instanceId2.is_valid()) {
+-			ERR_FAIL_COND_MSG(pObject2, "Should be able to get info about a removed object if the other one is still valid.");
+-			return;
+-		}
+-
+-		if (type1 != Box2DCollisionObject2D::TYPE_AREA) {
+-			ERR_FAIL_COND(type2 != Box2DCollisionObject2D::TYPE_AREA);
+-			SWAP(pObject1, pObject2);
+-			SWAP(type1, type2);
+-			SWAP(shape1, shape2);
+-			SWAP(collider_handle1, collider_handle2);
+-			SWAP(rid1, rid2);
+-			SWAP(instanceId1, instanceId2);
+-		}
+-
+-		Box2DArea2D *pArea = static_cast<Box2DArea2D *>(pObject1);
+-		if (type2 == Box2DCollisionObject2D::TYPE_AREA) {
+-			Box2DArea2D *pArea2 = static_cast<Box2DArea2D *>(pObject2);
+-			if (event_info->is_started) {
+-				ERR_FAIL_COND(!pArea);
+-				ERR_FAIL_COND(!pArea2);
+-				pArea->on_area_enter(collider_handle2, pArea2, shape2, rid2, instanceId2, collider_handle1, shape1);
+-				pArea2->on_area_enter(collider_handle1, pArea, shape1, rid1, instanceId1, collider_handle2, shape2);
+-			} else {
+-				if (pArea) {
+-					pArea->on_area_exit(collider_handle2, pArea2, shape2, rid2, instanceId2, collider_handle1, shape1);
+-				} else {
+-					// Try to retrieve area if not destroyed yet
+-					pArea = space->get_area_from_rid(rid1);
+-					if (pArea) {
+-						// Use invalid area case to keep counters consistent for already removed collider
+-						pArea->on_area_exit(collider_handle2, nullptr, shape2, rid2, instanceId2, collider_handle1, shape1);
+-					}
+-				}
+-				if (pArea2) {
+-					pArea2->on_area_exit(collider_handle1, pArea, shape1, rid1, instanceId1, collider_handle2, shape2);
+-				} else {
+-					// Try to retrieve area if not destroyed yet
+-					pArea2 = space->get_area_from_rid(rid2);
+-					if (pArea2) {
+-						// Use invalid area case to keep counters consistent for already removed collider
+-						pArea2->on_area_exit(collider_handle1, nullptr, shape1, rid1, instanceId1, collider_handle2, shape2);
+-					}
+-				}
+-			}
++		Box2DBody2D *body = static_cast<Box2DBody2D *>(object2);
++		if (event_info->is_started) {
++			area1->on_body_enter(body, shape2, shape1);
+ 		} else {
+-			Box2DBody2D *pBody = static_cast<Box2DBody2D *>(pObject2);
+-			if (event_info->is_started) {
+-				ERR_FAIL_COND(!pArea);
+-				pArea->on_body_enter(collider_handle2, pBody, shape2, rid2, instanceId2, collider_handle1, shape1);
+-			} else if (pArea) {
+-				pArea->on_body_exit(collider_handle2, pBody, shape2, rid2, instanceId2, collider_handle1, shape1);
+-			} else {
+-				// Try to retrieve area if not destroyed yet
+-				pArea = space->get_area_from_rid(rid1);
+-				if (pArea) {
+-					// Use invalid body case to keep counters consistent for already removed collider
+-					pArea->on_body_exit(collider_handle2, nullptr, shape2, rid2, instanceId2, collider_handle1, shape1, false);
+-				}
+-			}
++			area1->on_body_exit(body, shape2, shape1);
+ 		}
+-	} else {
+-		// Body contacts use contact_force_event_callback instead
+-		ERR_FAIL_MSG("Shouldn't receive rigidbody collision events.");
+ 	}
+ }
+ 
+@@ -475,13 +391,15 @@ bool Box2DSpace2D::contact_point_callback(b2World *world_handle, const box2d::Co
+ 	if (body1->can_report_contacts()) {
+ 		keep_sending_contacts = true;
+ 		Vector2 vel_pos2(contact_info->velocity_pos_2.x, contact_info->velocity_pos_2.y);
+-		body1->add_contact(pos1, normal_1, depth_1, (int)shape1, pos2, (int)shape2, body2->get_instance_id(), body2->get_rid(), vel_pos2, impulse_1);
++		Vector2 vel_pos1(contact_info->velocity_pos_1.x, contact_info->velocity_pos_1.y);
++		body1->add_contact(pos1, normal_1, vel_pos1, depth_1, (int)shape1, pos2, (int)shape2, body2->get_instance_id(), body2->get_rid(), vel_pos2, impulse_1);
+ 	}
+ 
+ 	if (body2->can_report_contacts()) {
+ 		keep_sending_contacts = true;
+ 		Vector2 vel_pos1(contact_info->velocity_pos_1.x, contact_info->velocity_pos_1.y);
+-		body2->add_contact(pos2, normal_2, depth_2, (int)shape2, pos1, (int)shape1, body1->get_instance_id(), body1->get_rid(), vel_pos1, impulse_2);
++		Vector2 vel_pos2(contact_info->velocity_pos_2.x, contact_info->velocity_pos_2.y);
++		body2->add_contact(pos2, normal_2, vel_pos2, depth_2, (int)shape2, pos1, (int)shape1, body1->get_instance_id(), body1->get_rid(), vel_pos1, impulse_2);
+ 	}
+ 
+ 	return keep_sending_contacts;
+@@ -538,9 +456,6 @@ void Box2DSpace2D::step(real_t p_step) {
+ 	ERR_FAIL_COND(!box2d::is_handle_valid(handle));
+ 	box2d::world_step(handle, &settings);
+ 
+-	// Needed only for one physics step to retrieve lost info
+-	removed_colliders.clear();
+-
+ 	for (SelfList<Box2DBody2D> *body_iterator = active_list.first(); body_iterator;) {
+ 		Box2DBody2D *body = body_iterator->self();
+ 		body_iterator = body_iterator->next();
+diff --git a/src/spaces/box2d_space_2d.h b/src/spaces/box2d_space_2d.h
+index 087a002..246c38c 100644
+--- a/src/spaces/box2d_space_2d.h
++++ b/src/spaces/box2d_space_2d.h
+@@ -26,14 +26,6 @@ class Box2DSpace2D : public b2ContactFilter, public b2ContactListener {
+ 
+ 	b2World *handle = box2d::invalid_world_handle();
+ 
+-	struct RemovedColliderInfo {
+-		RID rid;
+-		ObjectID instance_id;
+-		uint32_t shape_index = 0;
+-		Box2DCollisionObject2D::Type type = Box2DCollisionObject2D::TYPE_BODY;
+-	};
+-
+-	HashMap<uint32_t, RemovedColliderInfo> removed_colliders;
+ 
+ 	SelfList<Box2DBody2D>::List active_list;
+ 	SelfList<Box2DBody2D>::List mass_properties_update_list;
+@@ -94,15 +86,16 @@ class Box2DSpace2D : public b2ContactFilter, public b2ContactListener {
+ 	static bool collision_filter_common_callback(b2World *world_handle, const box2d::CollisionFilterInfo *filter_info, CollidersInfo &r_colliders_info);
+ 	static box2d::OneWayDirection collision_modify_contacts_callback(b2World *world_handle, const box2d::CollisionFilterInfo *filter_info);
+ 
+-	static void collision_event_callback(b2World *world_handle, const box2d::CollisionEventInfo *event_info);
++	void collision_event_callback(const box2d::CollisionEventInfo *event_info);
+ 
+ 	static bool contact_force_event_callback(b2World *world_handle, const box2d::ContactForceEventInfo *event_info);
+ 	static bool contact_point_callback(b2World *world_handle, const box2d::ContactPointInfo *contact_info, const box2d::ContactForceEventInfo *event_info);
+ 
+ 	static bool _is_handle_excluded_callback(b2World *world_handle, b2Fixture *collider_handle, b2FixtureUserData collider, const box2d::QueryExcludedInfo *handle_excluded_info);
+ 
+-	static Object *_get_object_instance_hack(uint64_t p_object_id) {
+-		return reinterpret_cast<Object *>((GodotObject *)(internal::gdextension_interface_object_get_instance_from_id(p_object_id)));
++	// Native query-result structs require the engine pointer, not its C++ binding.
++	static Object *_get_native_object_instance(uint64_t p_object_id) {
++		return reinterpret_cast<Object *>(gdextension_interface::object_get_instance_from_id(p_object_id));
+ 	}
+ 
+ public:
+@@ -121,8 +114,8 @@ public:
+ 	void area_add_to_area_update_list(SelfList<Box2DArea2D> *p_area);
+ 	void body_add_to_area_update_list(SelfList<Box2DBody2D> *p_body);
+ 
+-	void add_removed_collider(b2Fixture *p_handle, Box2DCollisionObject2D *p_object, uint32_t p_shape_index);
+-	bool get_removed_collider_info(b2Fixture *p_handle, RID &r_rid, ObjectID &r_instance_id, uint32_t &r_shape_index, Box2DCollisionObject2D::Type &r_type) const;
++	// Rebind touching sensors around an in-place shape-index change.
++	void notify_shape_contacts(Box2DCollisionObject2D *p_object, uint32_t p_first_shape, bool p_started);
+ 
+ 	_FORCE_INLINE_ int get_solver_iterations() const { return solver_iterations; }
+ 	_FORCE_INLINE_ real_t get_contact_recycle_radius() const { return contact_recycle_radius; }

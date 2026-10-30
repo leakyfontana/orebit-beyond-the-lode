@@ -1,0 +1,145 @@
+[gd_resource type="Animation" format=3]
+
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/PlayerDestruction/PlayerDies01.png" id="1_j8rcs"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/PlayerDestruction/PlayerDies02.png" id="2_7x3il"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/PlayerDestruction/PlayerDies03.png" id="3_ng2e3"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/PlayerDestruction/PlayerDies04.png" id="4_rcw7i"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/PlayerDestruction/PlayerDies05.png" id="5_auri0"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/PlayerDestruction/PlayerDies06.png" id="6_bvdx3"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/PlayerDestruction/PlayerDies07.png" id="7_eooo4"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/PlayerDestruction/PlayerDies08.png" id="8_j460i"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/PlayerDestruction/PlayerDies09.png" id="9_kkimv"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/PlayerDestruction/PlayerDies10.png" id="10_48kvj"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/PlayerDestruction/PlayerDies11.png" id="11_1vivc"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/PlayerDestruction/PlayerDies12.png" id="12_m6oj2"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/PlayerDestruction/PlayerDies13.png" id="13_d827u"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/PlayerDestruction/PlayerDies14.png" id="14_6gfmn"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/PlayerDestruction/PlayerDies15.png" id="15_tvepj"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/PlayerDestruction/PlayerDies16.png" id="16_85kp2"]
+[ext_resource type="Texture2D" path="res://assets/Resources/PlayerAnimations/PlayerDestruction/PlayerDies17.png" id="17_jh14y"]
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_5o1ri"]
+atlas = ExtResource("1_j8rcs")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_8ng2u"]
+atlas = ExtResource("2_7x3il")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_qhxqr"]
+atlas = ExtResource("3_ng2e3")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_8wqfa"]
+atlas = ExtResource("4_rcw7i")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_v61oi"]
+atlas = ExtResource("5_auri0")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_83o76"]
+atlas = ExtResource("6_bvdx3")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_cd1gn"]
+atlas = ExtResource("7_eooo4")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_o8vmx"]
+atlas = ExtResource("8_j460i")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_d3p37"]
+atlas = ExtResource("9_kkimv")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_a2uwt"]
+atlas = ExtResource("10_48kvj")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_8468u"]
+atlas = ExtResource("11_1vivc")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_tf5w7"]
+atlas = ExtResource("12_m6oj2")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_u5d5p"]
+atlas = ExtResource("13_d827u")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_6l1c3"]
+atlas = ExtResource("14_6gfmn")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_3rhky"]
+atlas = ExtResource("15_tvepj")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_o271i"]
+atlas = ExtResource("16_85kp2")
+region = Rect2(0, 0, 100, 100)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_dcjp1"]
+atlas = ExtResource("17_jh14y")
+region = Rect2(0, 0, 100, 100)
+
+[resource]
+resource_name = "PlayerDestruction_Animation"
+length = 1.1333334
+tracks/0/type = "value"
+tracks/0/imported = false
+tracks/0/enabled = true
+tracks/0/path = NodePath("slot_0:unbound")
+tracks/0/interp = 0
+tracks/0/loop_wrap = false
+tracks/0/keys = {
+"times": PackedFloat32Array(0, 0.06666667, 0.13333334, 0.2, 0.26666668, 0.33333334, 0.4, 0.46666667, 0.53333336, 0.6, 0.6666667, 0.73333335, 0.8, 0.8666667, 0.93333334, 1, 1.0666667),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [SubResource("AtlasTexture_5o1ri"), SubResource("AtlasTexture_8ng2u"), SubResource("AtlasTexture_qhxqr"), SubResource("AtlasTexture_8wqfa"), SubResource("AtlasTexture_v61oi"), SubResource("AtlasTexture_83o76"), SubResource("AtlasTexture_cd1gn"), SubResource("AtlasTexture_o8vmx"), SubResource("AtlasTexture_d3p37"), SubResource("AtlasTexture_a2uwt"), SubResource("AtlasTexture_8468u"), SubResource("AtlasTexture_tf5w7"), SubResource("AtlasTexture_u5d5p"), SubResource("AtlasTexture_6l1c3"), SubResource("AtlasTexture_3rhky"), SubResource("AtlasTexture_o271i"), SubResource("AtlasTexture_dcjp1")]
+}
+tracks/1/type = "value"
+tracks/1/imported = false
+tracks/1/enabled = true
+tracks/1/path = NodePath("slot_1:unbound")
+tracks/1/interp = 0
+tracks/1/loop_wrap = false
+tracks/1/keys = {
+"times": PackedFloat32Array(0, 0.06666667, 0.13333334, 0.2, 0.26666668, 0.33333334, 0.4, 0.46666667, 0.53333336, 0.6, 0.6666667, 0.73333335, 0.8, 0.8666667, 0.93333334, 1, 1.0666667),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [Vector2(0.5, 0.5), Vector2(0.5, 0.5), Vector2(0.5, 0.5), Vector2(0.5, 0.5), Vector2(0.5, 0.5), Vector2(0.5, 0.5), Vector2(0.5, 0.5), Vector2(0.5, 0.5), Vector2(0.5, 0.5), Vector2(0.5, 0.5), Vector2(0.5, 0.5), Vector2(0.5, 0.5), Vector2(0.5, 0.5), Vector2(0.5, 0.5), Vector2(0.5, 0.5), Vector2(0.5, 0.5), Vector2(0.5, 0.5)]
+}
+tracks/2/type = "value"
+tracks/2/imported = false
+tracks/2/enabled = true
+tracks/2/path = NodePath("slot_2:unbound")
+tracks/2/interp = 0
+tracks/2/loop_wrap = false
+tracks/2/keys = {
+"times": PackedFloat32Array(0, 0.06666667, 0.13333334, 0.2, 0.26666668, 0.33333334, 0.4, 0.46666667, 0.53333336, 0.6, 0.6666667, 0.73333335, 0.8, 0.8666667, 0.93333334, 1, 1.0666667),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0)]
+}
+metadata/sprite_tracks = PackedInt32Array(0, 1, 2)
+metadata/boundaries = PackedFloat64Array(1.1333334)
+metadata/bindings = Array[Dictionary]([{
+"bezier": false,
+"kind": "sprite",
+"path": "",
+"property": "texture"
+}, {
+"bezier": false,
+"kind": "sprite_geometry",
+"path": "",
+"property": "scale"
+}, {
+"bezier": false,
+"kind": "sprite_geometry",
+"path": "",
+"property": "offset"
+}])

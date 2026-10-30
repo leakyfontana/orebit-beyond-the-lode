@@ -1,0 +1,105 @@
+[gd_resource type="Animation" format=3]
+
+[ext_resource type="Texture2D" path="res://assets/Resources/ExplosionAnimations/Explosion2/1694.png" id="1_365x4"]
+[ext_resource type="Texture2D" path="res://assets/Resources/ExplosionAnimations/Explosion2/1696.png" id="2_uo0ml"]
+[ext_resource type="Texture2D" path="res://assets/Resources/ExplosionAnimations/Explosion2/1698.png" id="3_7d1l7"]
+[ext_resource type="Texture2D" path="res://assets/Resources/ExplosionAnimations/Explosion2/1700.png" id="4_8pu0k"]
+[ext_resource type="Texture2D" path="res://assets/Resources/ExplosionAnimations/Explosion2/1702.png" id="5_uan1c"]
+[ext_resource type="Texture2D" path="res://assets/Resources/ExplosionAnimations/Explosion2/1704.png" id="6_wrads"]
+[ext_resource type="Texture2D" path="res://assets/Resources/ExplosionAnimations/Explosion2/1706.png" id="7_lkkj6"]
+[ext_resource type="Texture2D" path="res://assets/Resources/ExplosionAnimations/Explosion2/1708.png" id="8_te7y8"]
+[ext_resource type="Texture2D" path="res://assets/Resources/ExplosionAnimations/Explosion2/1710.png" id="9_d5p0a"]
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_7v1vf"]
+atlas = ExtResource("1_365x4")
+region = Rect2(0, 0, 50, 50)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_vdh3b"]
+atlas = ExtResource("2_uo0ml")
+region = Rect2(0, 0, 50, 50)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_040f6"]
+atlas = ExtResource("3_7d1l7")
+region = Rect2(0, 0, 50, 50)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_mpacy"]
+atlas = ExtResource("4_8pu0k")
+region = Rect2(0, 0, 50, 50)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_2ea75"]
+atlas = ExtResource("5_uan1c")
+region = Rect2(0, 0, 50, 50)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_hx7sf"]
+atlas = ExtResource("6_wrads")
+region = Rect2(0, 0, 50, 50)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_wv623"]
+atlas = ExtResource("7_lkkj6")
+region = Rect2(0, 0, 50, 50)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_ieq2g"]
+atlas = ExtResource("8_te7y8")
+region = Rect2(0, 0, 50, 50)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_o3ipq"]
+atlas = ExtResource("9_d5p0a")
+region = Rect2(0, 0, 50, 50)
+
+[resource]
+resource_name = "Explosion2_Animation"
+length = 0.45
+tracks/0/type = "value"
+tracks/0/imported = false
+tracks/0/enabled = true
+tracks/0/path = NodePath("slot_0:unbound")
+tracks/0/interp = 0
+tracks/0/loop_wrap = false
+tracks/0/keys = {
+"times": PackedFloat32Array(0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [SubResource("AtlasTexture_7v1vf"), SubResource("AtlasTexture_vdh3b"), SubResource("AtlasTexture_040f6"), SubResource("AtlasTexture_mpacy"), SubResource("AtlasTexture_2ea75"), SubResource("AtlasTexture_hx7sf"), SubResource("AtlasTexture_wv623"), SubResource("AtlasTexture_ieq2g"), SubResource("AtlasTexture_o3ipq")]
+}
+tracks/1/type = "value"
+tracks/1/imported = false
+tracks/1/enabled = true
+tracks/1/path = NodePath("slot_1:unbound")
+tracks/1/interp = 0
+tracks/1/loop_wrap = false
+tracks/1/keys = {
+"times": PackedFloat32Array(0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [Vector2(1, 1), Vector2(1, 1), Vector2(1, 1), Vector2(1, 1), Vector2(1, 1), Vector2(1, 1), Vector2(1, 1), Vector2(1, 1), Vector2(1, 1)]
+}
+tracks/2/type = "value"
+tracks/2/imported = false
+tracks/2/enabled = true
+tracks/2/path = NodePath("slot_2:unbound")
+tracks/2/interp = 0
+tracks/2/loop_wrap = false
+tracks/2/keys = {
+"times": PackedFloat32Array(0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0)]
+}
+metadata/sprite_tracks = PackedInt32Array(0, 1, 2)
+metadata/boundaries = PackedFloat64Array(0.45)
+metadata/bindings = Array[Dictionary]([{
+"bezier": false,
+"kind": "sprite",
+"path": "",
+"property": "texture"
+}, {
+"bezier": false,
+"kind": "sprite_geometry",
+"path": "",
+"property": "scale"
+}, {
+"bezier": false,
+"kind": "sprite_geometry",
+"path": "",
+"property": "offset"
+}])

@@ -1,0 +1,168 @@
+[gd_resource type="Animation" format=3]
+
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P1StickAttack/1878.png" id="1_wyqsg"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P1StickAttack/1880.png" id="2_ndwtg"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P1StickAttack/1882.png" id="3_hvh4p"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P1StickAttack/1884.png" id="4_i4rnj"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P1StickAttack/1892.png" id="5_jb8a8"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P1StickAttack/1894.png" id="6_0744e"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P1StickAttack/1896.png" id="7_m6qof"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P1StickAttack/1898.png" id="8_t5tmq"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P1StickAttack/1900.png" id="9_k10rt"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P1StickAttack/1903.png" id="10_8dv4u"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P1StickAttack/1906.png" id="11_cqeam"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P1StickAttack/1909.png" id="12_67xep"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P1StickAttack/1912.png" id="13_seyxt"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P1StickAttack/1915.png" id="14_bfpcv"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P1StickAttack/1917.png" id="15_gs3jw"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P1StickAttack/1919.png" id="16_t05se"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P1StickAttack/1921.png" id="17_ykf7u"]
+[ext_resource type="Texture2D" path="res://assets/Resources/BossAnimation/P1StickAttack/1923.png" id="18_6afxd"]
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_2en3i"]
+atlas = ExtResource("1_wyqsg")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_fg8rq"]
+atlas = ExtResource("2_ndwtg")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_1yme1"]
+atlas = ExtResource("3_hvh4p")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_tcxi7"]
+atlas = ExtResource("4_i4rnj")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_njr8k"]
+atlas = ExtResource("5_jb8a8")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_eu1p5"]
+atlas = ExtResource("6_0744e")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_dmvd8"]
+atlas = ExtResource("7_m6qof")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_dqrtn"]
+atlas = ExtResource("8_t5tmq")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_ty0q7"]
+atlas = ExtResource("9_k10rt")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_55j0c"]
+atlas = ExtResource("10_8dv4u")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_crgxc"]
+atlas = ExtResource("11_cqeam")
+region = Rect2(0, 0, 200, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_drxne"]
+atlas = ExtResource("12_67xep")
+region = Rect2(0, 0, 200, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_wjyto"]
+atlas = ExtResource("13_seyxt")
+region = Rect2(0, 0, 200, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_yuii5"]
+atlas = ExtResource("14_bfpcv")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_bi03y"]
+atlas = ExtResource("15_gs3jw")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_yqmxl"]
+atlas = ExtResource("16_t05se")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_60kfi"]
+atlas = ExtResource("17_ykf7u")
+region = Rect2(0, 0, 150, 200)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_4abi2"]
+atlas = ExtResource("18_6afxd")
+region = Rect2(0, 0, 150, 200)
+
+[resource]
+resource_name = "P1StickAttack_Anim"
+length = 1.8000001
+loop_mode = 1
+tracks/0/type = "value"
+tracks/0/imported = false
+tracks/0/enabled = true
+tracks/0/path = NodePath("slot_0:unbound")
+tracks/0/interp = 0
+tracks/0/loop_wrap = false
+tracks/0/keys = {
+"times": PackedFloat32Array(0, 1, 1.3, 1.8000001),
+"transitions": PackedFloat32Array(1, 1, 1, 1),
+"update": 0,
+"values": [false, true, false, false]
+}
+tracks/1/type = "value"
+tracks/1/imported = false
+tracks/1/enabled = true
+tracks/1/path = NodePath("slot_1:unbound")
+tracks/1/interp = 0
+tracks/1/loop_wrap = false
+tracks/1/keys = {
+"times": PackedFloat32Array(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [SubResource("AtlasTexture_2en3i"), SubResource("AtlasTexture_fg8rq"), SubResource("AtlasTexture_1yme1"), SubResource("AtlasTexture_tcxi7"), SubResource("AtlasTexture_njr8k"), SubResource("AtlasTexture_eu1p5"), SubResource("AtlasTexture_dmvd8"), SubResource("AtlasTexture_dqrtn"), SubResource("AtlasTexture_ty0q7"), SubResource("AtlasTexture_55j0c"), SubResource("AtlasTexture_crgxc"), SubResource("AtlasTexture_drxne"), SubResource("AtlasTexture_wjyto"), SubResource("AtlasTexture_yuii5"), SubResource("AtlasTexture_bi03y"), SubResource("AtlasTexture_yqmxl"), SubResource("AtlasTexture_60kfi"), SubResource("AtlasTexture_4abi2")]
+}
+tracks/2/type = "value"
+tracks/2/imported = false
+tracks/2/enabled = true
+tracks/2/path = NodePath("slot_2:unbound")
+tracks/2/interp = 0
+tracks/2/loop_wrap = false
+tracks/2/keys = {
+"times": PackedFloat32Array(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573), Vector2(0.71428573, 0.71428573)]
+}
+tracks/3/type = "value"
+tracks/3/imported = false
+tracks/3/enabled = true
+tracks/3/path = NodePath("slot_3:unbound")
+tracks/3/interp = 0
+tracks/3/loop_wrap = false
+tracks/3/keys = {
+"times": PackedFloat32Array(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0)]
+}
+metadata/sprite_tracks = PackedInt32Array(1, 2, 3)
+metadata/boundaries = PackedFloat64Array(0, 1, 1.3, 1.8000001)
+metadata/bindings = Array[Dictionary]([{
+"bezier": false,
+"kind": "transform",
+"path": "StickAttackHitbox",
+"property": "visible"
+}, {
+"bezier": false,
+"kind": "sprite",
+"path": "",
+"property": "texture"
+}, {
+"bezier": false,
+"kind": "sprite_geometry",
+"path": "",
+"property": "scale"
+}, {
+"bezier": false,
+"kind": "sprite_geometry",
+"path": "",
+"property": "offset"
+}])
