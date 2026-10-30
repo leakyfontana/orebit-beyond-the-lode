@@ -9,6 +9,7 @@ var axes: Dictionary = {}
 var keys: Dictionary = {}
 var states: FileAccess
 var random_states: FileAccess
+var physics_states: FileAccess
 var capture_pending := false
 var finished := false
 var render_delta := 1.0 / 60.0
@@ -45,6 +46,11 @@ func configure(game: Node, specification: Dictionary, directory: String) -> void
 	if states == null:
 		push_error("Cannot open replay state output: " + directory)
 		host.get_tree().quit(1)
+	if bool(specification.get("capture_physics", false)) or OS.get_environment("MOTHERLOAD_PHYSICS_TRACE") == "1":
+		physics_states = FileAccess.open(directory.path_join("physics-states.jsonl"), FileAccess.WRITE)
+		if physics_states == null:
+			_fail("Cannot open replay physics output: " + directory)
+			return
 	if bool(scenario.get("capture_random", false)):
 		random_states = FileAccess.open(directory.path_join("random-states.jsonl"), FileAccess.WRITE)
 		if random_states == null:
@@ -69,7 +75,25 @@ func pre_tick() -> void:
 				event.pressed = bool(action.pressed)
 				if host.ui != null:
 					host.ui._input(event)
-			"invoke": _invoke(action)
+			"joypad_button":
+				var event := InputEventJoypadButton.new()
+				event.device = int(action.get("device", 0))
+				event.button_index = int(action.button)
+				event.pressed = bool(action.pressed)
+				Input.parse_input_event(event)
+			"joypad_motion":
+				var event := InputEventJoypadMotion.new()
+				event.device = int(action.get("device", 0))
+				event.axis = int(action.axis)
+				event.axis_value = float(action.value)
+				Input.parse_input_event(event)
+			"invoke":
+				var trace_ui := physics_states != null and str(action.target) in ["FuelShopManager", "TransmissionManager"]
+				if trace_ui:
+					_write_physics_event("before_" + str(action.method), str(action.target))
+				_invoke(action)
+				if trace_ui:
+					_write_physics_event("after_" + str(action.method), str(action.target))
 			"checkpoint": _checkpoint(str(action.get("argument", "")))
 			_: _fail("Unsupported recorded input: " + str(action.kind))
 		if finished:
@@ -168,6 +192,8 @@ func _fail(message: String) -> void:
 	states.close()
 	if random_states != null:
 		random_states.close()
+	if physics_states != null:
+		physics_states.close()
 	host.audio.finish_capture()
 	host.get_tree().quit(1)
 
@@ -192,6 +218,9 @@ func post_tick() -> void:
 	state.player_velocity = [velocity.x, velocity.y] if host.player_alive else null
 	states.store_line(JSON.stringify(state, "", true, true))
 	states.flush()
+	if physics_states != null:
+		physics_states.store_line(JSON.stringify(_physics_snapshot(), "", true, true))
+		physics_states.flush()
 	if random_states != null:
 		random_states.store_line(JSON.stringify({"frame": frame, "state": host.unity_random.get_state()}))
 		random_states.flush()
@@ -204,7 +233,122 @@ func post_tick() -> void:
 		states.close()
 		if random_states != null:
 			random_states.close()
+		if physics_states != null:
+			physics_states.close()
 		_finish()
+
+func _physics_snapshot() -> Dictionary:
+	var result := {"frame": frame, "boss_p1": null, "boss_p2": null}
+	if host.player_alive:
+		var player_pose: Transform2D = PhysicsServer2D.body_get_state(host.body.get_rid(), PhysicsServer2D.BODY_STATE_TRANSFORM)
+		var player_position: Vector2 = player_pose.origin / PortBoss.UNITS
+		var player_velocity: Vector2 = PhysicsServer2D.body_get_state(host.body.get_rid(), PhysicsServer2D.BODY_STATE_LINEAR_VELOCITY) / PortBoss.UNITS
+		result.physics_position = [player_position.x, player_position.y]
+		result.transform_position = [host.player_position.x, host.player_position.y]
+		result.velocity = [player_velocity.x, player_velocity.y]
+		result.sleeping = PhysicsServer2D.body_get_state(host.body.get_rid(), PhysicsServer2D.BODY_STATE_SLEEPING)
+		result.boss_overlap_queries = _physics_boss_overlaps(player_pose)
+		result.player_state = {
+			"fuel": host.data.player_fuel, "max_fuel": host.data.player_max_fuel,
+			"paused": host.paused, "tree_paused": host.get_tree().paused,
+			"in_shop": host.player.is_in_shop, "frozen": host.body.freeze,
+			"layer": host.body.collision_layer, "mask": host.body.collision_mask,
+			"space": PhysicsServer2D.body_get_space(host.body.get_rid()).get_id(),
+			"dig_bottom": host.player.is_digging_bottom, "dig_side": host.player.is_digging_side,
+			"target": [host.player._block_target.x, host.player._block_target.y],
+			"move": [host.player.moveX, host.player.moveY],
+			"physics_delta": host.player._physics_delta, "render_delta": host.player._frame_delta,
+			"colliders": _physics_colliders(host.body, player_pose, false, host.body.collision_mask != 0),
+		}
+		result.floor_cells = _physics_floor_cells(player_position)
+		result.wall_usec = Time.get_ticks_usec()
+		if host.terrain != null:
+			result.terrain_space = PhysicsServer2D.body_get_space(host.terrain.physics_body.get_rid()).get_id()
+	if host.boss == null:
+		return result
+	for phase in host.boss.phases:
+		var node: Node2D = phase.node
+		var body: RigidBody2D = phase.body
+		var pose: Transform2D = PhysicsServer2D.body_get_state(body.get_rid(), PhysicsServer2D.BODY_STATE_TRANSFORM)
+		var position: Vector2 = pose.origin / PortBoss.UNITS
+		var velocity: Vector2 = PhysicsServer2D.body_get_state(body.get_rid(), PhysicsServer2D.BODY_STATE_LINEAR_VELOCITY) / PortBoss.UNITS
+		var visual_position: Vector2 = node.global_position / PortBoss.UNITS
+		var colliders := _physics_colliders(body, pose, false, body.collision_layer != 0)
+		for attack in host.boss.attacks:
+			if attack.node == node or node.is_ancestor_of(attack.node):
+				colliders.append_array(_physics_colliders(attack.area, attack.area.global_transform, true, attack.area.collision_mask != 0))
+		var tag: String = host.bridge.scene.game_objects[phase.id].tag
+		result["boss_p1" if tag == "BossP1" else "boss_p2"] = {
+			"name": str(node.name), "tag": tag, "source_file_id": str(phase.id),
+			"active_self": node.visible, "active_in_hierarchy": node.is_visible_in_tree(),
+			"transform_position": [visual_position.x, visual_position.y],
+			"local_scale": [node.scale.x, node.scale.y],
+			"body": {"position": [position.x, position.y], "velocity": [velocity.x, velocity.y],
+				"body_type": ("Static" if body.freeze_mode == RigidBody2D.FREEZE_MODE_STATIC else "Kinematic") if body.freeze else "Dynamic",
+				"simulated": body.is_inside_tree(), "sleeping": PhysicsServer2D.body_get_state(body.get_rid(), PhysicsServer2D.BODY_STATE_SLEEPING)},
+			"colliders": colliders,
+			"animator": {"source_state": phase.animator.current_state} if phase.animator != null else null,
+		}
+	return result
+
+func _physics_colliders(owner: CollisionObject2D, pose: Transform2D, trigger: bool, enabled: bool) -> Array:
+	var colliders: Array = []
+	for child in owner.get_children():
+		if not child is CollisionShape2D:
+			continue
+		var active: bool = enabled and not child.disabled
+		var bounds: Rect2 = pose * child.transform * child.shape.get_rect() if active else Rect2()
+		var center: Vector2 = bounds.get_center() / PortBoss.UNITS
+		var size: Vector2 = bounds.size
+		colliders.append({"type": child.shape.get_class(), "enabled": active, "is_trigger": trigger,
+			"center": [center.x, center.y], "size": [size.x, size.y]})
+	return colliders
+
+func _write_physics_event(stage: String, target: String) -> void:
+	var snapshot := _physics_snapshot()
+	snapshot.event = stage
+	snapshot.event_target = target
+	physics_states.store_line(JSON.stringify(snapshot, "", true, true))
+	physics_states.flush()
+
+func _physics_floor_cells(position: Vector2) -> Array:
+	var cells: Array = []
+	var center := Vector2i(floori(position.x), ceili(-position.y))
+	var query := PhysicsPointQueryParameters2D.new()
+	query.collision_mask = 1
+	for x in range(center.x - 1, center.x + 2):
+		for y in range(center.y - 1, center.y + 2):
+			if x < 0 or x >= host.data.earthWidth or y < 0 or y >= host.data.earthHeight:
+				continue
+			var solid := str(host.world.getBlockData(x, y).get("layer", "Traversable")) != "Traversable"
+			query.position = Vector2(x + 0.5, y - 0.5)
+			var hits: Array = host.body.get_world_2d().direct_space_state.intersect_point(query)
+			cells.append({"cell": [x, y], "solid": solid, "physics_hits": hits.size()})
+	return cells
+
+
+func _physics_boss_overlaps(player_pose: Transform2D) -> Array:
+	var hits: Array = []
+	for child in host.body.get_children():
+		if not child is CollisionShape2D or child.disabled:
+			continue
+		if child.shape is SegmentShape2D or child.shape is ConcavePolygonShape2D:
+			continue # Box2D has no edge-edge query manifold; probe filled shapes.
+		var query := PhysicsShapeQueryParameters2D.new()
+		query.shape = child.shape
+		query.transform = player_pose * child.transform
+		query.collision_mask = 1 | PortBoss.HURTBOX_LAYER
+		query.collide_with_areas = true
+		for hit in host.body.get_world_2d().direct_space_state.intersect_shape(query):
+			if host.boss == null:
+				continue
+			for phase in host.boss.phases:
+				if hit.collider == phase.body:
+					hits.append({"source_file_id": str(phase.id), "kind": "solid", "shape": hit.shape})
+				for attack in host.boss.attacks:
+					if hit.collider == attack.area and (attack.node == phase.node or phase.node.is_ancestor_of(attack.node)):
+						hits.append({"source_file_id": str(phase.id), "kind": "trigger", "shape": hit.shape})
+	return hits
 
 func _capture(number: int) -> void:
 	await RenderingServer.frame_post_draw

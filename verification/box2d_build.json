@@ -1,5 +1,5 @@
 {
-  "purpose": "Pinned source-built Godot 4.7.2 physics backend for macOS ARM64, Windows x86-64 and Android ARM64. All five native platform scenarios execute; full original-game parity remains unverified.",
+  "purpose": "Pinned source-built Godot 4.7.2 physics backend for macOS ARM64, Windows x86-64, Android ARM64 and single-threaded WebAssembly. Full original-game parity remains unverified.",
   "sources": {
     "adapter": {
       "url": "https://github.com/appsinacup/godot-box2d.git",
@@ -72,9 +72,9 @@
     "git -C verification/tools/godot-cpp-10 apply ../../godot-cpp-msvc-conformance.patch"
   ],
   "build_commands_from_repository_root": {
-    "macos_arm64": "env PATH=\"/usr/bin:$PATH\" verification/tools/asset-inspection/bin/scons -C verification/tools/box2d-source platform=macos arch=arm64 target=template_release precision=single",
+    "macos_arm64": "env PATH=\"/usr/bin:$PATH\" verification/tools/asset-inspection/bin/python -m SCons -C verification/tools/box2d-source platform=macos arch=arm64 target=template_release precision=single",
     "windows_x86_64_native_developer_shell": "scons -C verification/tools/box2d-source platform=windows arch=x86_64 target=template_release precision=single msvc_version=14.3 \"msvc_setup_script=C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Auxiliary/Build/vcvars64.bat\"",
-    "android_arm64": "ANDROID_HOME=\"$HOME/Library/Android/sdk\" PATH=/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin verification/tools/asset-inspection/bin/scons -C verification/tools/box2d-source platform=android arch=arm64 target=template_release precision=single -j8",
+    "android_arm64": "ANDROID_HOME=\"$HOME/Library/Android/sdk\" PATH=/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin verification/tools/asset-inspection/bin/python -m SCons -C verification/tools/box2d-source platform=android arch=arm64 target=template_release precision=single -j8",
     "web_wasm32": "python3 verification/build_web.py"
   },
   "build_requirements": [
@@ -98,12 +98,16 @@
     "Honor the one-way direction argument in body-shape state, solver filtering and motion queries.",
     "Build two-point convex inputs, SegmentShape2D and ConcavePolygonShape2D endpoint pairs as actual two-sided Box2D edges; transform edges without adding artificial polygon thickness or closing disconnected segments.",
     "Release owned template shapes and temporary conversion buffers.",
-    "Use the original game's 50 pixels per Unity meter so Box2D slop, polygon radius, sleeping and speed limits scale consistently.",
+    "Use one Godot world unit per original Unity metre, with original Box2D slop, polygon radius, sleeping and speed limits; camera and resource scaling preserve pixel presentation.",
     "Accumulate central forces with ApplyForceToCenter rather than converting them to immediate impulses that a subsequent velocity assignment erases.",
     "Maintain fixture shape indices after removal, destroy fixtures through owned handles, reference-count logical sensor shape pairs, and detach space/query lists before object destruction.",
     "Reset pending monitor events by observer category and re-register existing overlap pairs when callbacks change, without dispatching null callbacks.",
     "Use radius-aware stationary query/shape overlap instead of moving-sweep TOI's reduced separation target; preserve polygon-skin sensor contact semantics without changing moving sweeps.",
-    "Use fixture body's world transform once in shape queries: fixture vertices already contain their collider-local translation/rotation, so applying the saved local transform again displaces terrain fixtures."
+    "Use fixture body's world transform once in shape queries: fixture vertices already contain their collider-local translation/rotation, so applying the saved local transform again displaces terrain fixtures.",
+    "Synchronize only an edited fixture's proxy bounds after local geometry baking, preserving fixture/contact identity and scheduling new broad-phase pairs.",
+    "Create BODY_MODE_STATIC as b2_staticBody, matching subsequent set_mode behavior and avoiding false kinematic velocity when static boss geometry moves.",
+    "Scale circle/capsule end-cap radius using absolute uniform scale, including reflected actors; keep circle centers and single-fixture synchronization unchanged.",
+    "Refilter existing owned fixtures when collision layer/mask actually changes, so stationary overlapping bodies enter/leave contacts without moving or rebuilding fixture identity."
   ],
   "remaining_upstream_limitations": [
     "No double-precision Box2D backend; evaluate precision=single only.",
@@ -117,9 +121,9 @@
     "Existing concave packed-float data input is not implemented; use PackedVector2Array endpoint pairs."
   ],
   "evidence": {
-    "binding_generation": "Bindings generated from the exact evaluated 4.7.2 API and compiled on all three target architectures.",
-    "compilation": "macOS ARM64, Windows x86-64 and Android ARM64 template_release compiled successfully. Windows uses approved side-by-side MSVC19.44/v143; Android uses the approved pinned NDK.",
-    "runtime": "Cycles45/52 complete all5 macOS, interactive Windows and Pixel scenarios without engine errors; Windows game0/runner0/errors[]/warnings[] and task cleanup pass. Cycle51 passes all6 actual stationary skin/body-offset/child-offset overlap regression cases. Corrected source/native rotor RNG matches through410, but later draws, exact state and shop/boss timing still differ. Windows exported templates do not run the external standalone script; no standalone Windows regression pass inferred. Exact acceptance remains unverified.",
+    "binding_generation": "Bindings generated from the exact evaluated 4.7.2 API and compiled for macOS ARM64, Windows x86-64, Android ARM64 and WebAssembly.",
+    "compilation": "Cycles132/142/145 rebuild all four backends with b2_lengthUnitsPerMeter1 and the exact Godot4.7.2 API. Windows uses approved MSVC19.44/v143; Android uses pinned NDK28.1; Web uses installed Emscripten6.0.13. Existing asset-inspection Python -m SCons avoids the unrelated Python3.15 environment without SCons. Current macOS library SHA256b5aac70f3b98c20512de771a95aa9d539246f75e20dd989da0797e6271b9eea2 and Windows45e0253479860e077b03cee205fbd362cfc741960fe9ff9732c98829955ad553. Do not mix earlier50-unit libraries/PCKs with current metre-scale resources.",
+    "runtime": "All six native boundary suites pass133; metre-scale macOS core134-138, actual Windows eight-case155 and deterministic Android eight-case157/161 complete without engine errors. Corrected beta8 actual packaged Mac/Windows/Android controller1800/fullboss480/refill1400 pass169; Windows game0/runner0/warnings[], Android native completion/no OS exit inference. Both fuel-report branches land safely. Strict full movement/shops/boss/menu153 have zero event failures but fail exact state at frames75/173; no tolerance or offset. Installed private iOS PWA and regular Safari169 load coherent37306096-byte Orebit pack/all four PCK+WASM URLs; exact882058-byte save/hash remains unchanged, including Continue/pause165. Controller regression168 passes77/77 and filled-boss overlap is corrected; controller final states match all three native platforms but Windows has three tiny complete-trace velocity differences166. Physical Xbox remains unavailable/unverified (Mac joypads[], all four Windows XInput slots1167). Earlier Android76/77 realtime fixtures are not deterministic evidence; exported Windows templates do not support standalone external-script passes. Exact acceptance remains unverified; authorized verification stops at170.",
     "windows_binding_flags_patch": "verification/godot-cpp-msvc-conformance.patch; apply to pinned godot-cpp in addition to the adapter patch. Provides consistent C++17 conformance flags and explicit existing compiler-instance selection; no linker errors are suppressed."
   }
 }

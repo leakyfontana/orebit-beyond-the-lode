@@ -1,6 +1,8 @@
 class_name TouchControls
 extends Control
 
+signal hud_layout_changed
+
 var host: Node
 var _touch_enabled := false
 var _focused := true
@@ -10,6 +12,7 @@ var _joystick_held := false
 var _restore_mouse_touch := false
 var _previous_mouse_touch := false
 var _buttons: Array[TouchScreenButton] = []
+var _hud_safe_rect := Rect2()
 @onready var _joystick: VirtualJoystick = $Joystick
 @onready var _items: Node2D = $Items
 
@@ -110,6 +113,10 @@ func _item_pressed(button: TouchScreenButton) -> void:
 func _item_released(button: TouchScreenButton) -> void:
 	button.modulate = Color.WHITE
 
+func get_hud_safe_rect() -> Rect2:
+	# Empty on desktop: the original source HUD must retain its authored layout.
+	return _hud_safe_rect if _touch_enabled else Rect2()
+
 func _layout_controls() -> void:
 	if not is_node_ready() or size.x <= 0.0 or size.y <= 0.0:
 		return
@@ -138,3 +145,9 @@ func _layout_controls() -> void:
 		button.scale = Vector2.ONE * unit
 		# Each original 50px icon is centered within a 104px touch cell.
 		button.position = Vector2(float(index % 3) * cell, float(index / 3) * cell) + Vector2.ONE * (cell - 50.0 * unit) * 0.5
+	# Reserve the whole bottom dock, not just the icon pixels: touch targets
+	# and the joystick occupy this band even where their artwork is transparent.
+	var dock_top := minf(_joystick.position.y, _items.position.y)
+	var hud_origin := safe.position + Vector2.ONE * margin
+	_hud_safe_rect = Rect2(hud_origin, Vector2(safe.end.x - margin, dock_top - margin) - hud_origin)
+	hud_layout_changed.emit()

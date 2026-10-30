@@ -1,8 +1,9 @@
 class_name PortBoss
 extends Node
 
-const UNITS := Vector2(50, -50)
+const UNITS := Vector2(1, -1)
 const UNITY_FIXED_DELTA := 0.02
+const HURTBOX_LAYER := 8
 var host: Node
 var bridge: SceneBridge
 var phases: Array[Dictionary] = []
@@ -38,21 +39,31 @@ func configure(main: Node) -> void:
 			phases.append({"id": id, "node": root, "properties": p, "animator": null,
 				"hp": float(p.max_hp), "invincible": 0.0, "frames": 0,
 				"left": bool(p.is_facing_left), "collisions": true, "behaviors": [], "behavior_generation": 0,
-				"time_left": 0.0, "duration": 0.0, "height": 0.0, "velocity": Vector2.ZERO,
-				"ground": 0.0, "bodies": []})
+				"time_left": 0.0, "duration": 0.0, "height": 0.0,
+				"ground": 0.0, "body": null, "solid_shapes": [], "move_target": null})
 	phases.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return bridge.scene.game_objects[a.id].tag < bridge.scene.game_objects[b.id].tag)
 	for i in range(phases.size()):
 		var d := phases[i]
-		for component in bridge.components(d.id):
-			if str(component.get("type", "")).ends_with("Collider2D") and not bool(component.properties.get("m_IsTrigger", false)):
-				var body := _static_body(d.node, component)
-				if body != null:
-					d.bodies.append(body)
+		_create_phase_body(d)
 		_set_collisions(d, false)
 	for id in bridge.scene.game_objects:
 		var p := bridge.properties(id, "BossAttackBehavior")
 		if not p.is_empty():
-			attacks.append({"node": bridge.node(id), "shapes": _colliders(bridge.components(id), true), "damage": int(p.damage), "inside": false, "owner": id})
+			var attack := {"node": bridge.node(id), "damage": int(p.damage), "owner": id, "area": null}
+			var area := Area2D.new()
+			area.collision_layer = 0
+			area.collision_mask = 0
+			var tag: String = bridge.scene.game_objects[id].tag
+			area.monitorable = tag in ["BossP1", "BossP2"]
+			attack.node.add_child(area)
+			for s in _colliders(bridge.components(id), true):
+				var collision := CollisionShape2D.new()
+				collision.shape = s.shape
+				collision.transform = s.transform
+				area.add_child(collision)
+			attack.area = area
+			area.body_entered.connect(_attack_entered.bind(attack))
+			attacks.append(attack)
 	var player_id: String = bridge.component_owner(phases[0].properties.player) if not phases.is_empty() else ""
 	player_shapes = _colliders(bridge.components(player_id), false)
 	if not trigger.is_empty():
@@ -80,6 +91,7 @@ func _enable_phase(index: int) -> void:
 	d.node.visible = true
 	d.hp = float(d.properties.max_hp)
 	_set_collisions(d, true)
+	d.body.freeze = int(bridge.properties(d.id, "Rigidbody2D").get("m_BodyType", 1)) != 0
 	if index == 0:
 		bridge.set_active(d.properties.boss_health_object, true)
 	else:
@@ -91,6 +103,8 @@ func _enable_phase(index: int) -> void:
 	animator.animation_event.connect(_event.bind(index))
 	animator.state_entered.connect(_state_enter.bind(index))
 	animator.state_exited.connect(_state_exit.bind(index))
+	d.animation_start_frame = Engine.get_process_frames()
+	animator.advance(0.0)
 
 func tick(delta: float) -> void:
 	if host.paused:
@@ -101,11 +115,10 @@ func tick(delta: float) -> void:
 			if is_instance_valid(projectile.body):
 				projectile.body.queue_free()
 			projectiles.erase(projectile)
-		elif projectile.animator != null:
-			projectile.animator.advance(delta)
 	if not active or phase < 0:
 		return
 	var d := phases[phase]
+	_sync_phase_pose(d)
 	if d.invincible > 0:
 		d.invincible = _f32(d.invincible - _f32(delta))
 		d.frames -= 1
@@ -118,11 +131,11 @@ func tick(delta: float) -> void:
 			visual.modulate.a = 1.0
 			d.frames = 0
 	var behavior_generation: int = d.behavior_generation
-	if d.animator != null:
+	if d.animator != null and d.animation_start_frame != Engine.get_process_frames():
 		d.animator.advance(delta)
 	# Unity calls OnStateEnter/OnStateExit instead of OnStateUpdate on those
 	# evaluation frames. Never charge the newly entered behavior a full delta.
-	if d.behavior_generation == behavior_generation:
+	if d.behavior_generation == behavior_generation and d.animation_start_frame != Engine.get_process_frames():
 		for behavior in d.behaviors:
 			_behavior_tick(d, behavior, delta)
 			if phases[phase] != d:
@@ -135,45 +148,39 @@ func tick(delta: float) -> void:
 				laser_animator.advance(delta)
 	for frozen in frozen_particle_roots:
 		frozen.node.global_position.y = frozen.y
+	_refresh_attack_monitors()
 
 func physics_tick(_delta: float) -> void:
 	for projectile in projectiles:
 		projectile.body.freeze = host.paused
 	if host.paused or not host.player_alive:
 		return
-	for attack in attacks:
-		var enabled: bool = active and attack.node != null and attack.node.is_visible_in_tree()
-		if phase >= 0 and attack.owner == phases[phase].id:
-			enabled = enabled and phases[phase].collisions
-		var touching := enabled and _hits_player(attack.node, attack.shapes)
-		if touching and not attack.inside:
-			host.damage_player(attack.damage)
-		attack.inside = touching
+	if active and phase >= 0:
+		var d := phases[phase]
+		if d.move_target != null:
+			# MovePosition is consumed by the next native fixed step, not a
+			# render-frame teleport of a StaticBody2D's parent.
+			d.body.global_position = d.move_target
+			d.move_target = null
+	_refresh_attack_monitors()
 	for p in projectiles:
 		var touching := _hits_player(p.node, p.shapes)
 		if touching and not p.inside:
 			host.damage_player(p.damage)
 		p.inside = touching
 
-func damage_from_explosion(position_unity: Vector2, range: float, damage: int) -> bool:
+func damage_from_attack(collider: Node2D, damage: int) -> bool:
 	if not active or phase < 0:
 		return false
 	var d := phases[phase]
 	if not d.collisions or d.invincible > 0 or d.hp <= 0:
 		return false
-	var explosion := RectangleShape2D.new()
-	explosion.size = Vector2.ONE * range * 100.0
-	var hit := false
-	# Arm is tagged BossP2 too; its trigger forwards damage to the phase's methods.
-	for id in bridge.scene.game_objects:
-		if bridge.scene.game_objects[id].tag != ("BossP1" if phase == 0 else "BossP2"):
-			continue
-		var root: Node2D = bridge.node(id)
-		if root == null or not root.is_visible_in_tree():
-			continue
-		for shape in _colliders(bridge.components(id), true):
-			if explosion.collide(Transform2D(0, position_unity * UNITS), shape.shape, root.global_transform * shape.transform):
-				hit = true
+	var hit: bool = collider == d.body
+	var tag := "BossP1" if phase == 0 else "BossP2"
+	for attack in attacks:
+		if collider == attack.area and bridge.scene.game_objects[attack.owner].tag == tag:
+			hit = true
+			break
 	if not hit:
 		return false
 	d.hp = maxf(0.0, d.hp - damage)
@@ -196,7 +203,8 @@ func _state_enter(_name: String, behaviors: Array, index: int) -> void:
 				d.duration = _f32(float(p.intro_time))
 				d.time_left = d.duration
 				d.height = _height(d) * 1.5
-				d.node.position.y += d.height * 50.0
+				d.node.position.y += d.height
+				_teleport_phase(d)
 				host.audio.PlaySoundOneShot("P1Laugh")
 				_particles(d, "sustained_particles", true)
 			"P1BossDeathBehavior":
@@ -208,11 +216,11 @@ func _state_enter(_name: String, behaviors: Array, index: int) -> void:
 				_particles(d, "sustained_particles", true)
 			"P2IntroBehavior":
 				_set_collisions(d, false)
-				d.ground = d.node.global_position.y / -50.0 + _height(d) * 0.5 + 0.05
+				d.ground = -d.node.global_position.y + _height(d) * 0.5 + 0.05
 				# The source mutates this field without resetting it on re-entry.
 				if not d.has("jump_time_left"):
 					d.jump_time_left = _f32(float(p.time_until_collision_reactivation))
-				d.velocity = Vector2(float(p.jump_force_x) * (-1 if d.left else 1), float(p.jump_force_y)) * UNITY_FIXED_DELTA / float(bridge.properties(d.id, "Rigidbody2D").get("m_Mass", 1))
+				d.body.apply_central_force(Vector2(float(p.jump_force_x) * (-1 if d.left else 1), float(p.jump_force_y)) * UNITS)
 				host.audio.PlaySoundOneShot("P2Breakout")
 				host.ui.displayTransmission(13)
 				_particles(d, "burst_particles", true)
@@ -233,28 +241,31 @@ func _behavior_tick(d: Dictionary, b: Dictionary, delta: float) -> void:
 	match str(b.get("script", "")):
 		"BossMovement", "P2BossMovementBehavior":
 			var target := 0.5 if d.left else 35.5
-			var x: float = d.node.global_position.x / 50.0
+			var x: float = d.node.global_position.x
 			if absf(target - x) <= 0.1:
 				_flip(d)
-			d.node.global_position.x = move_toward(x, target, float(p.speed) * delta) * 50.0
+			d.move_target = Vector2(move_toward(x, target, float(p.speed) * delta), d.node.global_position.y)
 		"P1BossIntro":
 			d.time_left = _f32(d.time_left - _f32(delta))
-			d.node.position.y -= d.height * 50.0 * delta / d.duration
+			d.node.position.y -= d.height * delta / d.duration
+			_teleport_phase(d)
 			if d.time_left <= 0.0:
 				d.animator.pulse("IntroIsFinished")
 				host.ui.displayTransmission(12)
 		"P1BossDeathBehavior":
 			d.time_left = _f32(d.time_left - _f32(delta))
-			d.node.position.y += d.height * 50.0 * delta / d.duration
+			d.node.position.y += d.height * delta / d.duration
+			_teleport_phase(d)
 			if d.time_left <= 0.0:
 				_finish_death(0)
 		"P2IntroBehavior":
-			d.velocity.y -= 9.81 * float(bridge.properties(d.id, "Rigidbody2D").get("m_GravityScale", 0.7)) * delta
-			d.node.position += d.velocity * UNITS * delta
 			if d.jump_time_left <= 0.0:
-				if d.node.global_position.y / -50.0 - _height(d) * 0.5 <= d.ground:
+				if -d.node.global_position.y - _height(d) * 0.5 <= d.ground:
 					d.animator.pulse("FinishedJumping")
-					d.velocity = Vector2.ZERO
+					d.body.linear_velocity = Vector2.ZERO
+					d.body.angular_velocity = 0.0
+					d.body.freeze_mode = RigidBody2D.FREEZE_MODE_KINEMATIC
+					d.body.freeze = true
 					_turn(d)
 					_particles(d, "burst_particles", true)
 			else:
@@ -299,6 +310,7 @@ func _finish_death(index: int) -> void:
 		# copies P1's X position; do not turn against the already-moved phase.
 		_enable_phase(1)
 		phases[1].node.global_position.x = d.node.global_position.x
+		_teleport_phase(phases[1])
 		bridge.set_active(d.properties.p1_boss_head, false)
 		bridge.set_active(d.properties.p2_boss_head, true)
 		d.node.visible = false
@@ -313,9 +325,10 @@ func _finish_death(index: int) -> void:
 func _flip(d: Dictionary) -> void:
 	d.node.scale.x *= -1
 	d.left = not d.left
+	_sync_phase_shapes(d)
 
 func _turn(d: Dictionary) -> void:
-	var x: float = d.node.global_position.x / 50.0
+	var x: float = d.node.global_position.x
 	if (host.player_position.x < x and not d.left) or (host.player_position.x > x and d.left):
 		_flip(d)
 
@@ -323,7 +336,7 @@ func _height(d: Dictionary) -> float:
 	var sprite: Sprite2D = bridge.graphics.get(d.id)
 	if sprite == null or sprite.texture == null:
 		return 0.0
-	return sprite.get_rect().size.y * absf(sprite.global_scale.y) / 50.0
+	return sprite.get_rect().size.y * absf(sprite.global_scale.y)
 
 func _update_ui(d: Dictionary) -> void:
 	bridge.set_value(d.properties.boss_health_bar, d.hp / float(d.properties.max_hp))
@@ -342,10 +355,82 @@ func _emit_particles(root: Node, emitting: bool) -> void:
 	for child in root.get_children():
 		_emit_particles(child, emitting)
 
+func _create_phase_body(d: Dictionary) -> void:
+	var rigid := bridge.properties(d.id, "Rigidbody2D")
+	var body := RigidBody2D.new()
+	body.name = "BossPhysics"
+	body.position = d.node.global_position
+	body.process_mode = Node.PROCESS_MODE_PAUSABLE
+	body.freeze_mode = RigidBody2D.FREEZE_MODE_KINEMATIC
+	body.freeze = true
+	body.lock_rotation = (int(rigid.get("m_Constraints", 0)) & 4) != 0
+	body.mass = float(rigid.get("m_Mass", 1.0))
+	body.gravity_scale = float(rigid.get("m_GravityScale", 1.0))
+	body.linear_damp_mode = RigidBody2D.DAMP_MODE_REPLACE
+	body.linear_damp = float(rigid.get("m_LinearDrag", 0.0))
+	body.angular_damp_mode = RigidBody2D.DAMP_MODE_REPLACE
+	body.angular_damp = float(rigid.get("m_AngularDrag", 0.05))
+	body.collision_layer = 0
+	body.collision_mask = 0
+	d.body = body
+	for s in _colliders(bridge.components(d.id), false):
+		var collision := CollisionShape2D.new()
+		collision.shape = s.shape
+		body.add_child(collision)
+		d.solid_shapes.append({"node": collision, "transform": s.transform})
+	_sync_phase_shapes(d)
+	add_child(body)
+
+func _sync_phase_shapes(d: Dictionary) -> void:
+	var basis: Transform2D = d.node.global_transform
+	basis.origin = Vector2.ZERO
+	for s in d.solid_shapes:
+		s.node.transform = basis * s.transform
+
+func _sync_phase_pose(d: Dictionary) -> void:
+	var pose: Transform2D = PhysicsServer2D.body_get_state(d.body.get_rid(), PhysicsServer2D.BODY_STATE_TRANSFORM)
+	d.node.global_position = pose.origin
+
+func _teleport_phase(d: Dictionary) -> void:
+	# Unity Transform writes teleport even a kinematic Rigidbody2D. Reserve
+	# native kinematic motion for the source's explicit MovePosition requests.
+	var body: RigidBody2D = d.body
+	var mode := body.freeze_mode
+	if body.freeze:
+		body.freeze_mode = RigidBody2D.FREEZE_MODE_STATIC
+	body.global_position = d.node.global_position
+	if body.freeze:
+		body.freeze_mode = mode
+
 func _set_collisions(d: Dictionary, enabled: bool) -> void:
 	d.collisions = enabled
-	for body in d.bodies:
-		body.collision_layer = 1 if enabled else 0
+	d.body.collision_layer = 1 if enabled else 0
+	d.body.collision_mask = 2 if enabled else 0
+	# GetComponents<Collider2D>() includes the root damage trigger too.
+	_refresh_attack_monitors()
+
+func _attack_enabled(attack: Dictionary) -> bool:
+	if not active or attack.node == null or not attack.node.is_visible_in_tree():
+		return false
+	for d in phases:
+		if attack.owner == d.id:
+			return d.collisions
+	return true
+
+func _refresh_attack_monitors() -> void:
+	for attack in attacks:
+		var mask := 2 if _attack_enabled(attack) else 0
+		if attack.area.collision_mask != mask:
+			attack.area.collision_mask = mask
+		var layer: int = HURTBOX_LAYER if mask != 0 and attack.area.monitorable else 0
+		if attack.area.collision_layer != layer:
+			attack.area.collision_layer = layer
+
+func _attack_entered(body: Node2D, attack: Dictionary) -> void:
+	# The original uses OnTriggerEnter2D, not an overlap poll after the solid
+	# contact solver has already separated the player from the boss.
+	if body == host.body and host.player_alive and not host.paused and _attack_enabled(attack):
+		host.damage_player(attack.damage)
 
 func _vector(p: Dictionary) -> Vector2:
 	return Vector2(float(p.get("x", 0)), float(p.get("y", 0)))
@@ -361,15 +446,15 @@ func _colliders(components: Array, triggers: bool) -> Array[Dictionary]:
 		match str(c.get("type", "")):
 			"BoxCollider2D":
 				var box := RectangleShape2D.new()
-				box.size = _vector(p.m_Size) * 50.0
+				box.size = _vector(p.m_Size)
 				shape = box
 			"CircleCollider2D":
 				var circle := CircleShape2D.new()
-				circle.radius = float(p.m_Radius) * 50.0
+				circle.radius = float(p.m_Radius)
 				shape = circle
 			"CapsuleCollider2D":
 				var capsule := CapsuleShape2D.new()
-				var size := _vector(p.m_Size) * 50.0
+				var size := _vector(p.m_Size)
 				var horizontal := int(p.get("m_Direction", 0)) == 1
 				capsule.radius = (size.y if horizontal else size.x) * 0.5
 				capsule.height = maxf(capsule.radius * 2.0, size.x if horizontal else size.y)
@@ -444,20 +529,17 @@ func _fireball(d: Dictionary) -> void:
 		collider.transform = node.transform * s.transform
 		body.add_child(collider)
 	body.linear_velocity = Vector2(-150 if d.left else 150, 400) * UNITY_FIXED_DELTA * UNITS
-	# Torque and inertia both scale by pixels-per-unit squared.
-	body.apply_torque_impulse(-host.unity_random.single(host.unity_random.range_float(-1.0, 1.0) * 360.0) * UNITY_FIXED_DELTA * 2500.0)
+	# Geometry and inertia now use the source's metre-based units directly.
+	body.apply_torque_impulse(-host.unity_random.single(host.unity_random.range_float(-1.0, 1.0) * 360.0) * UNITY_FIXED_DELTA)
 	var lifetime := 15.0
 	var damage := 25
-	var animator: NativeAnimator
 	for c in components:
 		if c.get("script", "") == "P2FireballBehavior":
 			lifetime = float(c.properties.lifetime)
 		if c.get("script", "") == "BossAttackBehavior":
 			damage = int(c.properties.damage)
-		if c.get("type", "") == "Animator":
-			animator = host.make_animator(node, str(c.properties.m_Controller.guid))
 	projectiles.append({"node": node, "body": body, "life": lifetime, "damage": damage,
-		"shapes": _colliders(components, true), "inside": false, "animator": animator})
+		"shapes": _colliders(components, true), "inside": false})
 
 func _f32(value: float) -> float:
 	_float32_buffer[0] = value

@@ -22,7 +22,7 @@ index 0de97d5..88bad33 100644
  // You can use this to change the length scale used by your game.
  // For example for inches you could use 39.4.
 -#define b2_lengthUnitsPerMeter 100.0f
-+#define b2_lengthUnitsPerMeter 50.0f
++#define b2_lengthUnitsPerMeter 1.0f
  
  // The maximum number of vertices on a convex polygon. You cannot increase
  // this too much because b2BlockAllocator has a maximum object size.
@@ -496,7 +496,7 @@ index 31c34b5..b52c044 100644
  	c[idx].local_shape = p_local_shape;
  	c[idx].collider_pos = p_collider_pos;
 diff --git a/src/bodies/box2d_collision_object_2d.cpp b/src/bodies/box2d_collision_object_2d.cpp
-index d0a05d0..479d812 100644
+index d0a05d0..dcc69e3 100644
 --- a/src/bodies/box2d_collision_object_2d.cpp
 +++ b/src/bodies/box2d_collision_object_2d.cpp
 @@ -34,7 +34,9 @@ void Box2DCollisionObject2D::set_shape(int p_index, Box2DShape2D *p_shape) {
@@ -593,6 +593,15 @@ index d0a05d0..479d812 100644
  		}
  		// This call also destroys the colliders
  		box2d::body_destroy(space_handle, body_handle);
+@@ -296,7 +303,7 @@ void Box2DCollisionObject2D::_set_space(Box2DSpace2D *p_space) {
+ 		b2Vec2 position = { transform.get_origin().x, transform.get_origin().y };
+ 		real_t angle = transform.get_rotation();
+ 		if (mode == PhysicsServer2D::BODY_MODE_STATIC) {
+-			body_handle = box2d::body_create(space_handle, position, angle, user_data, b2BodyType::b2_kinematicBody);
++			body_handle = box2d::body_create(space_handle, position, angle, user_data, b2BodyType::b2_staticBody);
+ 		} else if (mode == PhysicsServer2D::BODY_MODE_KINEMATIC) {
+ 			body_handle = box2d::body_create(space_handle, position, angle, user_data, b2BodyType::b2_kinematicBody);
+ 		} else {
 @@ -351,7 +358,7 @@ void Box2DCollisionObject2D::_shape_changed(Box2DShape2D *p_shape) {
  			continue;
  		}
@@ -603,10 +612,26 @@ index d0a05d0..479d812 100644
  		_create_shape(shape, i);
  		_update_shape_transform(shape);
 diff --git a/src/bodies/box2d_collision_object_2d.h b/src/bodies/box2d_collision_object_2d.h
-index 3430219..a3e6c02 100644
+index 3430219..941f550 100644
 --- a/src/bodies/box2d_collision_object_2d.h
 +++ b/src/bodies/box2d_collision_object_2d.h
-@@ -32,6 +32,7 @@ private:
+@@ -20,6 +20,15 @@ public:
+ 	};
+ 
+ private:
++	void _refilter_fixtures() {
++		if (!box2d::is_handle_valid(body_handle)) {
++			return;
++		}
++		for (b2Fixture *fixture = body_handle->GetFixtureList(); fixture; fixture = fixture->GetNext()) {
++			fixture->Refilter();
++		}
++	}
++
+ 	Type type;
+ 	RID rid;
+ 	ObjectID instance_id;
+@@ -32,6 +41,7 @@ private:
  		bool disabled = false;
  		bool one_way_collision = false;
  		real_t one_way_collision_margin = 0.0;
@@ -614,7 +639,7 @@ index 3430219..a3e6c02 100644
  		box2d::FixtureHandle collider_handle = box2d::invalid_fixture_handle();
  	};
  
-@@ -44,7 +45,7 @@ private:
+@@ -44,7 +54,7 @@ private:
  	real_t collision_priority = 1.0;
  
  	void _create_shape(Shape &shape, uint32_t p_shape_index);
@@ -623,7 +648,7 @@ index 3430219..a3e6c02 100644
  	void _update_shape_transform(const Shape &shape);
  
  protected:
-@@ -52,7 +53,6 @@ protected:
+@@ -52,7 +62,6 @@ protected:
  	b2Body *body_handle = box2d::invalid_body_handle();
  	uint32_t area_detection_counter = 0;
  
@@ -631,7 +656,7 @@ index 3430219..a3e6c02 100644
  
  	void _update_transform();
  
-@@ -114,10 +114,11 @@ public:
+@@ -114,10 +123,11 @@ public:
  		return shapes[p_index].disabled;
  	}
  
@@ -644,7 +669,7 @@ index 3430219..a3e6c02 100644
  	}
  	_FORCE_INLINE_ bool is_shape_set_as_one_way_collision(int p_idx) const {
  		CRASH_BAD_INDEX(p_idx, (int)shapes.size());
-@@ -129,6 +130,11 @@ public:
+@@ -129,13 +139,26 @@ public:
  		return shapes[p_idx].one_way_collision_margin;
  	}
  
@@ -654,8 +679,23 @@ index 3430219..a3e6c02 100644
 +	}
 +
  	void set_collision_mask(uint32_t p_mask) {
++		if (collision_mask == p_mask) {
++			return;
++		}
  		collision_mask = p_mask;
++		_refilter_fixtures();
  	}
+ 	_FORCE_INLINE_ uint32_t get_collision_mask() const { return collision_mask; }
+ 
+ 	void set_collision_layer(uint32_t p_layer) {
++		if (collision_layer == p_layer) {
++			return;
++		}
+ 		collision_layer = p_layer;
++		_refilter_fixtures();
+ 	}
+ 	_FORCE_INLINE_ uint32_t get_collision_layer() const { return collision_layer; }
+ 
 diff --git a/src/bodies/box2d_direct_body_state_2d.cpp b/src/bodies/box2d_direct_body_state_2d.cpp
 index 034c5d1..d83fb15 100644
 --- a/src/bodies/box2d_direct_body_state_2d.cpp
@@ -910,7 +950,7 @@ index ad625e1..7d5b70e 100644
  
  #endif // BOX2D_DIRECT_BODY_STATE_2D_H
 diff --git a/src/box2d-wrapper/box2d_wrapper.cpp b/src/box2d-wrapper/box2d_wrapper.cpp
-index f2dedb9..90d1f1d 100644
+index f2dedb9..80d8588 100644
 --- a/src/box2d-wrapper/box2d_wrapper.cpp
 +++ b/src/box2d-wrapper/box2d_wrapper.cpp
 @@ -248,6 +248,10 @@ void box2d::body_add_torque(b2World *world_handle, b2Body *body_handle, real_t t
@@ -949,10 +989,17 @@ index f2dedb9..90d1f1d 100644
  }
  
  b2Vec2 box2d::Vector2_to_b2Vec2(Vector2 vec) {
-@@ -530,6 +529,17 @@ void box2d::collider_set_transform(b2World *world_handle, FixtureHandle handles,
- 					circle_shape->m_radius = transform.get_scale().x * circle_shape_template->m_radius;
- 				}
- 			} break;
+@@ -526,8 +525,20 @@ void box2d::collider_set_transform(b2World *world_handle, FixtureHandle handles,
+ 				b2CircleShape *circle_shape_template = (b2CircleShape *)shape_template;
+ 				b2CircleShape *circle_shape = (b2CircleShape *)shape;
+ 				circle_shape->m_p = xform_b2Vec2(circle_shape_template->m_p, transform);
+-				if (transform.get_scale().x == transform.get_scale().y) {
+-					circle_shape->m_radius = transform.get_scale().x * circle_shape_template->m_radius;
++				const Vector2 scale = transform.get_scale().abs();
++				if (scale.x == scale.y) {
++					circle_shape->m_radius = scale.x * circle_shape_template->m_radius;
++				}
++			} break;
 +			case b2Shape::Type::e_edge: {
 +				const b2EdgeShape *edge_template = static_cast<const b2EdgeShape *>(shape_template);
 +				b2EdgeShape *edge = static_cast<b2EdgeShape *>(shape);
@@ -962,12 +1009,10 @@ index f2dedb9..90d1f1d 100644
 +					edge->SetOneSided(xform_b2Vec2(edge_template->m_vertex0, transform), a, b, xform_b2Vec2(edge_template->m_vertex3, transform));
 +				} else {
 +					edge->SetTwoSided(a, b);
-+				}
-+			} break;
+ 				}
+ 			} break;
  			case b2Shape::Type::e_chain: {
- 				b2ChainShape *chain_shape_template = (b2ChainShape *)shape_template;
- 				b2ChainShape *chain_shape = (b2ChainShape *)shape;
-@@ -566,6 +576,10 @@ void box2d::collider_set_transform(b2World *world_handle, FixtureHandle handles,
+@@ -566,6 +577,10 @@ void box2d::collider_set_transform(b2World *world_handle, FixtureHandle handles,
  				ERR_FAIL_MSG("Invalid Shape Type");
  			}
  		}
@@ -978,7 +1023,7 @@ index f2dedb9..90d1f1d 100644
  	}
  }
  
-@@ -905,6 +919,7 @@ ShapeCastResult box2d::shape_casting(b2World *world_handle,
+@@ -905,6 +920,7 @@ ShapeCastResult box2d::shape_casting(b2World *world_handle,
  		QueryHandleExcludedCallback handle_excluded_callback,
  		const QueryExcludedInfo *handle_excluded_info,
  		double margin) {
@@ -986,7 +1031,7 @@ index f2dedb9..90d1f1d 100644
  	for (int i = 0; i < shape_info.handle.count; i++) {
  		shape_info.handle.handles[i]->m_radius += margin;
  		b2AABB shape_aabb;
-@@ -933,13 +948,18 @@ ShapeCastResult box2d::shape_casting(b2World *world_handle,
+@@ -933,13 +949,18 @@ ShapeCastResult box2d::shape_casting(b2World *world_handle,
  		result.collided = false;
  		for (int j = 0; j < count; j++) {
  			b2Body *other_body = hit_info_array[j].collider->GetBody();
@@ -1012,7 +1057,7 @@ index f2dedb9..90d1f1d 100644
  			if (is_toi_intersected(toi_output)) {
  				b2Transform shape_transform_moved = shape_transform;
  				shape_transform_moved.p += toi_output.t * motion;
-@@ -972,10 +992,27 @@ ShapeCollideResult box2d::shape_collide(const b2Vec2 motion1,
+@@ -972,10 +993,27 @@ ShapeCollideResult box2d::shape_collide(const b2Vec2 motion1,
  		ShapeInfo shape_info1,
  		const b2Vec2 motion2,
  		ShapeInfo shape_info2) {
@@ -1040,7 +1085,7 @@ index f2dedb9..90d1f1d 100644
  			b2TOIOutput toi_output = _time_of_impact(shape_info1.handle.handles[i],
  					transformA,
  					b2Vec2_zero,
-@@ -1053,23 +1090,37 @@ ShapeHandle box2d::shape_create_circle(real_t radius, b2Vec2 pos) {
+@@ -1053,23 +1091,37 @@ ShapeHandle box2d::shape_create_circle(real_t radius, b2Vec2 pos) {
  	};
  }
  
@@ -1088,7 +1133,7 @@ index f2dedb9..90d1f1d 100644
  		ERR_FAIL_V(invalid_shape_handle());
  	}
  	shapes[0] = shape;
-@@ -1104,6 +1155,9 @@ ShapeHandle box2d::shape_create_halfspace(const b2Vec2 normal, real_t distance)
+@@ -1104,6 +1156,9 @@ ShapeHandle box2d::shape_create_halfspace(const b2Vec2 normal, real_t distance)
  }
  
  void box2d::shape_destroy(ShapeHandle shape_handle) {

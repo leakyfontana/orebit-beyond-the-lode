@@ -17,7 +17,8 @@ func configure(world_data: WorldData, state: GameData, scene_bridge: SceneBridge
 	tile_coordinates = tiles.get_meta("coordinates")
 	tile_layer = TileMapLayer.new()
 	tile_layer.tile_set = tiles
-	tile_layer.position.y = -50.0
+	tile_layer.scale = Vector2.ONE / 50.0
+	tile_layer.position.y = -1.0
 	tile_layer.collision_enabled = false
 	tile_layer.navigation_enabled = false
 	tile_layer.occlusion_enabled = false
@@ -26,7 +27,7 @@ func configure(world_data: WorldData, state: GameData, scene_bridge: SceneBridge
 		for y in data.earthHeight:
 			_update_tile(Vector2i(x, y))
 	z_index = 1
-	tile_shape.size = Vector2.ONE * 50.0
+	tile_shape.size = Vector2.ONE
 	physics_body = StaticBody2D.new()
 	physics_body.collision_layer = 1
 	physics_body.collision_mask = 2
@@ -65,7 +66,7 @@ func _update_colliders() -> void:
 			if not colliders.has(cell) and _solid(cell):
 				var shape := CollisionShape2D.new()
 				shape.shape = tile_shape
-				shape.position = Vector2(x + 0.5, y - 0.5) * 50.0
+				shape.position = Vector2(x + 0.5, y - 0.5)
 				physics_body.add_child(shape)
 				colliders[cell] = shape
 

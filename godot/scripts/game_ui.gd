@@ -37,6 +37,9 @@ var current_category: String = ""
 var current_potential_upgrade: String = ""
 var currently_selected_item: String = ""
 var current_transmission_index: int = 0
+var _boss_health: Control
+var _boss_health_offsets := Vector4.ZERO
+var controller_ui: ControllerUI
 
 func configure(game_host: Node, scene_bridge: SceneBridge, game_data: GameData, game_audio: GameAudio) -> void:
 	host = game_host
@@ -75,10 +78,48 @@ func configure(game_host: Node, scene_bridge: SceneBridge, game_data: GameData, 
 		previous_fuel_percent = int(hud.get("previous_fuel_percent", 0))
 		previous_hull_percent = int(hud.get("previous_hull_percent", 0))
 		updateAllUI()
+		_install_boss_health_layout()
 	for script in PANEL_SCRIPTS:
 		if script_components.has(script):
 			panel_active[script] = false
 	_sync_panels()
+	controller_ui = ControllerUI.new()
+	add_child(controller_ui)
+	controller_ui.configure(self)
+
+func _install_boss_health_layout() -> void:
+	_boss_health = bridge.node(_child(_panel("UIManager"), "BossHealth")) as Control
+	if _boss_health == null:
+		return
+	_boss_health_offsets = Vector4(_boss_health.offset_left, _boss_health.offset_top, _boss_health.offset_right, _boss_health.offset_bottom)
+	var touch := host.touch_controls as TouchControls
+	touch.hud_layout_changed.connect(_layout_boss_health)
+	(_boss_health.get_parent() as Control).resized.connect(_layout_boss_health)
+	_layout_boss_health()
+
+func _layout_boss_health() -> void:
+	var touch := host.touch_controls as TouchControls
+	var safe := touch.get_hud_safe_rect()
+	if not safe.has_area():
+		return
+	# BossHealth is the complete source hierarchy (bar, frame and HP text).
+	# Preserve its desktop anchors/geometry; only touch layouts reserve the
+	# existing safe-area dock. Both CanvasLayers must use the same coordinates.
+	var parent := _boss_health.get_parent() as Control
+	safe = (parent.get_global_transform_with_canvas().affine_inverse() * touch.get_global_transform_with_canvas()) * safe
+	_boss_health.offset_left = _boss_health_offsets.x
+	_boss_health.offset_top = _boss_health_offsets.y
+	_boss_health.offset_right = _boss_health_offsets.z
+	_boss_health.offset_bottom = _boss_health_offsets.w
+	_boss_health.scale = Vector2.ONE
+	var source_rect := _boss_health.get_rect()
+	var fit := minf(1.0, minf(safe.size.x / source_rect.size.x, safe.size.y / source_rect.size.y))
+	var fitted_size := source_rect.size * fit
+	var origin := Vector2(
+		clampf(source_rect.position.x, safe.position.x, safe.end.x - fitted_size.x),
+		clampf(source_rect.position.y, safe.position.y, safe.end.y - fitted_size.y))
+	_boss_health.scale = Vector2.ONE * fit
+	_boss_health.position = origin - _boss_health.pivot_offset * (1.0 - fit)
 
 func _script_name(value: String) -> String:
 	return "HelpUUIManager" if value == "HelpUIManager" else value
@@ -188,6 +229,7 @@ func _input(event: InputEvent) -> void:
 
 func tick(delta: float) -> void:
 	_sync_panels()
+	controller_ui.sync_state(delta)
 	_update_slow_text(delta)
 	if script_components.has("UIManager"):
 		updateDepthUI()

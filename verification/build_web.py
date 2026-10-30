@@ -13,7 +13,7 @@ TOOLS = ROOT / "verification/tools"
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--godot", default=str(TOOLS / "Godot.app/Contents/MacOS/Godot"))
-    parser.add_argument("--scons", default=str(TOOLS / "asset-inspection/bin/scons"))
+    parser.add_argument("--scons", help="Override the SCons executable; defaults to the repository Python environment")
     parser.add_argument("--jobs", type=int, default=4)
     args = parser.parse_args()
     if args.jobs < 1:
@@ -27,7 +27,8 @@ def main():
         with zipfile.ZipFile(TOOLS / "Godot_v4.7.2-stable_export_templates.tpz") as archive:
             for name in missing:
                 archive.extract("templates/" + name, TOOLS / "export_templates")
-    subprocess.run([args.scons, "-C", str(TOOLS / "box2d-source"), "platform=web",
+    scons = [args.scons] if args.scons else [str(TOOLS / "asset-inspection/bin/python"), "-m", "SCons"]
+    subprocess.run([*scons, "-C", str(TOOLS / "box2d-source"), "platform=web",
                     "arch=wasm32", "target=template_release", "precision=single",
                     "threads=no", "-j" + str(args.jobs)], cwd=ROOT, check=True)
     library = "libgodot-box2d.web.template_release.wasm32.nothreads.wasm"
