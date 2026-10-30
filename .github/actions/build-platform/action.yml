@@ -21,6 +21,11 @@ runs:
       with:
         distribution: temurin
         java-version: '17'
+    - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
+      if: inputs.platform == 'android-arm64'
+      with:
+        cmdline-tools-version: '15859902'
+        packages: platform-tools
     - name: Install matching Android toolchains
       if: inputs.platform == 'android-arm64'
       shell: bash

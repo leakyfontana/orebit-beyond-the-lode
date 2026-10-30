@@ -1,0 +1,2 @@
+# Native dependency patches must apply to identical source bytes on every runner.
+*.patch text eol=lf

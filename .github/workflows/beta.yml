@@ -9,11 +9,11 @@ on:
 permissions:
   contents: read
 
-# Never overlap publishers. PR updates may cancel their own obsolete validation.
 
 defaults:
   run:
     shell: bash
+# Never overlap publishers. PR updates may cancel their own obsolete validation.
 concurrency:
   group: beta-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}

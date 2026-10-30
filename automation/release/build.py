@@ -27,6 +27,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import platform
+import plistlib
 import re
 import shutil
 import stat
@@ -122,6 +123,29 @@ def extract_zip(archive, destination, members=None):
                     target.chmod(mode & 0o777)
 
 
+def require_arm64_binary(path):
+    if run(["lipo", "-archs", path]).split() != ["arm64"]:
+        raise RuntimeError("Expected an ARM64-only Mach-O binary: " + str(path))
+
+
+def prepare_macos_template(work, templates):
+    # Official 4.7.2 macos.zip contains only .universal executables, while the
+    # ARM64 exporter requires the distinct godot_macos_<mode>.arm64 filename.
+    # Thin before export so Godot still selects ARM64 resources/extensions and
+    # signs the final app after all bundle changes, including native frameworks.
+    staged = work / "macos-arm64-template"
+    extract_zip(templates / "macos.zip", staged)
+    binaries = staged / "macos_template.app/Contents/MacOS"
+    for mode in ("debug", "release"):
+        universal = binaries / ("godot_macos_" + mode + ".universal")
+        arm64 = binaries / ("godot_macos_" + mode + ".arm64")
+        run(["lipo", universal, "-thin", "arm64", "-output", arm64])
+        arm64.chmod(0o755)
+        require_arm64_binary(arm64)
+        universal.unlink()
+    package_zip(staged, templates / "macos.zip")
+
+
 def bootstrap_tools(work, godot_override, target):
     templates_archive = download("Godot_v4.7.2-stable_export_templates.tpz", work)
     template_names = {
@@ -136,6 +160,8 @@ def bootstrap_tools(work, godot_override, target):
     templates = work / "export_templates/templates"
     if (templates / "version.txt").read_text().strip() != "4.7.2.stable":
         raise RuntimeError("Unexpected export template version")
+    if target == "macos":
+        prepare_macos_template(work, templates)
     if godot_override:
         godot = Path(godot_override).expanduser().resolve()
     else:
@@ -157,6 +183,10 @@ def bootstrap_tools(work, godot_override, target):
 
 def checkout(source, destination):
     run(["git", "init", "--quiet", destination])
+    # Hosted Windows Git defaults can otherwise rewrite patch contexts to CRLF.
+    # Set repository-local policy before the first checkout of every dependency.
+    run(["git", "-C", destination, "config", "core.autocrlf", "false"])
+    run(["git", "-C", destination, "config", "core.eol", "lf"])
     run(["git", "-C", destination, "remote", "add", "origin", source["url"]])
     run(["git", "-C", destination, "fetch", "--quiet", "--depth=1", "origin", source["commit"]])
     run(["git", "-C", destination, "checkout", "--quiet", "--detach", "FETCH_HEAD"])
@@ -398,6 +428,12 @@ def build(args):
             frameworks = list((export / filename).rglob(library))
             if len(frameworks) != 1:
                 raise RuntimeError("Exported app is missing its matching native Box2D framework")
+            app = export / filename
+            with (app / "Contents/Info.plist").open("rb") as source:
+                executable = plistlib.load(source)["CFBundleExecutable"]
+            require_arm64_binary(app / "Contents/MacOS" / executable)
+            require_arm64_binary(frameworks[0] / frameworks[0].stem)
+            run(["codesign", "--verify", "--deep", "--strict", app])
         elif target == "windows" and not list(export.rglob(library)):
             raise RuntimeError("Exported Windows directory is missing its matching Box2D DLL")
         elif target == "android":
