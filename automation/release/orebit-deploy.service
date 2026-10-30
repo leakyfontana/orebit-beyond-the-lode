@@ -1,0 +1,22 @@
+[Unit]
+Description=Orebit outbound-only verified Web deployer
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=orebit-deploy
+Group=orebit-deploy
+WorkingDirectory=/srv/motherload/puller/state
+ExecStart=/usr/bin/python3 -I -u /srv/motherload/deploy/pull_deploy.py --interval 30
+Restart=on-failure
+RestartSec=15
+UMask=0077
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+TimeoutStopSec=120
+# NoNewPrivileges would prevent the one explicitly permitted sudo helper.
+
+[Install]
+WantedBy=multi-user.target

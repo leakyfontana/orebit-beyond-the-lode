@@ -76,9 +76,9 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: ./.github/actions/build-platform
         env:
-          OREBIT_ANDROID_KEYSTORE_BASE64: ${{ secrets.OREBIT_ANDROID_KEYSTORE_BASE64 }}
-          OREBIT_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.OREBIT_ANDROID_KEYSTORE_PASSWORD }}
-          OREBIT_ANDROID_KEYSTORE_ALIAS: ${{ secrets.OREBIT_ANDROID_KEYSTORE_ALIAS }}
+          OREBIT_ANDROID_KEYSTORE_BASE64: ${{ matrix.platform == 'android-arm64' && secrets.OREBIT_ANDROID_KEYSTORE_BASE64 || '' }}
+          OREBIT_ANDROID_KEYSTORE_PASSWORD: ${{ matrix.platform == 'android-arm64' && secrets.OREBIT_ANDROID_KEYSTORE_PASSWORD || '' }}
+          OREBIT_ANDROID_KEYSTORE_ALIAS: ${{ matrix.platform == 'android-arm64' && secrets.OREBIT_ANDROID_KEYSTORE_ALIAS || '' }}
         with:
           platform: ${{ matrix.platform }}
           validation: 'false'
@@ -125,29 +125,21 @@ jobs:
           with open(os.environ['GITHUB_PATH'], 'a') as path:
               path.write(str(root) + '\n')
           PY
-      - name: Configure narrowly scoped publication access
+      - name: Configure protected Drive publication access
         env:
           DRIVE_CONFIG: ${{ secrets.RCLONE_CONFIG_DRIVE }}
-          VPS_KEY: ${{ secrets.OREBIT_VPS_SSH_KEY }}
-          VPS_KNOWN_HOSTS: ${{ secrets.OREBIT_VPS_KNOWN_HOSTS }}
         run: |
           python - <<'PY'
           import os
           from pathlib import Path
           root = Path(os.environ['RUNNER_TEMP']) / 'orebit-access'
           root.mkdir(mode=0o700)
-          for name, value in [('rclone.conf', 'DRIVE_CONFIG'), ('vps-key', 'VPS_KEY'), ('known_hosts', 'VPS_KNOWN_HOSTS')]:
-              content = os.environ[value]
-              if not content.strip():
-                  raise SystemExit('Missing protected release credential: ' + value)
-              path = root / name
-              path.write_text(content + '\n')
-              path.chmod(0o600)
-          ssh = Path.home() / '.ssh'
-          ssh.mkdir(mode=0o700, exist_ok=True)
-          config = ssh / 'config'
-          config.write_text('Host orebit-ci\n  HostName 135.181.198.116\n  User arcdeploy\n  IdentityFile ' + str(root / 'vps-key') + '\n  UserKnownHostsFile ' + str(root / 'known_hosts') + '\n  StrictHostKeyChecking yes\n  IdentitiesOnly yes\n  BatchMode yes\n  ConnectTimeout 15\n')
-          config.chmod(0o600)
+          content = os.environ['DRIVE_CONFIG']
+          if not content.strip():
+              raise SystemExit('Missing protected Drive publication credential')
+          path = root / 'rclone.conf'
+          path.write_text(content + '\n')
+          path.chmod(0o600)
           with open(os.environ['GITHUB_ENV'], 'a') as env:
               env.write('RCLONE_CONFIG=' + str(root / 'rclone.conf') + '\n')
           PY
@@ -155,7 +147,7 @@ jobs:
         run: python automation/release/publish_drive.py
       - name: Deploy and verify matching Web release
         id: deploy
-        run: python automation/release/deploy_web.py --host orebit-ci --manifest dist/release.json | tee dist/vps-deployment.json
+        run: python automation/release/deploy_web.py --manifest dist/release.json | tee dist/vps-deployment.json
       - name: Exercise public Web menu
         id: public-smoke
         run: |
@@ -170,7 +162,7 @@ jobs:
           from pathlib import Path
           evidence = json.loads(Path('dist/vps-deployment.json').read_text())
           if evidence.get('mutated') is True:
-              subprocess.run([sys.executable, 'automation/release/deploy_web.py', '--host', 'orebit-ci', '--manifest', 'dist/release.json', '--rollback'], check=True)
+              subprocess.run([sys.executable, 'automation/release/deploy_web.py', '--manifest', 'dist/release.json', '--rollback'], check=True)
           PY
       - name: Publish durable successful-publication receipt
         run: python automation/release/receipt.py
@@ -181,7 +173,6 @@ jobs:
           import os, shutil
           from pathlib import Path
           shutil.rmtree(Path(os.environ['RUNNER_TEMP']) / 'orebit-access', ignore_errors=True)
-          (Path.home() / '.ssh/config').unlink(missing_ok=True)
           PY
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
