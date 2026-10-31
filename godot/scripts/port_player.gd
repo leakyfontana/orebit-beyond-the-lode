@@ -87,6 +87,7 @@ var _pressed_item: int = -1
 var _frame_delta: float = 0.0
 var _physics_delta: float = 0.02
 var _sprite: CanvasItem
+var _coop_mine_waiting := false
 
 func configure(main_host: Node, player_body: RigidBody2D, player_visual: Node2D, serialized_properties: Dictionary) -> void:
 	host = main_host
@@ -351,7 +352,7 @@ func dig() -> void:
 	position_unity = position_unity.move_toward(_block_target_position, step)
 	updateMousePointerRotation()
 	var distance: float = position_unity.distance_to(_block_target_position)
-	if distance < 0.5 and not world.blockChangedTexture:
+	if distance < 0.5 and not world.blockChangedTexture and not host.is_coop:
 		var previous := _block_target
 		var orientation: int = 0
 		if is_digging_bottom:
@@ -370,6 +371,12 @@ func dig() -> void:
 		changed.append(_block_target)
 		host.refresh_tiles(changed)
 	if distance < 0.05:
+		if host.is_coop:
+			if not _coop_mine_waiting:
+				_coop_mine_waiting = true
+				host.coop.network.send_state()
+				host.coop.network.mine(_block_target.x, _block_target.y)
+			return
 		var mineral_name: String = str(_block_target_data.name)
 		if data.minerals_name_list.has(mineral_name):
 			if data.addMineralInCargo(mineral_name):
@@ -388,6 +395,7 @@ func dig() -> void:
 		cancelVelocity()
 
 func _finish_dig() -> void:
+	_coop_mine_waiting = false
 	is_digging_side = false
 	is_digging_bottom = false
 	_block_target = Vector2i(-1, -1)
@@ -401,6 +409,14 @@ func _finish_dig() -> void:
 
 func cancelDig() -> void:
 	_finish_dig()
+
+func coop_mining_resolved(x: int, y: int, accepted: bool, own_drill: bool) -> void:
+	if _block_target != Vector2i(x, y):
+		return
+	if accepted and own_drill and str(_block_target_data.get("name", "")) == "Lava":
+		loseHP(int(45.0 * (1.0 - data.player_radiator)))
+	_finish_dig()
+	cancelVelocity()
 
 func getDepthModifier(position_y: int) -> float:
 	var depth_percent := _f32(float(absi(position_y)) / 600.0)
@@ -595,7 +611,10 @@ func destroyBlocksFromExplosion(explosion_range: int) -> void:
 			# The GameObject overload used here accepts Diggable, including Rock,
 			# but does not erase invincible tiles or already-open tunnels.
 			if world.getBlockData(x, y).layer == "Diggable":
-				changed.append_array(world.instantDigBlock(x, y))
+				if host.is_coop:
+					host.coop.network.mine(x, y, "blast")
+				else:
+					changed.append_array(world.instantDigBlock(x, y))
 	host.refresh_tiles(changed)
 
 func _activate_attack(property_name: String) -> void:

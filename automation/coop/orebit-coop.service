@@ -1,0 +1,40 @@
+[Unit]
+Description=Orebit cross-platform co-op server
+After=network.target
+
+[Service]
+Type=simple
+User=orebit-coop
+Group=orebit-coop
+WorkingDirectory=/srv/orebit-coop
+Environment=OREBIT_PUBLIC_URL=https://play.arcmonkeyswelding.com/coop
+Environment=OREBIT_LOG_DIR=/var/log/orebit-coop
+EnvironmentFile=-/etc/orebit-coop.env
+ExecStart=/srv/orebit-coop/venv/bin/python /srv/orebit-coop/server.py --host 127.0.0.1 --port 8765 --db /var/lib/orebit-coop/coop.sqlite3
+Restart=on-failure
+RestartSec=3
+StateDirectory=orebit-coop
+StateDirectoryMode=0700
+LogsDirectory=orebit-coop
+LogsDirectoryMode=0750
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=orebit-coop
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+MemoryMax=768M
+CPUQuota=100%
+TasksMax=64
+LimitNOFILE=1024
+
+[Install]
+WantedBy=multi-user.target

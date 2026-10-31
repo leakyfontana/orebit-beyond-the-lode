@@ -403,6 +403,8 @@ const TRANSMISSION_TABLE: Array = [
 ]
 
 var savefile: String = "user://motherloadrecodedsavedata.data"
+var coop_mode := false
+signal coop_save_requested
 var string_format: Dictionary = {"NumberGroupSeparator": " "}
 var player_money: int = 20
 var level_is_already_generated: bool = false
@@ -582,6 +584,9 @@ func _writeJson(path: String, contents: Dictionary) -> bool:
 	return result == OK
 
 func saveData() -> bool:
+	if coop_mode:
+		coop_save_requested.emit()
+		return true
 	var codec = BinarySaveCodec.new()
 	var bytes: PackedByteArray = codec.encode({
 		"player_money": player_money,
@@ -606,6 +611,8 @@ func saveData() -> bool:
 	return result == OK
 
 func loadData() -> bool:
+	if coop_mode:
+		return false
 	var file: FileAccess = FileAccess.open(savefile, FileAccess.READ)
 	if file == null:
 		push_error("Cannot load " + savefile + ": " + error_string(FileAccess.get_open_error()))
@@ -631,6 +638,8 @@ func loadData() -> bool:
 	return true
 
 func doesSaveFileExist() -> bool:
+	if coop_mode:
+		return false
 	return FileAccess.file_exists(savefile)
 
 func setNewGameData() -> void:
@@ -641,3 +650,33 @@ func setNewGameData() -> void:
 	transmissions = TRANSMISSION_TABLE.duplicate(true)
 	# Do not reset map, generated flag, HP, derived weights, or settings: original quirk.
 	player_fuel = 5
+
+func coop_snapshot() -> Dictionary:
+	return {
+		"player_money": player_money,
+		"current_upgrades": current_upgrades.duplicate(),
+		"player_items": player_items.duplicate(),
+		"player_cargo": player_cargo.duplicate(),
+		"transmissions": transmissions.duplicate(true),
+		"player_hp": player_hp,
+		"player_fuel": player_fuel,
+	}
+
+func restore_coop_state(saved: Dictionary, economic_only: bool = false) -> void:
+	player_money = int(saved.get("player_money", player_money))
+	for category in current_upgrades:
+		var selected := str(saved.get("current_upgrades", {}).get(category, current_upgrades[category]))
+		if upgrades[category].has(selected):
+			current_upgrades[category] = selected
+	for item in player_items:
+		player_items[item] = int(saved.get("player_items", {}).get(item, player_items[item]))
+	for mineral in player_cargo:
+		player_cargo[mineral] = int(saved.get("player_cargo", {}).get(mineral, player_cargo[mineral]))
+	var messages: Variant = saved.get("transmissions", transmissions)
+	if messages is Array and messages.size() == transmissions.size():
+		transmissions = messages.duplicate(true)
+	applyShopUpgrades()
+	updateCargoWeight()
+	if not economic_only:
+		player_hp = int(saved.get("player_hp", player_max_hp))
+		player_fuel = float(saved.get("player_fuel", player_max_fuel))
