@@ -9,6 +9,7 @@ Beta builds are not a claim of original-game parity acceptance.
 - `main` is deployable. Use short-lived branches and pull requests.
 - Every PR requires **Beta checks**: fresh macOS ARM64, Windows x86-64, Android ARM64,
   and Web builds, including an actual Chromium launch of the Web export to MainMenu.
+  Co-op HTTP/WebSocket, persistence and logging regressions must also pass.
 - Squash-merge after required checks pass; force pushes, deletion and admin bypass
   are disabled. No separate beta branch or manual beta-tag step.
 - A passing push to `main` rebuilds all four platforms from pinned dependencies.
@@ -57,3 +58,106 @@ failure through a reviewed new commit. A failed build never selects a new live
 release. Deployment evidence is retained as the `beta-publication-evidence` workflow
 artifact and successful receipts as prerelease assets. Do not announce candidates
 without a verified receipt.
+
+## Private play and cross-platform co-op
+
+The startup chooser keeps private on-device play separate from a shared co-op
+world with at most five connected miners. Anonymous play requires no account;
+the load/entry prompts explain that only account player progress survives leaving.
+Co-op never reads or writes the private binary save. The server persists shared
+excavations, and account money, cargo, upgrades, items, transmissions and position.
+Physics runs locally; the server arbitrates excavation and awards each tile once.
+Pausing affects only the local player, not the server or other miners.
+
+The separate Python service lives in `automation/coop/`. Run locally:
+
+```sh
+python3 -m venv /tmp/orebit-coop
+/tmp/orebit-coop/bin/pip install -r automation/coop/requirements.txt
+/tmp/orebit-coop/bin/python automation/coop/server.py --db /tmp/orebit-coop.sqlite3
+verification/tools/Godot.app/Contents/MacOS/Godot --path godot -- --mode=coop --coop-url=http://127.0.0.1:8765
+```
+
+Without `--mode`, the game offers the mode choice. `--mode=private` preserves the
+existing menu flow; deterministic replays default to private mode. Web supports
+`?mode=coop` and URL-encoded `coop-url`/`coop-world` parameters, but never tokens in
+URLs. Cross-origin development browsers require their exact origin in the
+service's comma-separated `OREBIT_ALLOWED_ORIGINS`; production defaults to its
+own HTTPS origin.
+
+Production uses `https://play.arcmonkeyswelding.com/coop`. Install the supplied
+`orebit-coop.service` as a dedicated `orebit-coop` user with a virtual environment
+at `/srv/orebit-coop/venv`, service sources in `/srv/orebit-coop/`, and persistent
+SQLite state in `/var/lib/orebit-coop/`. Include `coop.nginx.conf` only in the game
+HTTPS vhost. The service binds loopback port 8765; no new public port is needed.
+The unit caps memory at 768 MiB and CPU at one core. Back up the SQLite database
+with SQLite's online backup API; do not copy a live database without its WAL.
+Run only one service worker: membership is process-owned.
+
+Native accounts use Argon2id passwords and expiring, revocable sessions.
+Discord accounts require `OREBIT_DISCORD_CLIENT_ID` and
+`OREBIT_DISCORD_CLIENT_SECRET` in root-readable `/etc/orebit-coop.env`, plus this
+registered redirect URI:
+`https://play.arcmonkeyswelding.com/coop/auth/discord/callback`.
+Set `OREBIT_PUBLIC_URL=https://play.arcmonkeyswelding.com/coop`. Never put OAuth
+secrets in exports or source control. Discord authorization returns credentials
+only to the initiating client's expiring, single-use poll, not in the browser URL.
+Missing configuration disables Discord sign-in explicitly; native and anonymous
+play remain available.
+
+Production Discord sign-in uses the separate **Orebit** application
+`1565858737863000256`; the intake application is not reused. Live native-client
+authorization, server entry, account restoration on rejoin and session revocation
+have been exercised against the VPS.
+
+### Server diagnostics
+
+The service writes privacy-filtered JSON events to journald and
+`/var/log/orebit-coop/events.jsonl`. The service unit creates the persistent log
+directory as `0750`; every active/rotated file is protected as `0640`. Logs survive
+service restarts. Default rotation is 10 MiB per file with nine archives: at most
+100 MiB total. Retention is size-based, **not a guaranteed number of days**.
+`OREBIT_LOG_MAX_BYTES` and `OREBIT_LOG_BACKUP_COUNT` control this bound;
+`OREBIT_LOG_LEVEL` defaults to `INFO`. Local runs use stdout unless
+`OREBIT_LOG_DIR` is set.
+
+Every HTTP response/WS upgrade has a server-generated `X-Request-ID`; JSON errors
+also return `request_id`. WebSocket events use that ID as `session_id`. Each event
+includes UTC time, a process `boot_id` and a source-derived `build_id` (override
+with `OREBIT_BUILD_ID`). Session summaries retain message/state/mining counts;
+individual mining decisions include tile/action/outcome, not player-state bodies.
+Successful health checks and pending OAuth polls are omitted to reduce noise.
+
+Inspect or follow the journal, or query retained files across rotations:
+
+```sh
+ssh arcmonkeys-prod 'sudo journalctl -t orebit-coop --since "1 hour ago" -o cat'
+ssh arcmonkeys-prod 'sudo python3 /srv/orebit-coop/logs.py --event session_error --limit 50'
+```
+
+`logs.py` also accepts `--request-id`, `--session-id`, `--user-id`, `--level`,
+`--since` (ISO8601), and `--directory`. Results are chronological NDJSON containing
+the most recent matching events. A nonzero exit reports incomplete results from
+rotation races, unreadable files or malformed/truncated records; diagnostic output
+never echoes the damaged content. Deploy `telemetry.py` and `logs.py` alongside
+`server.py`; the reader and writer share the same privacy schema.
+
+Passwords, tokens, OAuth codes/verifiers, URLs/query strings, headers, usernames,
+IP addresses and player-state payloads are excluded. Error diagnostics retain
+exception type and stack file/function/line, not exception text or local variables.
+Third-party logger text is filtered too. A failed file sink emits a rate-limited
+`log_sink_error` directly to the journal/stdout so loss of file logging is visible.
+These logs are machine-local diagnostics, **not an off-host backup or distributed
+tracing/alerting service**.
+
+Behavioral regressions:
+
+```sh
+/tmp/orebit-coop/bin/python -m unittest discover -s automation/coop -p 'test_*.py' -v
+verification/tools/Godot.app/Contents/MacOS/Godot --headless --path godot --script "$PWD/verification/coop_state_interop.gd" -- --mode=private
+```
+
+Ticket implementation/runtime acceptance is verified across macOS, Windows,
+Android and Web, including a simultaneous five-client VPS session and native/
+Discord account persistence. Local working-tree exports and these checks do not
+replace the beta-release CI/publication gates or publish updated game clients.

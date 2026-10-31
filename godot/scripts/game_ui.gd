@@ -209,6 +209,8 @@ func _number(value: float) -> String:
 	return str(int(value)) if value == floorf(value) else str(value)
 
 func _input(event: InputEvent) -> void:
+	if host.coop != null and host.coop.lobby.modal:
+		return
 	if not event.is_pressed() or (event is InputEventKey and event.echo):
 		return
 	if event.is_action_pressed(&"pause"):
@@ -478,6 +480,9 @@ func _close_panel(script: String) -> void:
 		audio.setNewVolumeLevels()
 
 func startNewGame() -> void:
+	if host.is_coop:
+		host.coop.network.join_world()
+		return
 	var p: Dictionary = _properties("MainMenuManager")
 	if not _active(p.helpUI):
 		audio.PlaySoundOneShot("SelectUpgradeCategory")
@@ -485,6 +490,8 @@ func startNewGame() -> void:
 		host.change_scene("Game")
 
 func continueGame() -> void:
+	if host.is_coop:
+		return
 	var p: Dictionary = _properties("MainMenuManager")
 	if _active(p.helpUI):
 		return
@@ -506,6 +513,10 @@ func closeInstructions() -> void:
 	bridge.set_active(_properties("MainMenuManager").helpUI, false)
 
 func returnToMainMenu() -> void:
+	if host.is_coop:
+		if not host.leave_coop():
+			return
+		host.coop.lobby.show_lobby()
 	host.paused = false
 	audio.StopAllMusic()
 	audio.StopAllSounds()

@@ -2,6 +2,7 @@
 /automation/*
 !/automation/release/
 !/automation/announcements/
+!/automation/coop/
 
 # Verification toolchains, captures and source-reference downloads stay local.
 /verification/*
@@ -10,6 +11,7 @@
 !/verification/box2d-godot-4.7.2.patch
 !/verification/box2d-fixture-shape-sync.patch
 !/verification/godot-cpp-msvc-conformance.patch
+!/verification/coop_state_interop.gd
 
 # Built artifacts and per-machine credentials are never source inputs.
 /dist/

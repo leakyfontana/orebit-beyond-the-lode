@@ -48,6 +48,10 @@ var pending_scene := ""
 var _last_ui_usec := 0
 var replay_runner: ReplayRunner
 var touch_controls: TouchControls
+var coop: CoopSession
+var is_coop: bool:
+	get:
+		return coop != null and coop.active
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -88,6 +92,9 @@ func _ready() -> void:
 	touch_controls = preload("res://scenes/touch_controls.tscn").instantiate()
 	touch_layer.add_child(touch_controls)
 	touch_controls.configure(self)
+	coop = CoopSession.new()
+	add_child(coop)
+	coop.configure(self)
 	change_scene("MainMenu")
 	print("MOTHERLOAD_READY scene=MainMenu godot=" + Engine.get_version_info().string)
 
@@ -182,6 +189,8 @@ func _load_scene(which: String) -> void:
 					animators.append({"root": visual, "animator": animator})
 					animator.animation_event.connect(_scene_event.bind(id))
 	ui.updateAllUI()
+	if coop != null:
+		coop.scene_loaded()
 
 func _setup_player() -> void:
 	for id in bridge.scene.game_objects:
@@ -391,6 +400,8 @@ func _process(delta: float) -> void:
 		player.sync_physics_pose()
 	if ui != null:
 		ui.tick(ui_delta)
+	if coop != null:
+		coop.tick(ui_delta)
 	if not paused:
 		# Spawns append for the next frame; queued tree exits retire after this pass.
 		var animator_count := animators.size()
@@ -660,3 +671,9 @@ func _update_camera(delta: float) -> void:
 func _vec(value: Dictionary, fallback: Vector2 = Vector2.ZERO) -> Vector2:
 	return Vector2(float(value.get("x", fallback.x)), float(value.get("y", fallback.y)))
 
+
+func coop_state() -> Dictionary:
+	return coop.state()
+
+func leave_coop() -> bool:
+	return coop.leave() if coop != null else true
