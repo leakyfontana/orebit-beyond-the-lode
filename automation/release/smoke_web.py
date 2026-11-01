@@ -6,7 +6,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
 import tempfile
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 import threading
 import time
 import urllib.request
@@ -38,6 +38,18 @@ def main():
                 extensions_map = {**SimpleHTTPRequestHandler.extensions_map, '.wasm': 'application/wasm', '.json': 'application/json'}
 
                 def do_GET(self):
+                    if urlsplit(self.path).path == '/api/fuel-price':
+                        # A deterministic menu-smoke fixture, not live AAA verification.
+                        body = json.dumps({'price_per_gallon': 4.0,
+                                           'date': time.strftime('%Y-%m-%d', time.gmtime()),
+                                           'valid_until': int(time.time()) + 3600,
+                                           'source': 'aaa'}).encode()
+                        self.send_response(200)
+                        self.send_header('Content-Type', 'application/json')
+                        self.send_header('Content-Length', str(len(body)))
+                        self.end_headers()
+                        self.wfile.write(body)
+                        return
                     # Single-use backend redirect; no simulated Discord authorization.
                     if urlsplit(self.path).path == '/coop/auth/discord/callback':
                         with callback_lock:
@@ -47,7 +59,9 @@ def main():
                             self.send_error(400, 'Callback already consumed')
                             return
                         self.send_response(303)
-                        self.send_header('Location', '/?mode=private&pwa_callback=complete')
+                        self.send_header('Location', '/?' + urlencode({
+                            'mode': 'private', 'pwa_callback': 'complete',
+                            'coop-url': 'http://127.0.0.1:' + str(self.server.server_port)}))
                         self.end_headers()
                         return
                     super().do_GET()
@@ -67,6 +81,7 @@ def main():
             url = 'http://127.0.0.1:' + str(server.server_port) + '/'
         else:
             url = args.url.rstrip('/') + '/'
+        navigation_url = url + '?' + urlencode({'coop-url': url.rstrip('/')}) if args.zip else url
         try:
             request = urllib.request.Request(url + 'build.json', headers={'User-Agent': 'OrebitReleaseVerifier/1.0'})
             with urllib.request.urlopen(request, timeout=30) as response:
@@ -90,13 +105,20 @@ def main():
                     deadline = time.monotonic() + 120
                     while not ready and not errors and time.monotonic() < deadline:
                         page.wait_for_timeout(100)
+                    if ready and not errors and args.zip:
+                        # The engine starts pricing after menu readiness; await its body
+                        # before intentionally destroying this document with navigation.
+                        page.wait_for_function(
+                            "performance.getEntriesByType('resource').some(entry => "
+                            "new URL(entry.name).pathname === '/api/fuel-price' && entry.responseEnd > 0)",
+                            timeout=30000)
                     if errors:
                         raise RuntimeError('Web runtime errors: ' + '\n'.join(errors))
                     if not ready:
                         raise RuntimeError('Web export did not reach MainMenu readiness signal')
 
                 page.on('console', console)
-                page.goto(url, wait_until='domcontentloaded', timeout=120000)
+                page.goto(navigation_url, wait_until='domcontentloaded', timeout=120000)
                 page.wait_for_function('window.crossOriginIsolated === true', timeout=30000)
                 page.wait_for_function('document.querySelector("canvas")?.width > 0', timeout=30000)
                 wait_for_menu()

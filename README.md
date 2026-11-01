@@ -249,6 +249,10 @@ speculative callback request can consume single-use OAuth state before normal
 navigation repeats it. The archive-based Chromium CI smoke enables service
 workers and exercises a single-use backend redirect, rejecting duplicate fetches
 and offline fallbacks; this routing check does not simulate Discord auth.
+Its local service URL also supplies a deterministic fuel-price fixture and awaits
+that startup response before deliberate reloads, so it neither contacts production
+pricing nor cancels the engine's pending fetch. Console/runtime errors still fail
+the smoke. Public-site verification uses the real service, not that fixture.
 Native clients use the external browser; desktop clients foreground the game
 when their poll succeeds, and Android resumes through
 `org.motherloadrecoded.game://auth/discord`. The Android export plugin registers
