@@ -5,6 +5,7 @@ consume draws even though the service only needs tile types.
 """
 
 WIDTH, HEIGHT = 36, 600
+MIN_X = -10
 MINERALS = (
     "Ironium", "Bronzium", "Silverium", "Goldium", "Platinium", "Einsteinium",
     "Emerald", "Ruby", "Diamond", "Amazonite", "Dinosaur Bones", "Treasure",
@@ -65,10 +66,12 @@ class DotNetRandom:
         return int((float(value) * (1.0 / float(self.BIG))) * maximum)
 
 
-def generate(seed: int) -> list[list[int]]:
+def generate(seed: int) -> dict[int, list[int]]:
     random = DotNetRandom(seed)
-    cells = [[0] * HEIGHT for _ in range(WIDTH)]
-    for x in range(WIDTH):
+    # Preserve every original draw before extending the same stream westward.
+    columns = (*range(WIDTH), *range(MIN_X, 0))
+    cells = {x: [0] * HEIGHT for x in columns}
+    for x in columns:
         for y in range(HEIGHT):
             random.next(4)  # Rotation, including overwritten surface cells.
             if y < 5:
@@ -116,6 +119,8 @@ def generate(seed: int) -> list[list[int]]:
     # Buildings are traversable, pavement invincible; none can be excavated.
     for x in (2, 3, 4, 5, 9, 10, 11, 12, 13, 14, 21, 22, 23, 24, 25, 26, 30, 31, 32, 33):
         cells[x][5] = -3
+    for x in range(-8, -2):
+        cells[x][5] = -3 if x == -8 else (-5 if x == -3 else -4)
     return cells
 
 

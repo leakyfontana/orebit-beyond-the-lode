@@ -19,14 +19,14 @@ func _run() -> void:
 	var data: GameData = host.data
 	data.player_items["Reserve Fuel Tank"] = 2
 	data.player_money = 100
-	network._mining_baseline = data.coop_snapshot()
+	network._economic_baseline = data.coop_snapshot()
 	var authoritative := data.coop_snapshot()
 	authoritative.player_cargo.Ironium = 1
 	# Consumption and a purchase happen after the excavation request but before reply.
 	data.player_items["Reserve Fuel Tank"] -= 1
 	data.player_money -= 50
 	data.setUpgrade("Hull", "Ironium Hull")
-	var reconciled := network._reconcile_mining_state(authoritative)
+	var reconciled := network._reconcile_economic_state(authoritative)
 	check(reconciled.player_items["Reserve Fuel Tank"] == 1, "Mining reply duplicated a consumed fuel tank")
 	check(reconciled.player_money == 50, "Mining reply rolled back a purchase")
 	check(reconciled.current_upgrades.Hull == "Ironium Hull", "Mining reply lost an upgrade")
@@ -34,7 +34,7 @@ func _run() -> void:
 	data.restore_coop_state(reconciled, true)
 	# A second blast confirmation contains cumulative server rewards, not our local edits.
 	authoritative.player_cargo.Ironium = 2
-	reconciled = network._reconcile_mining_state(authoritative)
+	reconciled = network._reconcile_economic_state(authoritative)
 	check(reconciled.player_items["Reserve Fuel Tank"] == 1, "Batched mining replayed local consumption twice")
 	check(reconciled.player_money == 50 and reconciled.player_cargo.Ironium == 2, "Batched mining lost local spending or duplicated ore")
 	network.state_revision = 2
@@ -42,6 +42,21 @@ func _run() -> void:
 	network.world_event.connect(func(_event: Dictionary): sync_events[0] += 1)
 	network._receive({"type": "state_sync", "state_revision": 2, "state": authoritative})
 	check(sync_events[0] == 0, "Already acknowledged state revision overwrote newer local changes")
+	# Incoming transfers must preserve an unacknowledged purchase, but not replay an
+	# already accepted one against the recipient's authoritative credit.
+	data.player_money = 100
+	var acknowledged := data.coop_snapshot()
+	network._receive({"type": "state_ack", "state_revision": 2, "state": acknowledged})
+	data.player_money = 70
+	var credited := acknowledged.duplicate(true)
+	credited.player_money = 125
+	reconciled = network._reconcile_economic_state(credited)
+	check(reconciled.player_money == 95, "Incoming transfer lost unacknowledged local spending")
+	acknowledged.player_money = 70
+	network._receive({"type": "state_ack", "state_revision": 2, "state": acknowledged})
+	credited.player_money = 95
+	reconciled = network._reconcile_economic_state(credited)
+	check(reconciled.player_money == 95, "Incoming transfer applied acknowledged spending twice")
 	for url in ["http://localhost.attacker.test", "http://127.0.0.1.attacker.test", "http://localhost@attacker.test"]:
 		network.base_url = url
 		check(not network.endpoint_is_secure(), "Credential endpoint accepted insecure host: " + url)

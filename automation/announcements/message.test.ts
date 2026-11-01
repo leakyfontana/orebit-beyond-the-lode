@@ -1,28 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { renderAnnouncement, validateReceipt, type PublicationReceipt } from './message';
-
-const commit = 'a'.repeat(40);
-const links = {
-  releaseUrl: `https://github.com/leakyfontana/orebit-beyond-the-lode/releases/tag/beta-${commit}`,
-  receiptUrl: `https://github.com/leakyfontana/orebit-beyond-the-lode/releases/download/beta-${commit}/publication.json`,
-};
-function receipt(): PublicationReceipt {
-  return {
-    schema: 1,
-    kind: 'orebit.beta.publication',
-    repository: 'leakyfontana/orebit-beyond-the-lode',
-    release_id: commit,
-    version: `1.0-beta.2+${commit.slice(0, 12)}`,
-    commit,
-    published_at: '2026-10-30T00:00:00Z',
-    platforms: [{
-      platform: 'web', name: 'Web/PWA', url: 'https://drive.google.com/drive/folders/web-folder',
-      artifacts: [{ name: 'Orebit-web.zip', url: 'https://drive.google.com/file/d/web-archive/view', sha256: 'b'.repeat(64), size: 123 }],
-    }],
-    web: { url: 'https://play.arcmonkeyswelding.com/', commit, verified: true },
-    notes: { markdown: 'Fix collision behavior when drilling sideways.', commits: [{ commit, subject: 'Fix collision behavior when drilling sideways.' }] },
-  };
-}
+import { renderAnnouncement, validateReceipt } from './message';
+import { commit, links, receipt } from './test-fixtures';
 
 describe('publication announcements', () => {
 
@@ -30,8 +8,39 @@ describe('publication announcements', () => {
     const input = receipt();
     input.web.commit = 'c'.repeat(40);
     expect(() => validateReceipt(input)).toThrow();
-    const otherRelease = links.releaseUrl.replace(commit, 'c'.repeat(40));
+    const otherRelease = links.releaseUrl.replace('v0.3.2', 'v0.3.1');
     expect(() => renderAnnouncement(receipt(), { ...links, releaseUrl: otherRelease })).toThrow();
+  });
+
+  test('accepts only schema1 canonical publication versions without prerelease or build labels', () => {
+    for (const version of ['0.1.0', '0.3.2', '0.20.101']) {
+      expect(validateReceipt({ ...receipt(), version }).version).toBe(version);
+    }
+    for (const version of ['1.0.0', '0.3', 'v0.3.2', '0.03.2', '0.3.02', '0.3.2-beta.1', '0.3.2+aaaa', '0.3.2\n']) {
+      expect(() => validateReceipt({ ...receipt(), version })).toThrow();
+    }
+    expect(() => validateReceipt({ ...receipt(), kind: 'orebit.beta.publication' })).toThrow();
+    expect(() => validateReceipt({ ...receipt(), schema: 2 })).toThrow();
+    expect(() => validateReceipt({ ...receipt(), release_id: 'c'.repeat(40) })).toThrow();
+  });
+
+  test('preserves historical beta artifact names without labelling the release as beta', () => {
+    const input = receipt();
+    input.platforms[0].artifacts[0].name = 'Orebit-1.0-beta.8+aaaaaaaaaaaa-web.zip';
+    expect(validateReceipt(input).platforms[0].artifacts[0].name).toContain('beta');
+    const embed = renderAnnouncement(input, links).embeds[0];
+    expect(embed.title).toBe('Orebit 0.3.2');
+    expect(embed.footer.text).toBe('Release');
+    expect(JSON.stringify(embed)).not.toMatch(/beta/i);
+  });
+
+  test('requires version-matching canonical release and receipt URLs', () => {
+    for (const releaseUrl of [links.releaseUrl + '?redirect=1', links.releaseUrl.replace('v0.3.2', `beta-${commit}`),
+      links.releaseUrl.replace('github.com', 'github.com.evil.invalid')]) {
+      expect(() => renderAnnouncement(receipt(), { ...links, releaseUrl })).toThrow();
+    }
+    expect(() => renderAnnouncement(receipt(), { ...links,
+      receiptUrl: links.receiptUrl.replace('v0.3.2', 'v0.3.1') })).toThrow();
   });
 
   test('rejects download-host impersonation and unsupported package formats', () => {

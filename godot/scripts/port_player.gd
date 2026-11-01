@@ -78,6 +78,8 @@ var _ground_node: Node2D
 var _ground_offset := Vector2.ZERO
 var _ground_query: PhysicsShapeQueryParameters2D
 var _last_ground_render_step: int = -1
+var _pose_history_start_step: int = 0
+var _pose_render_frame: int = -1
 var _shapes: Array[Node2D] = []
 var _shape_transforms: Array[Transform2D] = []
 var _collision_layer: int
@@ -94,6 +96,7 @@ func configure(main_host: Node, player_body: RigidBody2D, player_visual: Node2D,
 	body = player_body
 	my_rigidbody = body
 	visual = player_visual
+	_pose_history_start_step = host.physics_step
 	properties = serialized_properties
 	data = host.data
 	world = host.world
@@ -127,9 +130,32 @@ func configure(main_host: Node, player_body: RigidBody2D, player_visual: Node2D,
 	animator.state_exited.connect(_state_exited)
 	host.ui.updateAllUI()
 
-func sync_physics_pose() -> void:
-	# Node state synchronizes before the step; source Update sees the completed step.
+func begin_render_pose() -> void:
+	_pose_render_frame = -1
+	sync_physics_pose()
+
+func sync_physics_pose(render_pose: bool = true) -> void:
+	# Unity reconstructs the render pose before Update. Later same-frame reads
+	# must not recompute it from velocities changed by gameplay or animation.
+	if render_pose:
+		if _pose_render_frame == host.frame_number:
+			host.player_position = visual.global_position / UNITS
+			return
+		_pose_render_frame = host.frame_number
+	# Static bodies retain the last rendered transform, including direct writes
+	# made by digging/teleport animation events, rather than restoring raw state.
+	if body.freeze:
+		host.player_position = visual.global_position / UNITS
+		return
 	var pose: Transform2D = PhysicsServer2D.body_get_state(body.get_rid(), PhysicsServer2D.BODY_STATE_TRANSFORM)
+	if render_pose and host.physics_step - _pose_history_start_step >= 2:
+		# A new dynamic body needs two completed native steps for extrapolation
+		# history. The first pose remains raw even across renders with no step.
+		var elapsed: float = _f32(host.physics_render_delta)
+		var velocity: Vector2 = PhysicsServer2D.body_get_state(body.get_rid(), PhysicsServer2D.BODY_STATE_LINEAR_VELOCITY)
+		pose.origin = Vector2(
+			_f32(pose.origin.x + _f32(velocity.x * elapsed)),
+			_f32(pose.origin.y + _f32(velocity.y * elapsed)))
 	visual.global_position = pose.origin
 	visual.global_rotation = pose.get_rotation()
 	host.player_position = pose.origin / UNITS
@@ -187,7 +213,7 @@ func physics_tick(delta: float) -> void:
 	if not _alive or host.paused:
 		return
 	_physics_delta = delta
-	sync_physics_pose()
+	sync_physics_pose(false)
 	_update_ground_contact()
 	manageCrashVerification()
 	if not _alive:
@@ -220,13 +246,16 @@ func _can_move() -> bool:
 func _read_axes() -> void:
 	var horizontal: int = int(GameInput.axis_raw("Horizontal"))
 	var vertical: int = int(GameInput.axis_raw("Vertical"))
-	if host.replay_runner != null and not host.replay_runner.live_input:
+	if host.agent_axes != null:
+		horizontal = int(host.agent_axes.x)
+		vertical = int(host.agent_axes.y)
+	elif host.replay_runner != null and not host.replay_runner.live_input:
 		horizontal = int(host.replay_runner.axes.get("Horizontal", 0))
 		vertical = int(host.replay_runner.axes.get("Vertical", 0))
 	moveX = horizontal * data.player_horizontal_speed
 	moveY = vertical * data.player_vertical_speed
 	var arrow: CanvasItem = bridge.node(properties.get("mouse_pointer_arrow", {})) as CanvasItem
-	if not GameInput.mouse_steering_allowed():
+	if host.agent_axes != null or not GameInput.mouse_steering_allowed():
 		mouse_is_last_used_input = false
 		if arrow != null:
 			arrow.hide()
@@ -282,11 +311,11 @@ func _configure_ground_detector() -> void:
 	_ground_query.collision_mask = _collision_mask
 
 func refresh_ground_after_step() -> void:
-	var step := Engine.get_physics_frames()
+	var step: int = host.physics_step
 	if step == _last_ground_render_step:
 		return
 	_last_ground_render_step = step
-	sync_physics_pose()
+	sync_physics_pose(false)
 	_update_ground_contact()
 
 func _update_ground_contact() -> void:
@@ -441,6 +470,8 @@ func stopMovement() -> void:
 	body.freeze = true
 
 func startMovement() -> void:
+	if body.freeze:
+		_pose_history_start_step = host.physics_step
 	body.freeze = false
 	body.sleeping = false
 
@@ -512,7 +543,9 @@ func _poll_item_keys() -> void:
 	_pressed_item = -1
 	for index in ITEM_NAMES.size():
 		var down: bool = GameInput.key_pressed("Alpha" + str(index + 1))
-		if host.replay_runner != null and not host.replay_runner.live_input:
+		if host.agent_axes != null:
+			down = false
+		elif host.replay_runner != null and not host.replay_runner.live_input:
 			down = bool(host.replay_runner.keys.get("Alpha" + str(index + 1), false))
 		if down and not _item_keys_down[index] and _pressed_item < 0:
 			_pressed_item = index
@@ -566,7 +599,9 @@ func createPopup(text: String, trigger_text: String) -> void:
 
 func createExplosions(explosion_range: float, time: float, quantity: int) -> void:
 	var player_position: Vector2 = position_unity
-	_explosion_location = Vector2i(floori(absf(player_position.x)), floori(absf(player_position.y)) + 1)
+	# Co-op includes signed western mining coordinates; preserve private behavior.
+	var explosion_x := player_position.x if data.coop_mode else absf(player_position.x)
+	_explosion_location = Vector2i(floori(explosion_x), floori(absf(player_position.y)) + 1)
 	_total_explosion_time = _f32(time)
 	_explosion_min = player_position - Vector2.ONE * (explosion_range + 0.5)
 	_explosion_max = player_position + Vector2.ONE * (explosion_range + 0.5)
@@ -606,7 +641,7 @@ func _prefab_name(property_name: String) -> String:
 
 func destroyBlocksFromExplosion(explosion_range: int) -> void:
 	var changed: Array[Vector2i] = []
-	for x in range(maxi(0, _explosion_location.x - explosion_range), mini(data.earthWidth, _explosion_location.x + explosion_range + 1)):
+	for x in range(maxi(world.surface_left(), _explosion_location.x - explosion_range), mini(data.earthWidth, _explosion_location.x + explosion_range + 1)):
 		for y in range(maxi(0, _explosion_location.y - explosion_range), mini(data.earthHeight, _explosion_location.y + explosion_range + 1)):
 			# The GameObject overload used here accepts Diggable, including Rock,
 			# but does not erase invincible tiles or already-open tunnels.
@@ -760,7 +795,7 @@ func _state_exited(_state_name: String, behaviors: Array) -> void:
 				animator.condition("IsDownDrillOut", false)
 
 func _smooth_damp(current: float, target: float, smooth_time: float, delta: float) -> float:
-	# Preserve float32 operation order from Mathf.SmoothDamp, not double math.
+	# The native oracle rounds stored float locals, not every intermediate.
 	# The source uses its default infinite maximum speed, so no clamp is needed.
 	current = _f32(current)
 	target = _f32(target)
@@ -768,16 +803,14 @@ func _smooth_damp(current: float, target: float, smooth_time: float, delta: floa
 	smooth_time = maxf(0.00009999999747378752, _f32(smooth_time))
 	var omega: float = _f32(2.0 / smooth_time)
 	var x: float = _f32(omega * delta)
-	var quadratic: float = _f32(_f32(0.47999998927116394 * x) * x)
-	var cubic: float = _f32(_f32(_f32(0.23499999940395355 * x) * x) * x)
-	var decay: float = _f32(1.0 / _f32(_f32(_f32(1.0 + x) + quadratic) + cubic))
+	var decay: float = _f32(1.0 / (1.0 + x + 0.47999998927116394 * x * x + 0.23499999940395355 * x * x * x))
 	var original_target: float = target
 	var change: float = _f32(current - target)
 	target = _f32(current - change)
-	var temporary: float = _f32(_f32(_smooth_velocity + _f32(omega * change)) * delta)
-	_smooth_velocity = _f32(_f32(_smooth_velocity - _f32(omega * temporary)) * decay)
-	var result: float = _f32(target + _f32(_f32(change + temporary) * decay))
-	if (_f32(original_target - current) > 0.0) == (result > original_target):
+	var temporary: float = _f32((_smooth_velocity + omega * change) * delta)
+	_smooth_velocity = _f32((_smooth_velocity - omega * temporary) * decay)
+	var result: float = _f32(target + (change + temporary) * decay)
+	if _f32(original_target - current) * _f32(result - original_target) > 0.0:
 		result = original_target
 		_smooth_velocity = _f32(_f32(result - original_target) / delta)
 	return result

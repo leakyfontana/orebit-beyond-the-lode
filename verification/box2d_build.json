@@ -107,7 +107,9 @@
     "Synchronize only an edited fixture's proxy bounds after local geometry baking, preserving fixture/contact identity and scheduling new broad-phase pairs.",
     "Create BODY_MODE_STATIC as b2_staticBody, matching subsequent set_mode behavior and avoiding false kinematic velocity when static boss geometry moves.",
     "Scale circle/capsule end-cap radius using absolute uniform scale, including reflected actors; keep circle centers and single-fixture synchronization unchanged.",
-    "Refilter existing owned fixtures when collision layer/mask actually changes, so stationary overlapping bodies enter/leave contacts without moving or rebuilding fixture identity."
+    "Refilter existing owned fixtures when collision layer/mask actually changes, so stationary overlapping bodies enter/leave contacts without moving or rebuilding fixture identity.",
+    "Expose the existing factory as main-thread-only Box2DClock. Exclusive manual ownership gates automatic stepping/query flushing and completes native space stepping plus existing body/contact/area synchronization once per gameplay fixed tick.",
+    "Treat segment and concave line fixtures as zero-area in all compound mass/center/inertia calculations, even when diagonal AABBs enclose area; retain the original solid-shape mass convention."
   ],
   "remaining_upstream_limitations": [
     "No double-precision Box2D backend; evaluate precision=single only.",
@@ -122,8 +124,73 @@
   ],
   "evidence": {
     "binding_generation": "Bindings generated from the exact evaluated 4.7.2 API and compiled for macOS ARM64, Windows x86-64, Android ARM64 and WebAssembly.",
-    "compilation": "Cycles132/142/145 rebuild all four backends with b2_lengthUnitsPerMeter1 and the exact Godot4.7.2 API. Windows uses approved MSVC19.44/v143; Android uses pinned NDK28.1; Web uses installed Emscripten6.0.13. Existing asset-inspection Python -m SCons avoids the unrelated Python3.15 environment without SCons. Current macOS library SHA256b5aac70f3b98c20512de771a95aa9d539246f75e20dd989da0797e6271b9eea2 and Windows45e0253479860e077b03cee205fbd362cfc741960fe9ff9732c98829955ad553. Do not mix earlier50-unit libraries/PCKs with current metre-scale resources.",
-    "runtime": "All six native boundary suites pass133; metre-scale macOS core134-138, actual Windows eight-case155 and deterministic Android eight-case157/161 complete without engine errors. Corrected beta8 actual packaged Mac/Windows/Android controller1800/fullboss480/refill1400 pass169; Windows game0/runner0/warnings[], Android native completion/no OS exit inference. Both fuel-report branches land safely. Strict full movement/shops/boss/menu153 have zero event failures but fail exact state at frames75/173; no tolerance or offset. Installed private iOS PWA and regular Safari169 load coherent37306096-byte Orebit pack/all four PCK+WASM URLs; exact882058-byte save/hash remains unchanged, including Continue/pause165. Controller regression168 passes77/77 and filled-boss overlap is corrected; controller final states match all three native platforms but Windows has three tiny complete-trace velocity differences166. Physical Xbox remains unavailable/unverified (Mac joypads[], all four Windows XInput slots1167). Earlier Android76/77 realtime fixtures are not deterministic evidence; exported Windows templates do not support standalone external-script passes. Exact acceptance remains unverified; authorized verification stops at170.",
+    "compilation": "Cycles132/142/145 establish metre-scale resources with the pinned Godot4.7.2 API, approved MSVC19.44/v143, NDK28.1 and Emscripten6.0.13. Cycle209 rebuilds all four targets for native manual clock ownership;216 rebuilds all four with the general line-mass repair. Current hashes/proof are in clock_mass216; manual_clock209 is historical. Do not mix libraries/PCKs from different source revisions. Existing ABS<float> and Emscripten WASM_BIGINT deprecations are retained, not suppressed.",
+    "runtime": "Historical pre-manual-clock evidence: six native boundary suites133; metre-scale macOS134–138, Windows eight-case155 and deterministic Android eight-case157/161 complete. Beta8 packaged Mac/Windows/Android controller/full-boss/refill cases169 run; controller final states match but Windows retains three tiny full-trace velocity differences166. Both fuel-report branches land safely. Physical Windows189 proves real movement/drilling, inventory/pause, selections and purchases;193 adds focus and actual hotplug, not held-direction cancellation or all-platform acceptance. Installed iOS PWA/Safari169 preserve the exact882058-byte save; physical phones remain protected. Strict original state/visual/audio gates are still unmet. Current allowance is250; cycles.json is authoritative.",
     "windows_binding_flags_patch": "verification/godot-cpp-msvc-conformance.patch; apply to pinned godot-cpp in addition to the adapter patch. Provides consistent C++17 conformance flags and explicit existing compiler-instance selection; no linker errors are suppressed."
+  },
+  "manual_clock209": {
+    "singleton": "Box2DClock",
+    "source_interval": "Exact binary32(0.02), accumulated in double; first render is the time origin; pause/time-scale govern elapsed simulation time.",
+    "ownership": "Main-thread only. Existing agent_axes worker retains its engine-owned physics-frame protocol. SceneTree physics notifications are not manually retimed.",
+    "artifacts_sha256": {
+      "macos_arm64": "ba877c70bd25989245e081ca7d100b8f7223eeb39777a2630043393a8278da35",
+      "windows_x86_64": "337e7f52af8d4d6e19eb44fe87cec008fee525edddcc8de49b53b7da20203483",
+      "android_arm64": "313fb8bbb7726274d1b32e64e427ec15400bc36c146b457f563fef75e8776ce9",
+      "web_wasm32_nothreads": "aac71bc8d6b8f6b9d3e89c4ea6cbbf6d759e233a863f7a7cae6ffbb113510fbe"
+    },
+    "evidence": "verification/captures/native-clock209-build.json",
+    "runtime_status": "Historical status at209: actual macOS consumers and paired replays206–208 run, with exact original parity still failing. Subsequent current packaged runtime proof217–220 is recorded under clock_mass216. Prior share packages and installed physical phones remain unchanged."
+  },
+  "clock_mass216": {
+    "native_body_sha256": "c60075e104d404db04f8f354bc5180a27936cf79a2f401d9e498ab44bb7ad048",
+    "patch_sha256": "f6eccdcccd84fb006d440824e4e2b093778adb7d9a89a91fd59d2fda70fbe2f9",
+    "artifacts_sha256": {
+      "macos_arm64": "d4afeb31a40c2fab71a4b758363a399c33d9a05e49e30b7c6aba04ec2739a07f",
+      "windows_x86_64": "ad88a5d757bab770cf244c5bbb539167824ccf83d6d161c552816b8d4475f94a",
+      "android_arm64": "e5dc617bf87d1295c93ea61bc52911fea83166e3f485215d0bf80e58c8da1f37",
+      "web_wasm32_nothreads": "262fb2d377473d97e947ad0443d30279ca24dce4405a770cb2c77b1485380968"
+    },
+    "build_evidence": "verification/captures/native-mass216-build.json",
+    "consumer_evidence": "verification/captures/massless-edges211-before.json and massless-edges211-after.json: two compound mass consumers fail before and all eight original/new boundaries pass after.",
+    "runtime_evidence": [
+      "verification/captures/clock217-comparisons.json",
+      "verification/captures/clock218-comparisons.json",
+      "verification/captures/clock218-apk-identity.json",
+      "verification/captures/clock218-preservation.json",
+      "verification/captures/clock219-safari-proof.json",
+      "verification/captures/clock220-critical-outcomes.json",
+      "verification/captures/platform-sync220-source-checkpoint.json"
+    ],
+    "runtime_scope": "Actual packaged Mac/Windows/Android moving-pause120 states/events match across native platforms; each still differs from original Unity in two position rows. Android additionally completes no-refill1100 and real-refill1400 with live unpaused/unfrozen settled bodies. Web exports and owned simulator Safari renders the mode chooser; interactive iOS controls remain unverified because the Mac is locked. No physical-controller acceptance is inferred.",
+    "delivery_scope": "Normal Android QA APK218 restored only to the owned paused emulator with all three protected files byte-identical. Immutable beta8 share files, normal Windows user game, physical phones, public Web and installed PWA not replaced.",
+    "animation_limit": "Historical through250: custom engine source precision/audio trial isolated. Generic damping251 and unchanged-transform preservation252 are now production; see center_precision252 for current source/library/runtime evidence. Stock engine animation timing, full movement/boss, visual/audio and physical-controller gates remain unmet. User renewed allowance through300; no all-platform custom-engine adoption approved."
+  },
+  "center_precision252": {
+    "patch_sha256": "c695ccee5cfc18d323ca09222e855e4ba4236205293cfb8bfea8c7c71d6286ce",
+    "wrapper_sha256": "6ec81fcabf3e646f91b83fc74859548e0ee1192c10afcaf2406e6d8e5b49b763",
+    "artifacts_sha256": {
+      "macos": "b065bba6d7661eb08d7d3fd8d4c5c6aa4b9898e33fc607a2f975ae125bd8eacb",
+      "windows": "41ff5704b7ae1582f3ef35cc782e40c0a387fd3c4d437fea27e1ecd3462916a2",
+      "android": "368296b79b260d811dae6478ef45af1dcd4261ef8a0c0e39cbe708026b1c6dce",
+      "web": "416bc69bf920d0e311fd75ace6721fe436fc8104d814c2a419682b1caf52c13a"
+    },
+    "source_reproduction": "verification/captures/center251-patch-result.json; all23 patched files match pinned original plus tracked patch",
+    "engine": "Stock officialGodot4.7.2; custom animation/audio engine prototype NOT adopted",
+    "changes": [
+      "Exactly unchanged dynamic origin/angle does not reset Box2D sweep center; existing wake/kinematic behavior retained",
+      "Production PortPlayer damping rounds stored float locals rather than every expression intermediate; Vector2 target-momentum guard retained"
+    ],
+    "runtime_evidence": [
+      "verification/captures/native-center252-build.json",
+      "verification/captures/center253-result.json",
+      "verification/captures/center254-result.json",
+      "verification/captures/center256-comparisons.json",
+      "verification/captures/center257-desktop-state-identity.json",
+      "verification/captures/center255-apk-identity.json",
+      "verification/captures/center259-web-ui.json"
+    ],
+    "runtime_scope": "Actual Mac nine-case physics regression passes; complete120 serialized moving/pause states and events match Unity and are byte-identical in packagedMac/Windows. Full900 original stillFAIL360 rows; Mac/Windows differ in one tiny verticalvelocity at521. Web actual private NewGame/movement/pause/resume verified; Android current emulator checks pending.",
+    "delivery_scope": "Separate normal QA exports godot/exports/center255 and verification/captures/center255-web only. Beta8 share files, publicWeb, normalWindows user game and physical phones unchanged. Existing pinnedWindowsSSH restored; no signed-in desktop reported251, physicalcontroller gate remains blocked.",
+    "allowance": "User renewed through300 total cycles; cycles.json authoritative"
   }
 }

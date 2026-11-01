@@ -29,7 +29,9 @@ var _join_sent := false
 var _connect_elapsed := 0.0
 var _sequence := 0
 var _pending_mines: Dictionary = {}
-var _mining_baseline: Dictionary = {}
+var _economic_baseline: Dictionary = {}
+var transfer_pending := false
+var _transfer_elapsed := 0.0
 var startup_mode := ""
 var _last_usec := 0
 var discord_url := ""
@@ -175,8 +177,8 @@ func _http_completed(result: int, code: int, _headers: PackedStringArray, body: 
 	status_changed.emit("Signed in as " + username + ". Join to restore your server progress.")
 
 func join_world() -> void:
-	if not _pending_mines.is_empty():
-		status_changed.emit("Waiting for excavation confirmation before rejoining.")
+	if has_pending_actions():
+		status_changed.emit("Waiting for the current server transaction before rejoining.")
 		return
 	if not _http_kind.is_empty() or not _poll_token.is_empty():
 		status_changed.emit("Finish signing in, or use Sign out / cancel sign-in to join anonymously.")
@@ -207,42 +209,55 @@ func leave_world() -> void:
 	player_id = ""
 	peers.clear()
 	_pending_mines.clear()
-	_mining_baseline.clear()
+	_economic_baseline.clear()
+	transfer_pending = false
+	_transfer_elapsed = 0.0
 
 func send_state() -> void:
-	if _pending_mines.is_empty() and connected and host.is_coop and host.scene_name == "Game" and host.player != null and host.player.data == host.data:
+	if not has_pending_actions() and connected and host.is_coop and host.scene_name == "Game" and host.player != null and host.player.data == host.data:
 		_send({"type": "state", "state": host.coop_state(), "state_revision": state_revision})
 
+func has_pending_actions() -> bool:
+	return not _pending_mines.is_empty() or transfer_pending
+
+func transfer_money(recipient_id: String, amount: int) -> bool:
+	if not connected or has_pending_actions() or recipient_id == player_id or not peers.has(recipient_id) or amount <= 0 or amount > host.data.player_money:
+		return false
+	send_state()
+	transfer_pending = true
+	_transfer_elapsed = 0.0
+	_send({"type": "transfer", "recipient_id": recipient_id, "amount": amount})
+	return true
+
 func mine(x: int, y: int, method: String = "drill") -> bool:
-	if not connected:
+	if not connected or transfer_pending:
 		return false
 	var cell := Vector2i(x, y)
 	if _pending_mines.has(cell):
 		return true
 	if _pending_mines.is_empty():
 		send_state()
-		_mining_baseline = host.data.coop_snapshot()
 	_sequence += 1
 	_pending_mines[cell] = 0.0
 	_send({"type": "mine", "request_id": str(_sequence), "x": x, "y": y, "method": method})
 	return true
 
-func _reconcile_mining_state(authoritative: Dictionary) -> Dictionary:
-	# Local purchases/consumption can happen while an excavation reply is in flight.
-	# Preserve only changes since the last submitted/acknowledged economic snapshot.
+func _reconcile_economic_state(authoritative: Dictionary) -> Dictionary:
+	# Merge only local changes since the last server-acknowledged snapshot.
+	# A sent snapshot is not a baseline: stale revisions may reject that write.
 	var current: Dictionary = host.data.coop_snapshot()
 	var merged := authoritative.duplicate(true)
-	merged.player_money = int(authoritative.get("player_money", 20)) + int(current.player_money) - int(_mining_baseline.get("player_money", 20))
+	merged.player_money = int(authoritative.get("player_money", 20)) + int(current.player_money) - int(_economic_baseline.get("player_money", 20))
 	for field in ["player_items", "player_cargo"]:
 		var values: Dictionary = authoritative.get(field, {}).duplicate()
-		var before: Dictionary = _mining_baseline.get(field, {})
+		var before: Dictionary = _economic_baseline.get(field, {})
 		for key in current[field]:
 			values[key] = maxi(0, int(values.get(key, 0)) + int(current[field][key]) - int(before.get(key, 0)))
 		merged[field] = values
 	for field in ["current_upgrades", "transmissions"]:
-		if current[field] != _mining_baseline.get(field, current[field]):
+		if current[field] != _economic_baseline.get(field, current[field]):
 			merged[field] = current[field]
-	_mining_baseline = authoritative.duplicate(true)
+	_economic_baseline = authoritative.duplicate(true)
 	return merged
 
 func _send(message: Dictionary) -> void:
@@ -283,6 +298,11 @@ func _process(delta: float) -> void:
 			_receive(parsed)
 	if not connected:
 		return
+	if transfer_pending:
+		_transfer_elapsed += delta
+		if _transfer_elapsed > 20.0:
+			_fail("The server stopped confirming the transfer. Rejoin to see the saved balance; do not resend an unconfirmed transfer.")
+			return
 	for cell in _pending_mines.keys():
 		_pending_mines[cell] += delta
 		if _pending_mines[cell] > 20.0:
@@ -301,6 +321,7 @@ func _receive(event: Dictionary) -> void:
 			player_id = str(event.player_id)
 			world_id = str(event.world_id)
 			state_revision = int(event.get("state_revision", 0))
+			_economic_baseline = event.get("state", {}).duplicate(true)
 			for peer in event.get("players", []):
 				peers[str(peer.player_id)] = peer
 			joined_world.emit(event)
@@ -321,18 +342,30 @@ func _receive(event: Dictionary) -> void:
 			var own := str(event.get("player_id", "")) == player_id
 			if own:
 				_pending_mines.erase(Vector2i(int(event.x), int(event.y)))
-				if bool(event.get("accepted", false)):
-					state_revision = int(event.get("state_revision", state_revision))
-					event.state = _reconcile_mining_state(event.get("state", {}))
+				if bool(event.get("accepted", false)) and int(event.get("state_revision", 0)) > state_revision:
+					state_revision = int(event.state_revision)
+					event.state = _reconcile_economic_state(event.get("state", {}))
+				elif bool(event.get("accepted", false)):
+					event.state = host.data.coop_snapshot()
 			world_event.emit(event)
 			if own and _pending_mines.is_empty():
-				_mining_baseline.clear()
 				send_state()
+		"state_ack":
+			if int(event.get("state_revision", 0)) == state_revision:
+				_economic_baseline = event.get("state", {}).duplicate(true)
+		"transfer_result":
+			transfer_pending = false
+			if bool(event.get("accepted", false)) and int(event.get("state_revision", 0)) > state_revision:
+				state_revision = int(event.state_revision)
+				event.state = _reconcile_economic_state(event.get("state", {}))
+			world_event.emit(event)
+			send_state()
 		"state_sync":
-			# Ordered WebSocket replies already delivered this revision's mining reward.
 			if int(event.get("state_revision", 0)) > state_revision:
 				state_revision = int(event.state_revision)
+				event.state = _reconcile_economic_state(event.get("state", {}))
 				world_event.emit(event)
+				send_state()
 		"error":
 			var message := str(event.get("message", "The server rejected the request."))
 			if connecting:

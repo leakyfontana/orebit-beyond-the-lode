@@ -209,6 +209,11 @@ func _number(value: float) -> String:
 	return str(int(value)) if value == floorf(value) else str(value)
 
 func _input(event: InputEvent) -> void:
+	if host.coop != null and host.coop.transfer.modal:
+		if event.is_action_pressed(&"pause"):
+			host.coop.transfer.close_visit()
+			get_viewport().set_input_as_handled()
+		return
 	if host.coop != null and host.coop.lobby.modal:
 		return
 	if not event.is_pressed() or (event is InputEventKey and event.echo):
@@ -380,6 +385,8 @@ func _dispatch(target_id: String, method: String, argument: Variant) -> void:
 					popup.queue_free()
 
 func isUIOpen() -> bool:
+	if host.coop != null and host.coop.transfer.modal:
+		return true
 	for reference in _properties("UIManager").get("allUI", []):
 		if _active(reference):
 			return true

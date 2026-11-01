@@ -418,10 +418,52 @@ index 086296d..f4ca90c 100644
  	void update_area_override();
  	bool has_any_space_override() const;
 diff --git a/src/bodies/box2d_body_2d.cpp b/src/bodies/box2d_body_2d.cpp
-index 662a11d..4435344 100644
 --- a/src/bodies/box2d_body_2d.cpp
 +++ b/src/bodies/box2d_body_2d.cpp
-@@ -515,10 +515,12 @@ void Box2DBody2D::set_space(Box2DSpace2D *p_space) {
+@@ -3,6 +3,15 @@
+ #include "../spaces/box2d_space_2d.h"
+ #include "box2d_direct_body_state_2d.h"
+ 
++static real_t shape_mass_area(const Box2DShape2D *p_shape) {
++	const PhysicsServer2D::ShapeType type = p_shape->get_type();
++	// Line fixtures have no mass, even when their diagonal bounds have area.
++	if (type == PhysicsServer2D::SHAPE_SEGMENT || type == PhysicsServer2D::SHAPE_CONCAVE_POLYGON) {
++		return 0.0;
++	}
++	return p_shape->get_aabb().get_area();
++}
++
+ void Box2DBody2D::_mass_properties_changed() {
+ 	if (!get_space()) {
+ 		return;
+@@ -48,7 +57,7 @@
+ 		if (is_shape_disabled(i)) {
+ 			continue;
+ 		}
+-		total_area += get_shape(i)->get_aabb().get_area();
++		total_area += shape_mass_area(get_shape(i));
+ 	}
+ 
+ 	if (calculate_center_of_mass) {
+@@ -62,7 +71,7 @@
+ 
+ 				const Box2DShape2D *shape = get_shape(i);
+ 
+-				real_t shape_area = shape->get_aabb().get_area();
++				real_t shape_area = shape_mass_area(shape);
+ 				if (shape_area == 0.0 || mass == 0.0) {
+ 					continue;
+ 				}
+@@ -88,7 +97,7 @@
+ 
+ 				const Box2DShape2D *shape = get_shape(i);
+ 
+-				real_t shape_area = shape->get_aabb().get_area();
++				real_t shape_area = shape_mass_area(shape);
+ 				if (shape_area == 0.0 || mass == 0.0) {
+ 					continue;
+ 				}
+@@ -515,10 +524,12 @@
  		gravity_update_list.remove_from_list();
  		active_list.remove_from_list();
  		direct_state_query_list.remove_from_list();
@@ -435,7 +477,7 @@ index 662a11d..4435344 100644
  
  	if (get_space()) {
  		if (mode >= PhysicsServer2D::BODY_MODE_KINEMATIC) {
-@@ -706,18 +708,15 @@ void Box2DBody2D::apply_central_force(const Vector2 &p_force) {
+@@ -706,18 +717,15 @@
  	}
  
  	if (mass_properties_update_list.in_list()) {
@@ -950,10 +992,9 @@ index ad625e1..7d5b70e 100644
  
  #endif // BOX2D_DIRECT_BODY_STATE_2D_H
 diff --git a/src/box2d-wrapper/box2d_wrapper.cpp b/src/box2d-wrapper/box2d_wrapper.cpp
-index f2dedb9..80d8588 100644
 --- a/src/box2d-wrapper/box2d_wrapper.cpp
 +++ b/src/box2d-wrapper/box2d_wrapper.cpp
-@@ -248,6 +248,10 @@ void box2d::body_add_torque(b2World *world_handle, b2Body *body_handle, real_t t
+@@ -248,6 +248,10 @@
  	body_handle->GetUserData().constant_torque += torque;
  }
  
@@ -964,7 +1005,35 @@ index f2dedb9..80d8588 100644
  void box2d::body_apply_impulse(b2World *world_handle, b2Body *body_handle, const b2Vec2 impulse) {
  	body_handle->ApplyLinearImpulseToCenter(impulse, true);
  }
-@@ -472,18 +476,13 @@ FixtureHandle box2d::collider_create_solid(b2World *world_handle,
+@@ -390,10 +394,10 @@
+ 		real_t rot,
+ 		bool wake_up,
+ 		real_t step) {
+-	b2Vec2 new_pos = (pos - body_handle->GetPosition());
+-	new_pos.x /= step;
+-	new_pos.y /= step;
+ 	if (body_handle->GetType() == b2BodyType::b2_kinematicBody) {
++		b2Vec2 new_pos = (pos - body_handle->GetPosition());
++		new_pos.x /= step;
++		new_pos.y /= step;
+ 		real_t new_rot1 = (rot - body_handle->GetAngle()) / step;
+ 		real_t new_rot2 = -(2.0 * b2_pi - rot + body_handle->GetAngle()) / step;
+ 		real_t new_rot = new_rot1;
+@@ -403,7 +407,12 @@
+ 		body_handle->SetLinearVelocity(new_pos);
+ 		body_handle->SetAngularVelocity(new_rot);
+ 	} else {
+-		body_handle->SetTransform(pos, rot);
++		const b2Vec2 &current_pos = body_handle->GetPosition();
++		// SetTransform rebuilds the sweep center from the rounded origin.
++		// Republishing an unchanged transform must preserve integration history.
++		if (pos.x != current_pos.x || pos.y != current_pos.y || rot != body_handle->GetAngle()) {
++			body_handle->SetTransform(pos, rot);
++		}
+ 		if (body_handle->IsSleepingAllowed()) {
+ 			body_handle->SetAwake(wake_up);
+ 		} else {
+@@ -472,18 +481,13 @@
  
  void box2d::collider_destroy(b2World *world_handle, FixtureHandle handle) {
  	ERR_FAIL_COND(!is_handle_valid(handle));
@@ -979,17 +1048,18 @@ index f2dedb9..80d8588 100644
 -				body->DestroyFixture(fixture);
 -			}
 -		}
+-	}
 +	// Each handle owns a live fixture. DestroyFixture synchronously ends its
 +	// contacts, then frees the fixture; never follow its linked-list next pointer.
 +	for (int i = 0; i < handle.count; i++) {
 +		b2Fixture *fixture = handle.handles[i];
 +		fixture->GetBody()->DestroyFixture(fixture);
- 	}
++	}
 +	memfree(handle.handles);
  }
  
  b2Vec2 box2d::Vector2_to_b2Vec2(Vector2 vec) {
-@@ -526,8 +525,20 @@ void box2d::collider_set_transform(b2World *world_handle, FixtureHandle handles,
+@@ -526,8 +530,20 @@
  				b2CircleShape *circle_shape_template = (b2CircleShape *)shape_template;
  				b2CircleShape *circle_shape = (b2CircleShape *)shape;
  				circle_shape->m_p = xform_b2Vec2(circle_shape_template->m_p, transform);
@@ -1012,7 +1082,7 @@ index f2dedb9..80d8588 100644
  				}
  			} break;
  			case b2Shape::Type::e_chain: {
-@@ -566,6 +577,10 @@ void box2d::collider_set_transform(b2World *world_handle, FixtureHandle handles,
+@@ -566,6 +582,10 @@
  				ERR_FAIL_MSG("Invalid Shape Type");
  			}
  		}
@@ -1023,7 +1093,7 @@ index f2dedb9..80d8588 100644
  	}
  }
  
-@@ -905,6 +920,7 @@ ShapeCastResult box2d::shape_casting(b2World *world_handle,
+@@ -905,6 +925,7 @@
  		QueryHandleExcludedCallback handle_excluded_callback,
  		const QueryExcludedInfo *handle_excluded_info,
  		double margin) {
@@ -1031,7 +1101,7 @@ index f2dedb9..80d8588 100644
  	for (int i = 0; i < shape_info.handle.count; i++) {
  		shape_info.handle.handles[i]->m_radius += margin;
  		b2AABB shape_aabb;
-@@ -933,13 +949,18 @@ ShapeCastResult box2d::shape_casting(b2World *world_handle,
+@@ -933,13 +954,18 @@
  		result.collided = false;
  		for (int j = 0; j < count; j++) {
  			b2Body *other_body = hit_info_array[j].collider->GetBody();
@@ -1057,7 +1127,7 @@ index f2dedb9..80d8588 100644
  			if (is_toi_intersected(toi_output)) {
  				b2Transform shape_transform_moved = shape_transform;
  				shape_transform_moved.p += toi_output.t * motion;
-@@ -972,10 +993,27 @@ ShapeCollideResult box2d::shape_collide(const b2Vec2 motion1,
+@@ -972,10 +998,27 @@
  		ShapeInfo shape_info1,
  		const b2Vec2 motion2,
  		ShapeInfo shape_info2) {
@@ -1085,7 +1155,7 @@ index f2dedb9..80d8588 100644
  			b2TOIOutput toi_output = _time_of_impact(shape_info1.handle.handles[i],
  					transformA,
  					b2Vec2_zero,
-@@ -1053,23 +1091,37 @@ ShapeHandle box2d::shape_create_circle(real_t radius, b2Vec2 pos) {
+@@ -1053,23 +1096,37 @@
  	};
  }
  
@@ -1133,7 +1203,7 @@ index f2dedb9..80d8588 100644
  		ERR_FAIL_V(invalid_shape_handle());
  	}
  	shapes[0] = shape;
-@@ -1104,6 +1156,9 @@ ShapeHandle box2d::shape_create_halfspace(const b2Vec2 normal, real_t distance)
+@@ -1104,6 +1161,9 @@
  }
  
  void box2d::shape_destroy(ShapeHandle shape_handle) {
@@ -1177,10 +1247,17 @@ index d612a56..f228a4c 100644
  ShapeHandle shape_create_convex_polyline(const b2Vec2 *points, size_t point_count);
  
 diff --git a/src/register_types.cpp b/src/register_types.cpp
-index 7ef9d6e..c34e35a 100644
 --- a/src/register_types.cpp
 +++ b/src/register_types.cpp
-@@ -30,10 +30,10 @@ static Box2DPhysicsServer2DFactory *box2d_factory = nullptr;
+@@ -2,6 +2,7 @@
+ 
+ #include <gdextension_interface.h>
+ 
++#include <godot_cpp/classes/engine.hpp>
+ #include <godot_cpp/classes/physics_server2d_manager.hpp>
+ #include <godot_cpp/core/class_db.hpp>
+ #include <godot_cpp/core/defs.hpp>
+@@ -30,16 +31,17 @@
  void initialize_box2d_module(ModuleInitializationLevel p_level) {
  	switch (p_level) {
  		case MODULE_INITIALIZATION_LEVEL_SERVERS: {
@@ -1195,6 +1272,24 @@ index 7ef9d6e..c34e35a 100644
  
  			box2d_factory = memnew(Box2DPhysicsServer2DFactory());
  			PhysicsServer2DManager::get_singleton()->register_server("Box2D", Callable(box2d_factory, "create_box2d_callback"));
+ 		} break;
+ 		case MODULE_INITIALIZATION_LEVEL_SCENE: {
+ 			Box2DProjectSettings::register_settings();
++			Engine::get_singleton()->register_singleton("Box2DClock", box2d_factory);
+ 		} break;
+ 		default: {
+ 		} break;
+@@ -47,6 +49,10 @@
+ }
+ 
+ void uninitialize_box2d_module(ModuleInitializationLevel p_level) {
++	if (p_level == MODULE_INITIALIZATION_LEVEL_SCENE) {
++		Engine::get_singleton()->unregister_singleton("Box2DClock");
++		return;
++	}
+ 	if (p_level != MODULE_INITIALIZATION_LEVEL_SERVERS) {
+ 		return;
+ 	}
 diff --git a/src/servers/box2d_body_utils_2d.cpp b/src/servers/box2d_body_utils_2d.cpp
 index 1dbf3b6..3bf19bf 100644
 --- a/src/servers/box2d_body_utils_2d.cpp
@@ -1218,10 +1313,18 @@ index 1dbf3b6..3bf19bf 100644
  						continue;
  					}
 diff --git a/src/servers/box2d_physics_server_2d.cpp b/src/servers/box2d_physics_server_2d.cpp
-index 8120d28..ad9ccb5 100644
 --- a/src/servers/box2d_physics_server_2d.cpp
 +++ b/src/servers/box2d_physics_server_2d.cpp
-@@ -98,7 +98,7 @@ void Box2DPhysicsServer2D::_shape_set_data(const RID &p_shape, const Variant &p_
+@@ -1,5 +1,8 @@
+ #include "box2d_physics_server_2d.h"
+ 
++#include <godot_cpp/classes/os.hpp>
++#include <godot_cpp/classes/project_settings.hpp>
++
+ #include "../bodies/box2d_direct_body_state_2d.h"
+ 
+ #include "../spaces/box2d_direct_space_state_2d.h"
+@@ -98,7 +101,7 @@
  	shape->set_data(p_data);
  };
  
@@ -1230,7 +1333,7 @@ index 8120d28..ad9ccb5 100644
  	if (p_bias != 0.0) {
  		WARN_PRINT_ONCE("Shape custom solver bias is not supported with Box2D");
  	}
-@@ -117,7 +117,7 @@ Variant Box2DPhysicsServer2D::_shape_get_data(const RID &p_shape) const {
+@@ -117,7 +120,7 @@
  	return shape->get_data();
  };
  
@@ -1239,7 +1342,7 @@ index 8120d28..ad9ccb5 100644
  	return 0.0;
  }
  
-@@ -187,14 +187,14 @@ bool Box2DPhysicsServer2D::_space_is_active(const RID &p_space) const {
+@@ -187,14 +190,14 @@
  	return active_spaces.has(box2d::handle_hash(space->get_handle()));
  }
  
@@ -1256,7 +1359,7 @@ index 8120d28..ad9ccb5 100644
  	const Box2DSpace2D *space = space_owner.get_or_null(p_space);
  	ERR_FAIL_COND_V(!space, 0);
  	return space->get_param(p_param);
-@@ -336,7 +336,7 @@ void Box2DPhysicsServer2D::_area_clear_shapes(const RID &p_area) {
+@@ -336,7 +339,7 @@
  	ERR_FAIL_COND(!area);
  
  	while (area->get_shape_count()) {
@@ -1265,7 +1368,7 @@ index 8120d28..ad9ccb5 100644
  	}
  }
  
-@@ -573,7 +573,7 @@ void Box2DPhysicsServer2D::_body_clear_shapes(const RID &p_body) {
+@@ -573,7 +576,7 @@
  	ERR_FAIL_COND(!body);
  
  	while (body->get_shape_count()) {
@@ -1274,7 +1377,7 @@ index 8120d28..ad9ccb5 100644
  	}
  }
  
-@@ -586,13 +586,13 @@ void Box2DPhysicsServer2D::_body_set_shape_disabled(const RID &p_body, int p_sha
+@@ -586,13 +589,13 @@
  	body->set_shape_disabled(p_shape_idx, p_disabled);
  }
  
@@ -1290,7 +1393,7 @@ index 8120d28..ad9ccb5 100644
  }
  
  void Box2DPhysicsServer2D::_body_set_continuous_collision_detection_mode(const RID &p_body, CCDMode p_mode) {
-@@ -662,14 +662,14 @@ uint32_t Box2DPhysicsServer2D::_body_get_collision_mask(const RID &p_body) const
+@@ -662,14 +665,14 @@
  	return body->get_collision_mask();
  }
  
@@ -1307,7 +1410,7 @@ index 8120d28..ad9ccb5 100644
  	const Box2DBody2D *body = body_owner.get_or_null(p_body);
  	ERR_FAIL_COND_V(!body, 0);
  
-@@ -724,7 +724,7 @@ void Box2DPhysicsServer2D::_body_apply_central_impulse(const RID &p_body, const
+@@ -724,7 +727,7 @@
  	body->apply_central_impulse(p_impulse);
  }
  
@@ -1316,7 +1419,7 @@ index 8120d28..ad9ccb5 100644
  	Box2DBody2D *body = body_owner.get_or_null(p_body);
  	ERR_FAIL_COND(!body);
  
-@@ -752,7 +752,7 @@ void Box2DPhysicsServer2D::_body_apply_force(const RID &p_body, const Vector2 &p
+@@ -752,7 +755,7 @@
  	body->apply_force(p_force, p_position);
  }
  
@@ -1325,7 +1428,7 @@ index 8120d28..ad9ccb5 100644
  	Box2DBody2D *body = body_owner.get_or_null(p_body);
  	ERR_FAIL_COND(!body);
  
-@@ -773,7 +773,7 @@ void Box2DPhysicsServer2D::_body_add_constant_force(const RID &p_body, const Vec
+@@ -773,7 +776,7 @@
  	body->add_constant_force(p_force, p_position);
  }
  
@@ -1334,7 +1437,7 @@ index 8120d28..ad9ccb5 100644
  	Box2DBody2D *body = body_owner.get_or_null(p_body);
  	ERR_FAIL_COND(!body);
  
-@@ -794,14 +794,14 @@ Vector2 Box2DPhysicsServer2D::_body_get_constant_force(const RID &p_body) const
+@@ -794,14 +797,14 @@
  	return body->get_constant_force();
  }
  
@@ -1351,7 +1454,7 @@ index 8120d28..ad9ccb5 100644
  	Box2DBody2D *body = body_owner.get_or_null(p_body);
  	ERR_FAIL_COND_V(!body, 0);
  
-@@ -852,12 +852,12 @@ TypedArray<RID> Box2DPhysicsServer2D::_body_get_collision_exceptions(const RID &
+@@ -852,12 +855,12 @@
  	return array;
  };
  
@@ -1366,7 +1469,7 @@ index 8120d28..ad9ccb5 100644
  	Box2DBody2D *body = body_owner.get_or_null(p_body);
  	ERR_FAIL_COND_V(!body, 0);
  	return 0;
-@@ -914,7 +914,7 @@ void Box2DPhysicsServer2D::_body_set_pickable(const RID &p_body, bool p_pickable
+@@ -914,7 +917,7 @@
  	body->set_pickable(p_pickable);
  }
  
@@ -1375,7 +1478,7 @@ index 8120d28..ad9ccb5 100644
  	Box2DBody2D *body = body_owner.get_or_null(p_body);
  	ERR_FAIL_COND_V(!body, false);
  	ERR_FAIL_COND_V(!body->get_space(), false);
-@@ -962,7 +962,7 @@ void Box2DPhysicsServer2D::_joint_clear(const RID &p_joint) {
+@@ -962,7 +965,7 @@
  	}
  }
  
@@ -1384,7 +1487,7 @@ index 8120d28..ad9ccb5 100644
  	Box2DJoint2D *joint = joint_owner.get_or_null(p_joint);
  	ERR_FAIL_COND(!joint);
  
-@@ -979,7 +979,7 @@ void Box2DPhysicsServer2D::_joint_set_param(const RID &p_joint, JointParam p_par
+@@ -979,7 +982,7 @@
  	}
  }
  
@@ -1393,7 +1496,7 @@ index 8120d28..ad9ccb5 100644
  	const Box2DJoint2D *joint = joint_owner.get_or_null(p_joint);
  	ERR_FAIL_COND_V(!joint, -1);
  
-@@ -1082,7 +1082,7 @@ bool Box2DPhysicsServer2D::_pin_joint_get_flag(const RID &p_joint, PhysicsServer
+@@ -1082,7 +1085,7 @@
  	return pin_joint->get_flag(p_flag);
  }
  
@@ -1402,7 +1505,7 @@ index 8120d28..ad9ccb5 100644
  	Box2DJoint2D *j = joint_owner.get_or_null(p_joint);
  	ERR_FAIL_COND(!j);
  	ERR_FAIL_COND(j->get_type() != JOINT_TYPE_PIN);
-@@ -1091,7 +1091,7 @@ void Box2DPhysicsServer2D::_pin_joint_set_param(const RID &p_joint, PinJointPara
+@@ -1091,7 +1094,7 @@
  	pin_joint->set_param(p_param, p_value);
  }
  
@@ -1411,7 +1514,7 @@ index 8120d28..ad9ccb5 100644
  	Box2DJoint2D *j = joint_owner.get_or_null(p_joint);
  	ERR_FAIL_COND_V(!j, 0);
  	ERR_FAIL_COND_V(j->get_type() != JOINT_TYPE_PIN, 0);
-@@ -1100,7 +1100,7 @@ double Box2DPhysicsServer2D::_pin_joint_get_param(const RID &p_joint, PinJointPa
+@@ -1100,7 +1103,7 @@
  	return pin_joint->get_param(p_param);
  }
  
@@ -1420,7 +1523,7 @@ index 8120d28..ad9ccb5 100644
  	Box2DJoint2D *j = joint_owner.get_or_null(p_joint);
  	ERR_FAIL_COND(!j);
  	ERR_FAIL_COND(j->get_type() != JOINT_TYPE_DAMPED_SPRING);
-@@ -1109,7 +1109,7 @@ void Box2DPhysicsServer2D::_damped_spring_joint_set_param(const RID &p_joint, Da
+@@ -1109,7 +1112,7 @@
  	dsj->set_param(p_param, p_value);
  }
  
@@ -1429,7 +1532,7 @@ index 8120d28..ad9ccb5 100644
  	Box2DJoint2D *j = joint_owner.get_or_null(p_joint);
  	ERR_FAIL_COND_V(!j, 0);
  	ERR_FAIL_COND_V(j->get_type() != JOINT_TYPE_DAMPED_SPRING, 0);
-@@ -1142,7 +1142,7 @@ void Box2DPhysicsServer2D::_free_rid(const RID &p_rid) {
+@@ -1142,7 +1145,7 @@
  		body->set_space(nullptr);
  
  		while (body->get_shape_count()) {
@@ -1438,7 +1541,7 @@ index 8120d28..ad9ccb5 100644
  		}
  
  		body_owner.free(p_rid);
-@@ -1153,7 +1153,7 @@ void Box2DPhysicsServer2D::_free_rid(const RID &p_rid) {
+@@ -1153,7 +1156,7 @@
  		area->set_space(nullptr);
  
  		while (area->get_shape_count()) {
@@ -1447,20 +1550,115 @@ index 8120d28..ad9ccb5 100644
  		}
  
  		area_owner.free(p_rid);
-@@ -1189,7 +1189,7 @@ void Box2DPhysicsServer2D::_init() {
+@@ -1189,11 +1192,15 @@
  	doing_sync = false;
  }
  
 -void Box2DPhysicsServer2D::_step(double p_step) {
+-	if (!active) {
 +void Box2DPhysicsServer2D::_step(real_t p_step) {
- 	if (!active) {
++	if (!active || manual_clock) {
  		return;
  	}
++	step_spaces(p_step);
++}
+ 
++void Box2DPhysicsServer2D::step_spaces(real_t p_step) {
++
+ 	++frame;
+ 
+ 	island_count = 0;
+@@ -1216,10 +1223,14 @@
+  * Synchronize the infos (like transforms) from the box2d to Godot nodes/script.
+  */
+ void Box2DPhysicsServer2D::_flush_queries() {
+-	if (!active) {
++	if (!active || manual_clock) {
+ 		return;
+ 	}
++	flush_space_queries();
++}
+ 
++void Box2DPhysicsServer2D::flush_space_queries() {
++
+ 	flushing_queries = true;
+ 
+ 	// uint64_t time_beg = OS::get_singleton()->get_ticks_usec();
+@@ -1270,6 +1281,7 @@
+ }
+ 
+ void Box2DPhysicsServer2D::_finish() {
++	manual_clock = false;
+ }
+ 
+ int Box2DPhysicsServer2D::_get_process_info(ProcessInfo p_info) {
+@@ -1295,3 +1307,41 @@
+ 
+ 	using_threads = p_using_threads;
+ }
++
++bool Box2DPhysicsServer2D::set_manual_clock(bool p_enabled) {
++	ERR_FAIL_COND_V_MSG(using_threads || bool(ProjectSettings::get_singleton()->get_setting_with_override("physics/2d/run_on_separate_thread")), false, "The manual Box2D clock requires main-thread physics.");
++	ERR_FAIL_COND_V(flushing_queries || manual_step_in_progress, false);
++	manual_clock = p_enabled;
++	return true;
++}
++
++bool Box2DPhysicsServer2D::step_manual(real_t p_step) {
++	ERR_FAIL_COND_V(!manual_clock || !active || flushing_queries || manual_step_in_progress || p_step <= 0.0, false);
++	manual_step_in_progress = true;
++	const bool was_syncing = doing_sync;
++	doing_sync = true;
++	step_spaces(p_step);
++	// The ordinary state callback synchronizes RigidBody2D nodes and contacts,
++	// followed by area monitor callbacks, before the caller samples the step.
++	flush_space_queries();
++	doing_sync = was_syncing;
++	manual_step_in_progress = false;
++	return true;
++}
++
++bool Box2DPhysicsServer2DFactory::set_manual_clock(bool p_enabled) {
++	ERR_FAIL_COND_V(OS::get_singleton()->get_thread_caller_id() != OS::get_singleton()->get_main_thread_id(), false);
++	ERR_FAIL_NULL_V(Box2DPhysicsServer2D::singleton, false);
++	return Box2DPhysicsServer2D::singleton->set_manual_clock(p_enabled);
++}
++
++bool Box2DPhysicsServer2DFactory::step_manual(double p_step) {
++	ERR_FAIL_COND_V(OS::get_singleton()->get_thread_caller_id() != OS::get_singleton()->get_main_thread_id(), false);
++	ERR_FAIL_NULL_V(Box2DPhysicsServer2D::singleton, false);
++	return Box2DPhysicsServer2D::singleton->step_manual(real_t(p_step));
++}
++
++int64_t Box2DPhysicsServer2DFactory::get_completed_steps() const {
++	ERR_FAIL_NULL_V(Box2DPhysicsServer2D::singleton, 0);
++	return Box2DPhysicsServer2D::singleton->get_frame();
++}
 diff --git a/src/servers/box2d_physics_server_2d.h b/src/servers/box2d_physics_server_2d.h
-index 89bb0ad..953bc61 100644
 --- a/src/servers/box2d_physics_server_2d.h
 +++ b/src/servers/box2d_physics_server_2d.h
-@@ -78,11 +78,11 @@ public:
+@@ -29,8 +29,10 @@
+ 
+ 	bool active = true;
+ 	bool doing_sync = false;
++	bool manual_clock = false;
++	bool manual_step_in_progress = false;
+ 
+-	int frame = 0;
++	int64_t frame = 0;
+ 
+ 	int island_count = 0;
+ 	int active_objects = 0;
+@@ -49,6 +51,8 @@
+ 	mutable RID_PtrOwner<Box2DJoint2D, true> joint_owner;
+ 
+ 	RID _shape_create(ShapeType p_shape);
++	void step_spaces(real_t p_step);
++	void flush_space_queries();
+ 
+ protected:
+ 	static void _bind_methods(){};
+@@ -78,11 +82,11 @@
  	static void _shape_col_cbk(const Vector2 &p_point_A, const Vector2 &p_point_B, void *p_userdata);
  
  	virtual void _shape_set_data(const RID &p_shape, const Variant &p_data) override;
@@ -1474,7 +1672,7 @@ index 89bb0ad..953bc61 100644
  
  	virtual bool _shape_collide(const RID &p_shape_A, const Transform2D &p_xform_A, const Vector2 &p_motion_A, const RID &p_shape_B, const Transform2D &p_xform_B, const Vector2 &p_motion_B, void *r_results, int32_t p_result_max, int32_t *p_result_count) override;
  
-@@ -92,8 +92,8 @@ public:
+@@ -92,8 +96,8 @@
  	virtual void _space_set_active(const RID &p_space, bool p_active) override;
  	virtual bool _space_is_active(const RID &p_space) const override;
  
@@ -1485,7 +1683,7 @@ index 89bb0ad..953bc61 100644
  
  	virtual void _space_set_debug_contacts(const RID &p_space, int p_max_contacts) override;
  	virtual PackedVector2Array _space_get_contacts(const RID &p_space) const override;
-@@ -170,7 +170,7 @@ public:
+@@ -170,7 +174,7 @@
  	virtual void _body_clear_shapes(const RID &p_body) override;
  
  	virtual void _body_set_shape_disabled(const RID &p_body, int p_shape_idx, bool p_disabled) override;
@@ -1494,7 +1692,7 @@ index 89bb0ad..953bc61 100644
  
  	virtual void _body_attach_object_instance_id(const RID &p_body, uint64_t p_id) override;
  	virtual uint64_t _body_get_object_instance_id(const RID &p_body) const override;
-@@ -187,8 +187,8 @@ public:
+@@ -187,8 +191,8 @@
  	virtual void _body_set_collision_mask(const RID &p_body, uint32_t p_mask) override;
  	virtual uint32_t _body_get_collision_mask(const RID &p_body) const override;
  
@@ -1505,7 +1703,7 @@ index 89bb0ad..953bc61 100644
  
  	virtual void _body_set_param(const RID &p_body, BodyParameter p_param, const Variant &p_value) override;
  	virtual Variant _body_get_param(const RID &p_body, BodyParameter p_param) const override;
-@@ -199,22 +199,22 @@ public:
+@@ -199,22 +203,22 @@
  	virtual Variant _body_get_state(const RID &p_body, BodyState p_state) const override;
  
  	virtual void _body_apply_central_impulse(const RID &p_body, const Vector2 &p_impulse) override;
@@ -1533,7 +1731,7 @@ index 89bb0ad..953bc61 100644
  
  	virtual void _body_set_axis_velocity(const RID &p_body, const Vector2 &p_axis_velocity) override;
  
-@@ -222,8 +222,8 @@ public:
+@@ -222,8 +226,8 @@
  	virtual void _body_remove_collision_exception(const RID &p_body, const RID &p_body_b) override;
  	virtual TypedArray<RID> _body_get_collision_exceptions(const RID &p_body) const override;
  
@@ -1544,7 +1742,7 @@ index 89bb0ad..953bc61 100644
  
  	virtual void _body_set_omit_force_integration(const RID &p_body, bool p_omit) override;
  	virtual bool _body_is_omitting_force_integration(const RID &p_body) const override;
-@@ -238,7 +238,7 @@ public:
+@@ -238,7 +242,7 @@
  
  	virtual void _body_set_pickable(const RID &p_body, bool p_pickable) override;
  
@@ -1553,7 +1751,7 @@ index 89bb0ad..953bc61 100644
  
  	// this function only works on physics process, errors and returns null otherwise
  	virtual PhysicsDirectBodyState2D *_body_get_direct_state(const RID &p_body) override;
-@@ -249,8 +249,8 @@ public:
+@@ -249,8 +253,8 @@
  
  	virtual void _joint_clear(const RID &p_joint) override;
  
@@ -1564,7 +1762,7 @@ index 89bb0ad..953bc61 100644
  
  	virtual void _joint_disable_collisions_between_bodies(const RID &p_joint, const bool p_disabled) override;
  	virtual bool _joint_is_disabled_collisions_between_bodies(const RID &p_joint) const override;
-@@ -261,10 +261,10 @@ public:
+@@ -261,10 +265,10 @@
  
  	virtual void _pin_joint_set_flag(const RID &joint, PhysicsServer2D::PinJointFlag flag, bool enabled) override;
  	virtual bool _pin_joint_get_flag(const RID &joint, PhysicsServer2D::PinJointFlag flag) const override;
@@ -1579,7 +1777,7 @@ index 89bb0ad..953bc61 100644
  
  	virtual JointType _joint_get_type(const RID &p_joint) const override;
  
-@@ -274,7 +274,7 @@ public:
+@@ -274,7 +278,7 @@
  
  	virtual void _set_active(bool p_active) override;
  	virtual void _init() override;
@@ -1588,6 +1786,47 @@ index 89bb0ad..953bc61 100644
  	virtual void _sync() override;
  	virtual void _flush_queries() override;
  	virtual void _end_sync() override;
+@@ -284,7 +288,9 @@
+ 
+ 	virtual int _get_process_info(ProcessInfo p_info) override;
+ 
+-	int get_frame() { return frame; }
++	int64_t get_frame() const { return frame; }
++	bool set_manual_clock(bool p_enabled);
++	bool step_manual(real_t p_step);
+ 
+ 	Box2DSpace2D *get_active_space(b2World *p_handle) const {
+ 		ERR_FAIL_COND_V(!box2d::is_handle_valid(p_handle), nullptr);
+@@ -292,7 +298,11 @@
+ 	}
+ 
+ 	Box2DPhysicsServer2D(bool p_using_threads = false);
+-	~Box2DPhysicsServer2D() {}
++	~Box2DPhysicsServer2D() {
++		if (singleton == this) {
++			singleton = nullptr;
++		}
++	}
+ };
+ 
+ class Box2DPhysicsServer2DFactory : public Object {
+@@ -301,9 +311,16 @@
+ protected:
+ 	static void _bind_methods() {
+ 		ClassDB::bind_method(D_METHOD("create_box2d_callback"), &Box2DPhysicsServer2DFactory::_create_box2d_callback);
++		ClassDB::bind_method(D_METHOD("set_manual_clock", "enabled"), &Box2DPhysicsServer2DFactory::set_manual_clock);
++		ClassDB::bind_method(D_METHOD("step_manual", "step"), &Box2DPhysicsServer2DFactory::step_manual);
++		ClassDB::bind_method(D_METHOD("get_completed_steps"), &Box2DPhysicsServer2DFactory::get_completed_steps);
+ 	}
+ 
+ public:
++	bool set_manual_clock(bool p_enabled);
++	bool step_manual(double p_step);
++	int64_t get_completed_steps() const;
++
+ 	PhysicsServer2D *_create_box2d_callback() {
+ 		PhysicsServer2D *physics_server_2d = memnew(Box2DPhysicsServer2D());
+ 		return physics_server_2d;
 diff --git a/src/shapes/box2d_concave_polygon_shape_2d.cpp b/src/shapes/box2d_concave_polygon_shape_2d.cpp
 index 73040b2..b69d8dc 100644
 --- a/src/shapes/box2d_concave_polygon_shape_2d.cpp

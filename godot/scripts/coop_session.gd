@@ -4,6 +4,7 @@ extends Node
 var host: Node
 var network: CoopClient
 var lobby: CoopLobby
+var transfer: CoopTransfer
 var active := false
 var _private_data: GameData
 var _private_world: WorldData
@@ -22,6 +23,9 @@ func configure(main_host: Node) -> void:
 	lobby = CoopLobby.new()
 	add_child(lobby)
 	lobby.configure(host, network)
+	transfer = CoopTransfer.new()
+	add_child(transfer)
+	transfer.configure(host, network)
 	# Existing deterministic replays retain private mode unless explicitly opted in.
 	if network.startup_mode == "coop":
 		lobby.show_lobby()
@@ -73,11 +77,13 @@ func scene_loaded() -> void:
 		print("OREBIT_COOP_WORLD seed=" + str(host.world.generation_seed) + " excavated=" + str(_snapshot.get("excavated", []).size()))
 	host.paused = lobby.modal
 	lobby.refresh_hud()
+	transfer.scene_loaded()
 
 func leave() -> bool:
-	if not network._pending_mines.is_empty():
-		network.status_changed.emit("Waiting for the server to save excavation. Leave again after confirmation.")
+	if network.has_pending_actions():
+		network.status_changed.emit("Waiting for the server to confirm the current transaction. Leave again after confirmation.")
 		return false
+	transfer.close_visit()
 	network.leave_world()
 	if active:
 		active = false
@@ -132,11 +138,18 @@ func _event(event: Dictionary) -> void:
 			if own:
 				network.send_state()
 			print("OREBIT_COOP_MINED x=%d y=%d accepted=%s own=%s" % [x, y, accepted, own])
+		"transfer_result":
+			if bool(event.get("accepted", false)):
+				host.data.restore_coop_state(event.get("state", {}), true)
+				host.ui.updateAllUI()
+			transfer.transfer_result(event)
 		"state_sync":
 			host.data.restore_coop_state(event.get("state", {}), true)
 			host.ui.updateAllUI()
 		"player_joined", "player_left", "state":
 			_sync_peers()
+			if str(event.type) != "state":
+				transfer.refresh_recipients()
 	lobby.refresh_hud()
 
 func _sync_peers() -> void:
@@ -175,6 +188,7 @@ func _sync_peers() -> void:
 func tick(delta: float) -> void:
 	if not active:
 		return
+	transfer.tick()
 	for id in _remote_visuals:
 		var remote: Node2D = _remote_visuals[id]
 		if not is_instance_valid(remote) or not network.peers.has(id):

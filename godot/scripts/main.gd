@@ -1,6 +1,15 @@
 extends Node2D
 
 const UNIT := Vector2(1, -1)
+# Unity's source intervals are binary32; keep their accumulated clock in double.
+# Exact binary32(0.02); a binary rational avoids decimal-parser drift.
+const PHYSICS_DELTA := 5368709.0 / 268435456.0
+var physics_render_delta := 0.0
+var physics_step := 0
+var _physics_clock: Object
+var _physics_accumulator := 0.0
+var _physics_clock_started := false
+var _clock_float32 := PackedFloat32Array([0.0])
 var manifest: Dictionary
 var data := GameData.new()
 var world: WorldData
@@ -47,6 +56,7 @@ var capture_directory := ""
 var pending_scene := ""
 var _last_ui_usec := 0
 var replay_runner: ReplayRunner
+var agent_axes: Variant = null
 var touch_controls: TouchControls
 var coop: CoopSession
 var is_coop: bool:
@@ -56,6 +66,18 @@ var is_coop: bool:
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	# The worker's engine-owned 50 Hz barrier is a separate, existing protocol.
+	if agent_axes == null:
+		if not Engine.has_singleton("Box2DClock"):
+			push_error("The native Box2D clock is unavailable; rebuild the physics extension")
+			get_tree().quit(1)
+			return
+		_physics_clock = Engine.get_singleton("Box2DClock")
+		if not _physics_clock.set_manual_clock(true):
+			push_error("The native Box2D clock requires main-thread physics")
+			get_tree().quit(1)
+			return
+		physics_step = _physics_clock.get_completed_steps()
 	var catalog := load("res://data/game_assets.res") as GameAssetCatalog
 	if catalog == null or catalog.schema_version != 1:
 		push_error("Native game assets unavailable; run verification/bake_game_assets.gd")
@@ -92,11 +114,16 @@ func _ready() -> void:
 	touch_controls = preload("res://scenes/touch_controls.tscn").instantiate()
 	touch_layer.add_child(touch_controls)
 	touch_controls.configure(self)
-	coop = CoopSession.new()
-	add_child(coop)
-	coop.configure(self)
+	if agent_axes == null:
+		coop = CoopSession.new()
+		add_child(coop)
+		coop.configure(self)
 	change_scene("MainMenu")
 	print("MOTHERLOAD_READY scene=MainMenu godot=" + Engine.get_version_info().string)
+
+func _exit_tree() -> void:
+	if _physics_clock != null:
+		_physics_clock.set_manual_clock(false)
 
 func change_scene(which: String) -> void:
 	pending_scene = which
@@ -379,17 +406,52 @@ func _setup_static_collisions() -> void:
 		for component in bridge.components(id):
 			if component.get("type", "").ends_with("Collider2D") and not bool(component.properties.get("m_IsTrigger", false)):
 				_add_shape(solid, component, visual.global_scale)
+		if data.coop_mode:
+			_extend_surface_boundary(solid, str(bridge.scene.game_objects[id].get("name", "")))
+
+func _extend_surface_boundary(solid: StaticBody2D, boundary_name: String) -> void:
+	if boundary_name != "BoundaryLeft" and boundary_name != "BoundaryTop":
+		return
+	for child in solid.get_children():
+		if not child is CollisionShape2D or not child.shape is RectangleShape2D:
+			continue
+		var rectangle := child.shape as RectangleShape2D
+		if boundary_name == "BoundaryTop":
+			rectangle.size.x -= world.surface_left()
+			child.position.x += world.surface_left() * 0.5
+			continue
+		child.position.x += world.surface_left()
 
 func _process(delta: float) -> void:
 	var now_usec := Time.get_ticks_usec()
 	var ui_delta := float(now_usec - _last_ui_usec) / 1000000.0 if _last_ui_usec > 0 else delta
 	_last_ui_usec = now_usec
-	if replay_runner != null:
+	if replay_runner != null and not replay_runner.live_input:
 		ui_delta = replay_runner.render_delta
 		delta = ui_delta * Engine.time_scale
+	if agent_axes != null:
+		ui_delta = 1.0 / float(Engine.physics_ticks_per_second)
+		delta = ui_delta * Engine.time_scale
+	if _physics_clock != null:
+		# Scene changes requested during Update take effect before the next
+		# fixed phase, including frames on which no fixed update is due.
+		if not pending_scene.is_empty():
+			var which := pending_scene
+			pending_scene = ""
+			_load_scene(which)
+		_clock_float32[0] = delta
+		delta = _clock_float32[0]
+		_advance_physics_clock(delta)
+	else:
+		physics_step = Engine.get_physics_frames()
 	if player != null and player_alive and not paused:
+		var render_delta := physics_render_delta
+		physics_render_delta = 0.0
 		player.refresh_ground_after_step()
 		_sample_player_triggers()
+		physics_render_delta = render_delta
+	if player != null and player_alive:
+		player.begin_render_pose()
 	var next := pending_scene
 	pending_scene = ""
 	if replay_runner != null and bridge != null:
@@ -428,7 +490,36 @@ func _process(delta: float) -> void:
 			replay_runner.pre_tick()
 		replay_runner.post_tick()
 
+func _advance_physics_clock(delta: float) -> void:
+	# The first rendered snapshot is the clock origin, not one elapsed frame.
+	if not _physics_clock_started:
+		_physics_clock_started = true
+		physics_render_delta = 0.0
+		return
+	_physics_accumulator += delta
+	physics_render_delta = 0.0
+	while not paused and _physics_accumulator >= PHYSICS_DELTA:
+		_fixed_update(PHYSICS_DELTA)
+		if paused:
+			break
+		if not _physics_clock.step_manual(PHYSICS_DELTA):
+			push_error("The native Box2D clock could not complete a physics step")
+			get_tree().quit(1)
+			return
+		_physics_accumulator -= PHYSICS_DELTA
+		physics_step = _physics_clock.get_completed_steps()
+		if player != null and player_alive:
+			player.refresh_ground_after_step()
+			_sample_player_triggers()
+	physics_render_delta = _physics_accumulator
+
 func _physics_process(delta: float) -> void:
+	if _physics_clock != null:
+		return
+	physics_render_delta = 0.0
+	_fixed_update(delta)
+
+func _fixed_update(delta: float) -> void:
 	if not pending_scene.is_empty():
 		var next := pending_scene
 		pending_scene = ""
@@ -527,7 +618,7 @@ func _scene_event(method: String, argument: Variant, id: String) -> void:
 			"dropPlayer":
 				bridge.set_active(ship.player, true)
 				player_alive = true
-				body.freeze = false
+				player.startMovement()
 				audio.PlaySound("IdlePlayer")
 			"finishAnimation":
 				bridge.set_active(id, false)
@@ -541,7 +632,7 @@ func _scene_event(method: String, argument: Variant, id: String) -> void:
 func _sample_player_triggers() -> void:
 	if _player_trigger_query == null:
 		return
-	var step := Engine.get_physics_frames()
+	var step := physics_step
 	if step == _last_trigger_step:
 		return
 	_last_trigger_step = step
@@ -601,6 +692,11 @@ func _activate_trigger(trigger: Dictionary) -> void:
 
 func _setup_background() -> void:
 	for id in bridge.scene.game_objects:
+		if data.coop_mode and str(bridge.scene.game_objects[id].get("name", "")) == "SkyBackground":
+			# Preserve the eastern edge while covering the shared western surface.
+			var sky := bridge.nodes[id] as Node2D
+			sky.position.x += world.surface_left() * 0.5
+			sky.scale.x -= world.surface_left()
 		var props := bridge.properties(id, "BackgroundScript")
 		if props.is_empty() or not bool(props.get("m_Enabled", true)) or not bridge.graphics.has(id):
 			continue
@@ -665,8 +761,9 @@ func _update_camera(delta: float) -> void:
 	var offset := target - camera.global_position
 	var desired := camera.global_position + Vector2(signf(offset.x) * maxf(0, absf(offset.x) - dead.x), signf(offset.y) * maxf(0, absf(offset.y) - dead.y))
 	camera.global_position = camera.global_position.lerp(desired, 1.0 - exp(-4.605170186 * delta))
-	var half_width := minf(viewport_units.x * 0.5, data.earthWidth * 0.5)
-	camera.global_position.x = clampf(camera.global_position.x, half_width, data.earthWidth - half_width)
+	var left := float(world.surface_left())
+	var half_width := minf(viewport_units.x * 0.5, (data.earthWidth - left) * 0.5)
+	camera.global_position.x = clampf(camera.global_position.x, left + half_width, data.earthWidth - half_width)
 
 func _vec(value: Dictionary, fallback: Vector2 = Vector2.ZERO) -> Vector2:
 	return Vector2(float(value.get("x", fallback.x)), float(value.get("y", fallback.y)))
