@@ -18,7 +18,7 @@ const UPGRADE_NAMES: Dictionary = {
 	"Radiator": ["Stock Fan", "Dual Fans", "Single Turbine", "Dual Turbines", "Puron Cooling", "Tri-Turbine Freon Array"],
 	"Cargo": ["Micro Bay", "Medium Bay", "Huge Bay", "Gigantic Bay", "Titanic Bay", "Leviathan Bay"]
 }
-const EFFECT_UNITS: Dictionary = {"Drill": " Ft/s", "Hull": " Health", "Engine": " HorsePower", "Fuel": " Liters", "Radiator": "% Effective", "Cargo": " Cu ft."}
+const EFFECT_UNITS: Dictionary = {"Drill": " Ft/s", "Hull": " Health", "Engine": " HorsePower", "Fuel": " US gal", "Radiator": "% Effective", "Cargo": " Cu ft."}
 const EFFECT_MULTIPLIERS: Dictionary = {"Drill": 10, "Hull": 1, "Engine": 25, "Fuel": 1, "Radiator": 100, "Cargo": 1}
 
 var host: Node
@@ -416,10 +416,15 @@ func _panel_lifecycle(script: String, enabled: bool) -> void:
 		host.enterShop()
 		match script:
 			"UpgradeShopUI": _upgrade_open_display()
-			"FuelShopManager": _update_fuel_bar()
+			"FuelShopManager":
+				_update_fuel_bar()
+				if host.fuel_pricing != null:
+					host.fuel_pricing.show_shop(true)
 			"ItemShopManager": _item_open_display()
 			"MineralBuyerManager": _update_mineral_buyer()
 	else:
+		if script == "FuelShopManager" and host.fuel_pricing != null:
+			host.fuel_pricing.show_shop(false)
 		host.exitShop()
 		updateAllUI()
 
@@ -693,24 +698,35 @@ func buyUpgrade() -> void:
 func _update_fuel_bar() -> void:
 	var p: Dictionary = _properties("FuelShopManager")
 	bridge.set_value(p.fuel_display_bar, data.player_fuel / data.player_max_fuel)
-	_text(p.fuel_display_text, str(int(data.player_fuel)) + "/" + str(int(data.player_max_fuel)) + " L")
+	_text(p.fuel_display_text, "%.1f/%.0f gal" % [data.player_fuel, data.player_max_fuel])
 
 func addFuel(dollar_amount: int) -> void:
-	if data.player_fuel == data.player_max_fuel:
+	if data.player_fuel >= data.player_max_fuel:
 		_shop_popup("FuelShopManager", "Tank is full!")
 		audio.PlaySoundOneShot("Error2")
-	elif data.tryToBuy(dollar_amount):
-		data.addFuel(dollar_amount)
-		audio.PlaySoundOneShot("Purchase")
-	else:
-		_shop_popup("FuelShopManager", "You need $" + str(dollar_amount) + " to purchase")
+	elif host.fuel_pricing == null or not host.fuel_pricing.available():
+		_shop_popup("FuelShopManager", "Today's gas price is unavailable. Retry the price lookup.")
 		audio.PlaySoundOneShot("Error2")
+	elif dollar_amount > 0:
+		var price: float = host.fuel_pricing.price_per_gallon
+		var remaining: float = data.player_max_fuel - data.player_fuel
+		var full_cost := ceili(remaining * price)
+		var charge := mini(dollar_amount, full_cost)
+		if data.tryToBuy(charge):
+			data.addFuel(remaining if charge == full_cost else float(charge) / price)
+			audio.PlaySoundOneShot("Purchase")
+		else:
+			_shop_popup("FuelShopManager", "You need $" + str(charge) + " to purchase")
+			audio.PlaySoundOneShot("Error2")
 	updateMoneyUI()
 	updateFuelUI()
 	_update_fuel_bar()
 
 func fillFuel() -> void:
-	addFuel(ceili(data.player_max_fuel - data.player_fuel))
+	if host.fuel_pricing == null or not host.fuel_pricing.available():
+		addFuel(0)
+		return
+	addFuel(ceili((data.player_max_fuel - data.player_fuel) * host.fuel_pricing.price_per_gallon))
 
 func _item_open_display() -> void:
 	var p: Dictionary = _properties("ItemShopManager")
