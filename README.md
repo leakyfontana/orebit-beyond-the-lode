@@ -71,8 +71,9 @@ without a verified receipt.
 
 The initial verified four-platform release is `0.1.0`; the branding/controller/physics
 release is `0.2.0`; five-player co-op is `0.3.0`; the Safari authentication fix is
-`0.3.1`. The next feature version in source is `0.4.0`, adding the Ria transfer
-branch and fully mineable western columns alongside the pending runtime updates.
+`0.3.1`. Release `0.4.0` added Ria transfers, western mining columns and runtime
+updates. Release `0.5.0` adds Sinclair pricing using AAA's daily US national
+average, US-gallon fuel mechanics, and no device location collection.
 
 | Commit | Original version | Canonical version |
 | --- | --- | --- |
@@ -99,6 +100,53 @@ The guard reads fresh origin tags. `--allow-existing` is reserved for an exact
 same-version, same-commit publication retry, never a new release or downgrade.
 The required **Beta checks** status name and protected environment retain their
 existing infrastructure names; public versions and announcements do not.
+
+## Sinclair fuel pricing
+
+The propellant station is Sinclair-branded and advertises its current regular
+gasoline price in **USD per US gallon**. Tank contents/capacities, consumption,
+upgrades and the 25-gallon reserve all use gallons directly. Existing numerical
+fuel values and save fields are retained: this is a unit cutover, not a conversion
+or a change to tank range. Engine displacement names such as “2.0 Ltr” are not
+fuel-volume units and are unchanged. Dollar buttons buy `dollars / price` gallons;
+fill charges round up to whole dollars, matching the game's integer currency.
+A budget larger than the remaining tank cost charges only the rounded fill cost.
+
+Every player uses [AAA's daily US regular national average](https://gasprices.aaa.com/),
+not a median or a local price. Pricing does not read device location, request
+location permission, resolve a ZIP code, or send coordinates to another provider.
+There are no location bridges, geocoding services, provider accounts or API keys
+in the pricing path.
+
+Both private and co-op clients use public `GET /api/fuel-price` on the existing
+co-op service, with no request body or player-specific pricing inputs. The server
+fetches AAA once for concurrent consumers and caches the dated national quote
+through US Eastern midnight. Responses contain only `price_per_gallon`, provider
+`date`, `valid_until` (Unix seconds) and `source` (`aaa`).
+
+The displayed price also determines gallon purchases. If AAA has no valid price
+for the current day, the service returns HTTP 503 and the station shows unavailable;
+it never invents a price, uses an expired quote, or charges for an unavailable
+purchase. **Retry today's AAA price** refreshes the quote. Install the updated
+service before shipping clients, with `curl` available on the service's `PATH`.
+AAA fetching uses a bounded, HTTPS-only curl subprocess because AAA challenges
+Python's HTTP/TLS client on the production host. No challenge cookies, browser
+automation, pricing credentials or platform permissions are needed.
+
+The earlier Ria agent's successful artwork workflow assembled and repainted
+original shop rasters after a flat-vector storefront was rejected. Sinclair follows
+that precedent: Shop125–130 fuel machinery and framing, Shop110–121 masonry/vents,
+weathered green/white fascia and a custom dinosaur emblem, at 50 pixels per tile
+with nearest filtering. Unlike the historical Ria output, Sinclair retains a
+reproducible Pillow recipe: `verification/generate_sinclair_station.py`.
+Original shop/Ria images and historical Unity reference code remain unchanged.
+
+Verification:
+
+```sh
+python -m unittest discover -s automation/coop -p 'test_*.py' -v
+verification/tools/Godot.app/Contents/MacOS/Godot --headless --path godot --script ../verification/fuel_pricing_interop.gd
+```
 
 ## Private play and cross-platform co-op
 

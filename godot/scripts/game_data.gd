@@ -183,7 +183,7 @@ const UPGRADE_TABLE: Dictionary = {
 const ITEM_TABLE: Dictionary = {
 	"Reserve Fuel Tank": {
 		"price": 2000,
-		"description": "Portable backup - refills up to 25 Liters instantaneously.",
+		"description": "Portable backup - refills up to 25 US gallons instantaneously.",
 		"button_to_press": "1"
 	},
 	"Hull Repair Nanobots": {
@@ -413,6 +413,7 @@ var player_vertical_speed: float = 0.0
 var player_dig_speed: float = 0.0
 var player_hp: int = 0
 var player_max_hp: int = 0
+# Fuel amounts, tank capacities and per-second consumption are US gallons.
 var player_fuel: float = 0.0
 var player_max_fuel: float = 0.0
 var player_radiator: float = 0.0
@@ -527,8 +528,8 @@ func tryToBuy(price: int) -> bool:
 		return true
 	return false
 
-func addFuel(dollar_amount: int) -> void:
-	player_fuel = minf(player_fuel + dollar_amount, player_max_fuel)
+func addFuel(gallons: float) -> void:
+	player_fuel = minf(player_fuel + maxf(gallons, 0.0), player_max_fuel)
 
 func addHull(dollar_amount: int) -> void:
 	player_hp = int(minf(player_hp + ceilf(float(dollar_amount) / 15.0), player_max_hp))

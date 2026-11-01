@@ -59,6 +59,7 @@ var replay_runner: ReplayRunner
 var agent_axes: Variant = null
 var touch_controls: TouchControls
 var coop: CoopSession
+var fuel_pricing: FuelPricing
 var is_coop: bool:
 	get:
 		return coop != null and coop.active
@@ -118,6 +119,9 @@ func _ready() -> void:
 		coop = CoopSession.new()
 		add_child(coop)
 		coop.configure(self)
+		fuel_pricing = FuelPricing.new()
+		add_child(fuel_pricing)
+		fuel_pricing.configure(self)
 	change_scene("MainMenu")
 	print("MOTHERLOAD_READY scene=MainMenu godot=" + Engine.get_version_info().string)
 
@@ -201,6 +205,7 @@ func _load_scene(which: String) -> void:
 		boss = PortBoss.new()
 		add_child(boss)
 		boss.configure(self)
+		_install_fuel_station()
 		audio.PlayMusic("MainLevelMusic")
 	for id in bridge.scene.game_objects:
 		var visual := bridge.nodes.get(id) as CanvasItem
@@ -218,6 +223,20 @@ func _load_scene(which: String) -> void:
 	ui.updateAllUI()
 	if coop != null:
 		coop.scene_loaded()
+
+func _install_fuel_station() -> void:
+	var building := Sprite2D.new()
+	building.name = "SinclairStation"
+	building.texture = load("res://assets/sinclair_station.png")
+	building.centered = false
+	building.position = Vector2(3, 1)
+	building.scale = Vector2.ONE / 50.0
+	building.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	building.z_index = 5
+	world_root.add_child(building)
+	if fuel_pricing != null:
+		fuel_pricing.install_sign(world_root, Vector2(3.66, 1.16))
+		fuel_pricing.install_shop_panel(ui_root)
 
 func _setup_player() -> void:
 	for id in bridge.scene.game_objects:

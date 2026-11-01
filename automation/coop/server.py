@@ -34,6 +34,7 @@ from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError
 
+from fuel_prices import FuelPrices, PriceUnavailable
 from terrain import HEIGHT, MIN_X, WIDTH, WEIGHTS, award, generate, tile_name
 from telemetry import configure_logging, event as log_event, log_context
 
@@ -215,6 +216,7 @@ class Service:
         self.terrain: dict[int, list[int]] = {}
         self.excavated = set()
         self.http: ClientSession | None = None
+        self.fuel_prices: FuelPrices | None = None
 
     async def startup(self, app):
         asyncio.get_running_loop().set_exception_handler(
@@ -231,6 +233,9 @@ class Service:
         self.seed, self.excavated = await self.store.run(load)
         self.terrain = await asyncio.to_thread(generate, self.seed)
         self.http = ClientSession(timeout=ClientTimeout(total=20), raise_for_status=True)
+        self.fuel_prices = FuelPrices(
+            user_agent=f"OrebitBeyondTheLode/1.0 (+{self.public_url})",
+        )
         log_event("startup", world_id=self.world_id, members=len(self.members))
 
     async def shutdown(self, app):
@@ -448,6 +453,14 @@ class Service:
         elif result["status"] == "failed":
             request["error_code"] = "discord_failed"
             result["request_id"] = request["request_id"]
+        return web.json_response(result)
+
+    async def fuel_price(self, request):
+        self.rate_limit(request, "fuel_price", 60, 60)
+        try:
+            result = await self.fuel_prices.price()
+        except PriceUnavailable:
+            raise APIError("fuel_price_unavailable", "No current fuel price is available. Please try again later.", 503) from None
         return web.json_response(result)
 
     async def health(self, request):
@@ -815,6 +828,7 @@ def create_app(args):
 
     app = web.Application(client_max_size=MAX_BODY, middlewares=[security])
     app.router.add_post("/api/auth/{action:signup|login}", service.native_auth)
+    app.router.add_get("/api/fuel-price", service.fuel_price)
     app.router.add_post("/api/auth/logout", service.logout)
     app.router.add_post("/api/auth/discord/start", service.discord_start)
     app.router.add_post("/api/auth/discord/poll", service.discord_poll)
