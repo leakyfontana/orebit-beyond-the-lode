@@ -214,8 +214,9 @@ class AuthServiceTest(unittest.IsolatedAsyncioTestCase):
         socket, joined = await self.join(account["token"])
         self.assertEqual(joined["type"], "joined")
         await socket.send_json({"type": "state", "state": {"player_money": 71}, "state_revision": 0})
-        await socket.send_json({"type": "ping"})
-        self.assertEqual((await socket.receive_json(timeout=5))["type"], "pong")
+        acknowledged = await socket.receive_json(timeout=5)
+        self.assertEqual(acknowledged["type"], "state_ack")
+        self.assertEqual(acknowledged["state"]["player_money"], 71)
         await self.stop()
         await self.start()
         repeat, repeat_params = await self.start_flow("https://game.example/")
@@ -325,8 +326,9 @@ class AuthServiceTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result["error"], "invalid_token")
         socket, joined = await self.join(account["token"])
         await socket.send_json({"type": "state", "state": {"player_money": 99}, "state_revision": 0})
-        await socket.send_json({"type": "ping"})
-        self.assertEqual((await socket.receive_json(timeout=5))["type"], "pong")
+        acknowledged = await socket.receive_json(timeout=5)
+        self.assertEqual(acknowledged["type"], "state_ack")
+        self.assertEqual(acknowledged["state"]["player_money"], 99)
         logout, _ = await asyncio.gather(
             self.json_request("POST", "/api/auth/logout", headers=headers),
             socket.receive(timeout=5),
@@ -359,8 +361,9 @@ class AuthServiceTest(unittest.IsolatedAsyncioTestCase):
         _, account = await self.json_request("POST", "/api/auth/signup", json=credentials)
         socket, joined = await self.join(account["token"])
         await socket.send_json({"type": "state", "state": {"player_money": 123}, "state_revision": 0})
-        await socket.send_json({"type": "ping"})
-        self.assertEqual((await socket.receive_json(timeout=5))["type"], "pong")
+        acknowledged = await socket.receive_json(timeout=5)
+        self.assertEqual(acknowledged["type"], "state_ack")
+        self.assertEqual(acknowledged["state"]["player_money"], 123)
         flow, params = await self.start_flow()
         await self.stop()
         # Removing the additive column reproduces the released OAuth table format.
