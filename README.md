@@ -122,6 +122,41 @@ Real session revocation also passed. Sanitized results and screenshots are under
 `verification/captures/discord-safari-auth/`; this is not a production deployment
 receipt or a physical-iPhone acceptance claim.
 
+### Account interaction and session lifetime
+
+Co-op offers one primary **Continue with Discord** action, with password and
+anonymous entry as alternatives. Web/PWA uses same-tab authorization: a validated,
+state-bound callback returns to the initiating game and its private pending poll.
+Neither the Orebit session nor the poll credential travels in the return URL.
+Native clients use the external browser; desktop clients foreground the game
+when their poll succeeds, and Android resumes through
+`org.motherloadrecoded.game://auth/discord`. The Android export plugin registers
+that fixed return URI; it is not a separate Discord provider redirect.
+
+Saved sessions are checked through `GET /api/auth/session` on startup, without
+issuing a replacement token or extending their expiry. The existing lifetime is
+30 days. Reloading or restarting reuses a valid session; explicit sign-out revokes
+it, and expiry or a server rejection returns the player to sign-in. A temporary
+network failure does not erase the saved session. Web closes and synchronizes its
+persistent user file before the next reload. Install the updated co-op service
+before releasing these clients: they require the session lookup and callback
+return support. The additive OAuth-state migration leaves account/player data
+unchanged.
+
+The modal uses progressive disclosure for password/server options, persistent
+field labels, password paste/reveal, visible busy/cancel states, and scrollable
+safe-area/keyboard-aware layouts. Controls are at least 48 CSS pixels on Web or
+48 density-independent native units; typography uses a scalable font. These
+decisions follow [Apple's button guidance](https://developer.apple.com/design/human-interface-guidelines/buttons),
+[WCAG's 44×44 enhanced targets](https://www.w3.org/WAI/WCAG22/Understanding/target-size-enhanced.html),
+and [accessible authentication guidance](https://www.w3.org/WAI/WCAG22/Understanding/accessible-authentication-minimum.html).
+Same-tab Web navigation avoids the asynchronous popup/user-activation and opener
+constraints documented for [`Window.open`](https://developer.mozilla.org/en-US/docs/Web/API/Window/open).
+Discord retains identify-only authorization, state and PKCE; its documented
+[`prompt=none`](https://docs.discord.com/developers/topics/oauth2) skips redundant
+consent for already-approved scopes. Native browser/return handling follows
+[RFC 8252](https://www.rfc-editor.org/rfc/rfc8252).
+
 ### Server diagnostics
 
 The service writes privacy-filtered JSON events to journald and

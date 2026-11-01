@@ -30,7 +30,7 @@ _EVENTS = frozenset({
     "mining_decision", "auth_success", "auth_failure", "external_log", "log_sink_error",
 })
 _ROUTES = frozenset({
-    "/api/auth/{action}", "/api/auth/logout", "/api/auth/discord/start",
+    "/api/auth/{action}", "/api/auth/logout", "/api/auth/session", "/api/auth/discord/start",
     "/api/auth/discord/poll", "/auth/discord/callback", "/api/ws", "/healthz",
     "/{path}", "<unmatched>",
 })
@@ -41,7 +41,7 @@ _ERROR_CODES = frozenset({
     "busy", "join_required", "world_not_found", "server_full", "already_connected",
     "invalid_message", "origin_forbidden", "http_error", "server_error",
     "discord_cancelled", "discord_failed", "invalid_callback", "connection_timeout",
-    "connection_error", "duplicate_mine", "request_cancelled",
+    "connection_error", "duplicate_mine", "request_cancelled", "invalid_return_url",
 })
 _ENUM_FIELDS = {
     "route": _ROUTES,

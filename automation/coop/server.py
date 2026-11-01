@@ -28,7 +28,7 @@ import secrets
 import sqlite3
 import threading
 import time
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 
 from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
 from argon2 import PasswordHasher
@@ -39,6 +39,7 @@ from telemetry import configure_logging, event as log_event, log_context
 
 TOKEN_LIFETIME = 30 * 86400
 OAUTH_LIFETIME = 600
+NATIVE_DISCORD_RETURN = "org.motherloadrecoded.game://auth/discord"
 MAX_BODY = 32768
 MAX_STATE = 16384
 USERNAME = re.compile(r"[A-Za-z0-9_-]{3,24}\Z")
@@ -100,7 +101,7 @@ class Store:
                 state_hash TEXT PRIMARY KEY, poll_hash TEXT NOT NULL UNIQUE,
                 verifier TEXT NOT NULL, expires_at INTEGER NOT NULL,
                 status TEXT NOT NULL DEFAULT 'pending', user_id INTEGER REFERENCES users(id),
-                error TEXT
+                error TEXT, return_url TEXT
             );
             CREATE TABLE IF NOT EXISTS worlds (
                 id TEXT PRIMARY KEY, seed INTEGER NOT NULL, created_at INTEGER NOT NULL
@@ -119,6 +120,9 @@ class Store:
                 PRIMARY KEY(world_id,x,y)
             );
         """)
+        # Existing installations retain all pending flows and account/world data.
+        if "return_url" not in {row["name"] for row in self.connection.execute("PRAGMA table_info(oauth)")}:
+            self.connection.execute("ALTER TABLE oauth ADD COLUMN return_url TEXT")
         self.connection.commit()
 
     def _run(self, fn, *args):
@@ -304,11 +308,19 @@ class Service:
             raise APIError("invalid_token", "Your sign-in expired. Sign in again.", 401)
         return user
 
-    async def logout(self, request):
+    def bearer_token(self, request):
         authorization = request.headers.get("Authorization", "")
         if not authorization.startswith("Bearer "):
             raise APIError("invalid_token", "A bearer token is required.", 401)
-        token = authorization[7:]
+        return authorization[7:]
+
+    async def session(self, request):
+        user = await self.lookup_token(self.bearer_token(request))
+        request["user_id"] = user["id"]
+        return web.json_response({"expires_at": user["expires_at"], "user": {"id": user["id"], "name": user["display_name"]}})
+
+    async def logout(self, request):
+        token = self.bearer_token(request)
         user = await self.lookup_token(token)
         request["user_id"] = user["id"]
         hashed = digest(token)
@@ -323,22 +335,81 @@ class Service:
         if not self.client_id or not self.client_secret:
             raise APIError("discord_unavailable", "Discord sign-in is not configured on this server. Use username/password or contact the server operator.", 503)
 
+    def validate_return_url(self, value):
+        if value is None:
+            return None
+        if value == NATIVE_DISCORD_RETURN:
+            return value
+        message = "Return URL must be a trusted HTTPS game page without credentials or a fragment."
+        if not isinstance(value, str) or not 1 <= len(value) <= 2048 or any(ord(c) <= 32 or ord(c) >= 127 for c in value) or "\\" in value or "#" in value:
+            raise APIError("invalid_return_url", message)
+        try:
+            parsed = urlsplit(value)
+            origin = f"{parsed.scheme}://{parsed.netloc}"
+            public = urlsplit(self.public_url)
+            trusted = self.origins | {f"{public.scheme}://{public.netloc}"}
+            if origin not in trusted or parsed.username is not None or parsed.password is not None or not parsed.hostname or parsed.port == 0:
+                raise ValueError("Untrusted origin")
+            if parsed.scheme not in ("http", "https") or (parsed.scheme == "http" and parsed.hostname not in ("localhost", "127.0.0.1", "::1")):
+                raise ValueError("Insecure origin")
+            path = parsed.path or "/"
+            decoded = unquote(path)
+            # Static game entry pages only; never bounce into service/redirect routes.
+            segments = decoded.lower().split("/")
+            if decoded != path or "\\" in path or "//" in path or any(part in (".", "..", "api", "auth", "oauth", "coop", "healthz") for part in segments):
+                raise ValueError("Invalid game path")
+            if not path.startswith("/") or not (path.endswith("/") or path.lower().endswith((".html", ".htm"))):
+                raise ValueError("Invalid game page")
+            query = parse_qsl(parsed.query, keep_blank_values=True, max_num_fields=100)
+            private_keys = {"code", "state", "poll", "poll_token", "token", "access_token", "refresh_token", "session", "session_token", "id_token", "error", "error_description"}
+            if any(key.lower() in private_keys for key, _ in query):
+                raise ValueError("Credentials in return query")
+        except ValueError:
+            raise APIError("invalid_return_url", message)
+        return value
+
     async def discord_start(self, request):
         self.discord_configured()
         self.rate_limit(request, "discord_start", 10, 600)
+        body = await self.body(request) if request.can_read_body else {}
+        return_url = self.validate_return_url(body.get("return_url"))
         state, poll, verifier = (secrets.token_urlsafe(32) for _ in range(3))
         expires = int(time.time()) + OAUTH_LIFETIME
         challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
         def create(db):
             db.execute("DELETE FROM oauth WHERE expires_at<=?", (int(time.time()),))
-            db.execute("INSERT INTO oauth(state_hash,poll_hash,verifier,expires_at) VALUES(?,?,?,?)", (digest(state), digest(poll), verifier, expires))
+            db.execute("INSERT INTO oauth(state_hash,poll_hash,verifier,expires_at,return_url) VALUES(?,?,?,?,?)", (digest(state), digest(poll), verifier, expires, return_url))
         await self.store.run(create)
         log_event("auth_success", operation="discord_start")
-        params = {"client_id": self.client_id, "response_type": "code", "redirect_uri": self.callback, "scope": "identify", "state": state, "code_challenge": challenge, "code_challenge_method": "S256"}
+        params = {"client_id": self.client_id, "response_type": "code", "redirect_uri": self.callback, "scope": "identify", "state": state, "code_challenge": challenge, "code_challenge_method": "S256", "prompt": "none"}
         return web.json_response({"authorization_url": "https://discord.com/oauth2/authorize?" + urlencode(params), "poll_token": poll, "expires_at": expires})
 
-    def callback_page(self, text: str, status: int = 200):
-        return web.Response(text="<!doctype html><html lang='en'><meta charset='utf-8'><meta name='viewport' content='width=device-width'><title>Orebit sign-in</title><body><h1>Orebit sign-in</h1><p>" + html.escape(text) + "</p></body></html>", content_type="text/html", status=status, headers={"Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'", "Referrer-Policy": "no-referrer", "Cache-Control": "no-store"})
+    def callback_page(self, text: str, status: int = 200, return_url=None, complete=False):
+        headers = {"Referrer-Policy": "no-referrer", "Cache-Control": "no-store"}
+        if return_url:
+            parsed = urlsplit(return_url)
+            query = [(key, value) for key, value in parse_qsl(parsed.query, keep_blank_values=True) if key != "orebit_auth"]
+            query.append(("orebit_auth", "complete" if complete else "failed"))
+            headers["Location"] = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query), ""))
+            return web.Response(status=303, headers=headers)
+        nonce = secrets.token_urlsafe(24)
+        headers["Content-Security-Policy"] = f"default-src 'none'; style-src 'nonce-{nonce}'; script-src 'nonce-{nonce}'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+        heading = "You're signed in" if complete else "Sign-in not completed"
+        document = (
+            "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
+            "<meta name='viewport' content='width=device-width, initial-scale=1'><title>Orebit sign-in</title>"
+            f"<script nonce='{nonce}'>history.replaceState(null, '', location.pathname);</script>"
+            f"<style nonce='{nonce}'>"
+            ":root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#101923;color:#f1f6fc;"
+            "font:1.125rem/1.6 system-ui,sans-serif;min-height:100vh;display:grid;place-items:center;padding:24px}"
+            "main{max-width:36rem;padding:32px;border:1px solid #63788f;border-radius:20px;background:#1a2939}"
+            ".brand{color:#a6d8ff;font-weight:700;letter-spacing:.12em}h1{font-size:clamp(1.6rem,6vw,2.2rem);"
+            "line-height:1.2}p{margin:1rem 0} .hint{color:#c4d2e2}</style></head><body>"
+            f"<main><p class='brand'>OREBIT</p><h1>{heading}</h1><p>{html.escape(text)}</p>"
+            "<p class='hint'>Your game stays open. Return to Orebit; you can then close this browser tab.</p>"
+            "</main></body></html>"
+        )
+        return web.Response(text=document, content_type="text/html", status=status, headers=headers)
 
     async def discord_callback(self, request):
         self.discord_configured()
@@ -349,7 +420,7 @@ class Service:
             return self.callback_page("This sign-in link is invalid or expired. Start again in Orebit.", 400)
         hashed = digest(state)
         def claim(db):
-            row = db.execute("SELECT * FROM oauth WHERE state_hash=? AND status='pending' AND expires_at>?", (hashed, int(time.time()))).fetchone()
+            row = db.execute("SELECT * FROM oauth WHERE state_hash=? AND status='pending'", (hashed,)).fetchone()
             if row:
                 db.execute("UPDATE oauth SET status='processing' WHERE state_hash=?", (hashed,))
             return row
@@ -357,11 +428,15 @@ class Service:
         if flow is None:
             request["error_code"] = "invalid_callback"
             return self.callback_page("This sign-in link has expired or was already used. Start again in Orebit.", 400)
+        if flow["expires_at"] <= int(time.time()):
+            request["error_code"] = "invalid_callback"
+            await self.store.run(lambda db: db.execute("UPDATE oauth SET status='failed',error='Discord sign-in expired. Please try again.',verifier='' WHERE state_hash=?", (hashed,)))
+            return self.callback_page("This sign-in expired. Start again in Orebit.", 400, flow["return_url"])
         code = request.query.get("code", "")
         if request.query.get("error") or not code or len(code) > 2048:
             request["error_code"] = "discord_cancelled"
-            await self.store.run(lambda db: db.execute("UPDATE oauth SET status='failed',error='Discord authorization was cancelled.' WHERE state_hash=?", (hashed,)))
-            return self.callback_page("Discord sign-in was cancelled. Return to Orebit to try again.", 400)
+            await self.store.run(lambda db: db.execute("UPDATE oauth SET status='failed',error='Discord authorization was cancelled.',verifier='' WHERE state_hash=?", (hashed,)))
+            return self.callback_page("Discord sign-in was cancelled. Try again in Orebit when you're ready.", 400, flow["return_url"])
         try:
             async with self.http.post("https://discord.com/api/oauth2/token", data={"client_id": self.client_id, "client_secret": self.client_secret, "grant_type": "authorization_code", "code": code, "redirect_uri": self.callback, "code_verifier": flow["verifier"]}) as response:
                 token_data = await provider_json(response)
@@ -384,13 +459,13 @@ class Service:
         except (asyncio.TimeoutError, ValueError, KeyError, web.HTTPException) as error:
             request["error_code"], request["log_error"] = "discord_failed", error
             await self.store.run(lambda db: db.execute("UPDATE oauth SET status='failed',error='Discord sign-in failed. Please try again.',verifier='' WHERE state_hash=?", (hashed,)))
-            return self.callback_page("Discord sign-in failed. Return to Orebit and try again.", 502)
+            return self.callback_page("Discord sign-in failed. Try again in Orebit.", 502, flow["return_url"])
         except Exception as error:
             request["error_code"], request["log_error"] = "discord_failed", error
             await self.store.run(lambda db: db.execute("UPDATE oauth SET status='failed',error='Discord is temporarily unavailable. Please try again.',verifier='' WHERE state_hash=?", (hashed,)))
-            return self.callback_page("Discord is temporarily unavailable. Return to Orebit and try again.", 502)
+            return self.callback_page("Discord is temporarily unavailable. Try again in Orebit.", 502, flow["return_url"])
         log_event("auth_success", operation="discord_callback", user_id=request["user_id"])
-        return self.callback_page("Signed in successfully. You may close this tab and return to Orebit.")
+        return self.callback_page("Your account is ready. Orebit will finish signing you in automatically.", return_url=flow["return_url"], complete=True)
 
     async def discord_poll(self, request):
         self.rate_limit(request, "discord_poll", 900, 600)
@@ -740,6 +815,7 @@ def create_app(args):
     app = web.Application(client_max_size=MAX_BODY, middlewares=[security])
     app.router.add_post("/api/auth/{action:signup|login}", service.native_auth)
     app.router.add_post("/api/auth/logout", service.logout)
+    app.router.add_get("/api/auth/session", service.session)
     app.router.add_post("/api/auth/discord/start", service.discord_start)
     app.router.add_post("/api/auth/discord/poll", service.discord_poll)
     app.router.add_get("/auth/discord/callback", service.discord_callback)

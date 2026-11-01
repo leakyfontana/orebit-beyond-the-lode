@@ -72,6 +72,13 @@ func _install_hint() -> void:
 func sync_state(delta: float = 0.0) -> void:
 	var gameplay: bool = ui.host.scene_name == "Game" and ui.host.player_alive and not ui.host.paused and ui.host.pending_scene.is_empty() and not get_tree().paused
 	GameInput.set_gameplay_available(gameplay)
+	if ui.host.coop != null and ui.host.coop.lobby != null and ui.host.coop.lobby.modal:
+		_menu_open = true
+		_scope = null
+		_candidates.clear()
+		_hint_panel.hide()
+		_highlight.hide()
+		return
 	_menu_open = not gameplay
 	var next_scope := _active_scope()
 	var scope_changed := next_scope != _scope
@@ -136,6 +143,8 @@ func _focus_first() -> void:
 		_candidates[0].grab_focus()
 
 func _controller_event(event: InputEvent) -> void:
+	if ui.host.coop != null and ui.host.coop.lobby != null and ui.host.coop.lobby.modal:
+		return
 	sync_state()
 	if not (event is InputEventJoypadButton) or not event.pressed:
 		return
