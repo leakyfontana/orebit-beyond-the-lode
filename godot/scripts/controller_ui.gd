@@ -10,6 +10,7 @@ const REPEAT_INTERVAL := 0.12
 var ui: Node
 var _controls: Array[Control] = []
 var _original_focus: Dictionary = {}
+var _focus_scopes: Dictionary[Control, Control] = {}
 var _candidates: Array[Control] = []
 var _scope: Control
 var _menu_open := false
@@ -29,13 +30,19 @@ func configure(game_ui: Node) -> void:
 	input.controller_connection_changed.connect(_connection_changed)
 	_install_hint()
 
-func _collect(node: Node) -> void:
+func register_panel(panel: Control, scope: Control) -> void:
+	_collect(panel, scope)
+
+func _collect(node: Node, scope: Control = null) -> void:
 	if node is BaseButton or node is Slider or node is ScrollContainer:
 		var control := node as Control
-		_controls.append(control)
-		_original_focus[control] = control.focus_mode
+		if not _original_focus.has(control):
+			_controls.append(control)
+			_original_focus[control] = control.focus_mode
+		if scope != null:
+			_focus_scopes[control] = scope
 	for child in node.get_children():
-		_collect(child)
+		_collect(child, scope)
 
 func _install_hint() -> void:
 	_hint_panel = PanelContainer.new()
@@ -78,7 +85,8 @@ func sync_state(delta: float = 0.0) -> void:
 	_scope = next_scope
 	_candidates.clear()
 	for control in _controls:
-		var eligible: bool = _menu_open and control.is_visible_in_tree() and (_scope == control or _scope.is_ancestor_of(control))
+		var in_scope: bool = _scope == control or _scope.is_ancestor_of(control) or _focus_scopes.get(control) == _scope
+		var eligible: bool = _menu_open and control.is_visible_in_tree() and in_scope
 		if control is BaseButton:
 			eligible = eligible and not control.disabled
 		elif control is Slider:
