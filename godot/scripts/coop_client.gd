@@ -38,6 +38,8 @@ func configure(main_host: Node) -> void:
 	host = main_host
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	_http = HTTPRequest.new()
+	# Fetch already decompresses web responses; Safari retains Content-Encoding.
+	_http.accept_gzip = not OS.has_feature("web")
 	_http.timeout = 20.0
 	add_child(_http)
 	_http.request_completed.connect(_http_completed)
@@ -95,6 +97,7 @@ func logout() -> void:
 		_http_kind = ""
 	if not token.is_empty():
 		var revocation := HTTPRequest.new()
+		revocation.accept_gzip = not OS.has_feature("web")
 		revocation.timeout = 20.0
 		add_child(revocation)
 		revocation.request_completed.connect(func(result: int, code: int, _headers: PackedStringArray, _body: PackedByteArray):

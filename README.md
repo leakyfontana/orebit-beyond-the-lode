@@ -110,6 +110,18 @@ Production Discord sign-in uses the separate **Orebit** application
 authorization, server entry, account restoration on rejoin and session revocation
 have been exercised against the VPS.
 
+Web account requests leave response decompression to browser Fetch, including
+sign-out revocation. Safari can retain `Content-Encoding: gzip` after decoding
+the body; enabling Godot's HTTPRequest gzip decoding on Web attempts to decode
+that body twice and reports the account service as unavailable. Native requests
+retain Godot's gzip support.
+
+The repaired local Web export has completed real Discord authorization and
+returned to an authenticated Orebit account in iOS 26.5 simulator Safari.
+Real session revocation also passed. Sanitized results and screenshots are under
+`verification/captures/discord-safari-auth/`; this is not a production deployment
+receipt or a physical-iPhone acceptance claim.
+
 ### Server diagnostics
 
 The service writes privacy-filtered JSON events to journald and
