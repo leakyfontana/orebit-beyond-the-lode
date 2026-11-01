@@ -1,6 +1,8 @@
 class_name TerrainView
 extends Node2D
 
+const FUEL_STATION_TILES := ["Shop125", "Shop126", "Shop127", "Shop128", "Shop129", "Shop130"]
+
 var world: WorldData
 var data: GameData
 var tile_layer: TileMapLayer
@@ -72,7 +74,8 @@ func _update_colliders() -> void:
 
 func _update_tile(cell: Vector2i) -> void:
 	var tile: Dictionary = world.getBlockData(cell.x, cell.y)
-	if tile.filename == "Empty":
+	# Sinclair's single raster replaces the old six shop tiles, not their physics.
+	if tile.filename == "Empty" or tile.filename in FUEL_STATION_TILES:
 		tile_layer.erase_cell(cell)
 		return
 	assert(tile_coordinates.has(tile.filename), "Missing baked terrain tile: " + str(tile.filename))
