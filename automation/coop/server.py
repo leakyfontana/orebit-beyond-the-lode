@@ -34,7 +34,7 @@ from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError
 
-from terrain import HEIGHT, WIDTH, WEIGHTS, award, generate, tile_name
+from terrain import HEIGHT, MIN_X, WIDTH, WEIGHTS, award, generate, tile_name
 from telemetry import configure_logging, event as log_event, log_context
 
 TOKEN_LIFETIME = 30 * 86400
@@ -83,6 +83,9 @@ class Store:
         os.chmod(target, 0o600)
         self.connection.row_factory = sqlite3.Row
         self.lock = threading.RLock()
+        legacy_excavations = self.connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='excavations'"
+        ).fetchone() is not None
         self.connection.executescript("""
             PRAGMA journal_mode=WAL;
             PRAGMA synchronous=FULL;
@@ -114,7 +117,7 @@ class Store:
             );
             CREATE TABLE IF NOT EXISTS excavations (
                 world_id TEXT NOT NULL REFERENCES worlds(id),
-                x INTEGER NOT NULL CHECK(x>=0 AND x<36),
+                x INTEGER NOT NULL CHECK(x>=-10 AND x<36),
                 y INTEGER NOT NULL CHECK(y>=0 AND y<600),
                 user_id INTEGER REFERENCES users(id), created_at INTEGER NOT NULL,
                 PRIMARY KEY(world_id,x,y)
@@ -124,6 +127,33 @@ class Store:
         if "return_url" not in {row["name"] for row in self.connection.execute("PRAGMA table_info(oauth)")}:
             self.connection.execute("ALTER TABLE oauth ADD COLUMN return_url TEXT")
         self.connection.commit()
+        if self.connection.execute("PRAGMA user_version").fetchone()[0] < 1:
+            # SQLite cannot alter CHECK constraints in place. Rebuild atomically,
+            # retaining the original coordinates, ownership and creation times.
+            try:
+                with self.connection:
+                    self.connection.execute("BEGIN IMMEDIATE")
+                    if legacy_excavations:
+                        self.connection.execute("""
+                            CREATE TABLE excavations_west (
+                                world_id TEXT NOT NULL REFERENCES worlds(id),
+                                x INTEGER NOT NULL CHECK(x>=-10 AND x<36),
+                                y INTEGER NOT NULL CHECK(y>=0 AND y<600),
+                                user_id INTEGER REFERENCES users(id), created_at INTEGER NOT NULL,
+                                PRIMARY KEY(world_id,x,y)
+                            )
+                        """)
+                        self.connection.execute("""
+                            INSERT INTO excavations_west(world_id,x,y,user_id,created_at)
+                            SELECT world_id,x,y,user_id,created_at FROM excavations
+                        """)
+                        self.connection.execute("DROP TABLE excavations")
+                        self.connection.execute("ALTER TABLE excavations_west RENAME TO excavations")
+                    self.connection.execute("PRAGMA user_version=1")
+            except Exception:
+                # The connection context rolls back even a failed DDL statement.
+                self.connection.close()
+                raise
 
     def _run(self, fn, *args):
         with self.lock, self.connection:
@@ -186,7 +216,7 @@ class Service:
         self.world_lock = asyncio.Lock()
         self.rate_limits = OrderedDict()
         self.seed = 0
-        self.terrain = []
+        self.terrain: dict[int, list[int]] = {}
         self.excavated = set()
         self.http: ClientSession | None = None
 
@@ -525,7 +555,7 @@ class Service:
             elif key in ("x", "y", "player_hp", "player_fuel", "player_money"):
                 if type(value) not in (int, float) or not math.isfinite(value) or abs(value) > 1e15:
                     raise APIError("invalid_state", "Invalid player numeric value.")
-                if key == "x" and not -5 <= value <= WIDTH + 5:
+                if key == "x" and not -15 <= value <= WIDTH + 5:
                     raise APIError("invalid_state", "Player position is outside this world.")
                 if key == "y" and not -HEIGHT - 10 <= value <= 20:
                     raise APIError("invalid_state", "Player position is outside this world.")
@@ -560,7 +590,51 @@ class Service:
         await self.store.run(self.save_state, player, state, player.revision)
         player.state = state
         player.state_updates += 1
+        await self.send(player, {"type": "state_ack", "state": state, "state_revision": player.revision})
         await self.broadcast({"type": "state", "player_id": player.player_id, "state": state}, exclude=player)
+
+    async def transfer(self, player, message):
+        recipient_id, amount = message.get("recipient_id"), message.get("amount")
+        recipient = self.members.get(recipient_id) if isinstance(recipient_id, str) else None
+        rejection = ""
+        if type(amount) is not int or amount <= 0:
+            rejection = "Enter a positive whole-dollar amount."
+        elif recipient_id == player.player_id:
+            rejection = "Choose another player to receive the money."
+        elif recipient is None or recipient.socket.closed:
+            # Membership belongs to this world only; foreign-world IDs never resolve.
+            rejection = "That player is no longer connected to this world."
+        elif amount > player.state.get("player_money", 0):
+            rejection = "You do not have enough money for this transfer."
+        elif recipient.state.get("player_money", 0) + amount > 1e15:
+            rejection = "That transfer would exceed the recipient's balance limit."
+        if rejection:
+            await self.send(player, {"type": "transfer_result", "accepted": False, "message": rejection})
+            return
+
+        sender_state, recipient_state = dict(player.state), dict(recipient.state)
+        sender_state["player_money"] = player.state.get("player_money", 0) - amount
+        recipient_state["player_money"] = recipient.state.get("player_money", 0) + amount
+        sender_revision, recipient_revision = player.revision + 1, recipient.revision + 1
+
+        def commit(db):
+            self.save_state(db, player, sender_state, sender_revision)
+            self.save_state(db, recipient, recipient_state, recipient_revision)
+
+        # The caller holds world_lock across validation, persistence and publication,
+        # so neither participant can overwrite this action with an old snapshot.
+        try:
+            await self.store.run(commit)
+        except sqlite3.Error as error:
+            log_event("session_error", level=logging.ERROR, error=error, error_code="transfer_save_failed")
+            await self.send(player, {"type": "transfer_result", "accepted": False, "message": "The transfer could not be saved. No money was moved."})
+            return
+        player.state, player.revision = sender_state, sender_revision
+        recipient.state, recipient.revision = recipient_state, recipient_revision
+        await asyncio.gather(
+            self.send(player, {"type": "transfer_result", "accepted": True, "message": f"Sent ${amount:,} to {recipient.name}.", "state": sender_state, "state_revision": sender_revision}),
+            self.send(recipient, {"type": "state_sync", "state": recipient_state, "state_revision": recipient_revision}),
+        )
 
     async def mine(self, player, message):
         request_id = message.get("request_id")
@@ -575,7 +649,7 @@ class Service:
             log_event("mining_decision", action=method, accepted=False, error_code="duplicate_mine")
             await self.send(player, {"type": "state_sync", "state": player.state, "state_revision": player.revision})
             return
-        if type(x) not in (int, float) or type(y) not in (int, float) or not math.isfinite(x) or not math.isfinite(y) or x != int(x) or y != int(y) or not 0 <= x < WIDTH or not 0 <= y < HEIGHT or method not in ("drill", "blast"):
+        if type(x) not in (int, float) or type(y) not in (int, float) or not math.isfinite(x) or not math.isfinite(y) or x != int(x) or y != int(y) or not MIN_X <= x < WIDTH or not 0 <= y < HEIGHT or method not in ("drill", "blast"):
             player.mine_rejected += 1
             log_event("mining_decision", level=logging.WARNING, action=method, accepted=False, error_code="invalid_mine")
             raise APIError("invalid_mine", "Mining coordinates or method are invalid.")
@@ -692,6 +766,8 @@ class Service:
                             await self.update_state(player, message)
                         elif message.get("type") == "mine":
                             await self.mine(player, message)
+                        elif message.get("type") == "transfer":
+                            await self.transfer(player, message)
                         elif message.get("type") == "ping":
                             await self.send(player, {"type": "pong"})
                         elif message.get("type") == "leave":

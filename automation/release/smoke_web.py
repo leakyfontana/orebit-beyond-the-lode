@@ -88,9 +88,7 @@ def main():
                         raise RuntimeError('Web export did not reach MainMenu readiness signal')
 
                 page.on('console', console)
-                # Exercise the private MainMenu, not the startup mode chooser.
-                navigation_url = url + '?mode=private'
-                page.goto(navigation_url, wait_until='domcontentloaded', timeout=120000)
+                page.goto(url, wait_until='domcontentloaded', timeout=120000)
                 page.wait_for_function('window.crossOriginIsolated === true', timeout=30000)
                 page.wait_for_function('document.querySelector("canvas")?.width > 0', timeout=30000)
                 wait_for_menu()
@@ -109,7 +107,7 @@ def main():
                 args.screenshot.parent.mkdir(parents=True, exist_ok=True)
                 page.screenshot(path=str(args.screenshot))
                 browser.close()
-            print(json.dumps({'commit': args.sha, 'url': url, 'navigation_url': navigation_url, 'menu_ready': True, 'pwa_callback_redirect': callback_redirect, 'readiness': ready[-1], 'screenshot': str(args.screenshot)}))
+            print(json.dumps({'commit': args.sha, 'url': url, 'menu_ready': True, 'pwa_callback_redirect': callback_redirect, 'readiness': ready[-1], 'screenshot': str(args.screenshot)}))
         finally:
             if server:
                 server.shutdown()

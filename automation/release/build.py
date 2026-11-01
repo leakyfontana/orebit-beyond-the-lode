@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a beta from source in a disposable project; never mutate godot/.
+"""Build a public release from source in a disposable project; never mutate godot/.
 
 Hosted runners: macos-15 (ARM64), windows-2022, ubuntu-24.04 (Android/Web).
 Install Python 3.10+, SCons 4, Git and the native compiler first. Android also
@@ -38,6 +38,7 @@ import urllib.request
 import zipfile
 
 from web_bundle import stage_web_bundle
+from version_policy import source_version, validate_remote_version
 
 ROOT = Path(__file__).resolve().parents[2]
 GODOT_VERSION = "4.7.2"
@@ -376,8 +377,8 @@ def build(args):
     if head != args.sha:
         raise RuntimeError("--sha must equal the checked-out full HEAD commit")
     presets = read_presets(ROOT / "godot/export_presets.cfg")
-    source_version = json.loads(presets["preset.1.options"]["version/name"])
-    version = source_version + "+" + args.sha[:12]
+    version = source_version()
+    validate_remote_version(version, args.sha, allow_existing=not args.validation)
     provenance = json.loads((ROOT / "verification/box2d_build.json").read_text())
     target, arch, preset_name, library = TARGETS[args.platform]
     output_root = ROOT / ("dist/validation" if args.validation else "dist")
@@ -417,6 +418,7 @@ def build(args):
             configure_android(work, project, templates, options, environment, signer)
         elif target == "macos":
             options["application/version"] = json.dumps(str(1000 + args.run_number))
+            options["application/short_version"] = json.dumps(version)
         write_presets(presets, project / "export_presets.cfg")
         run([godot, "--headless", "--editor", "--path", project, "--import"], cwd=work, env=environment)
         export = work / "export"

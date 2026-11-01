@@ -443,6 +443,8 @@ func _refresh_scroll(state: Dictionary) -> void:
 			if int(fit.get("m_VerticalFit", 0)) == 2 and label != null:
 				preferred_height = label.get_minimum_size().y
 		content.size.y = preferred_height
+		if label != null:
+			label.size.y = content.size.y
 		needed = [bool(p.get("m_Horizontal", false)) and content.size.x > available.x, bool(p.get("m_Vertical", true)) and content.size.y > available.y]
 		available = target.size
 		for axis in 2:

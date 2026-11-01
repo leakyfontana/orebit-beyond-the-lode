@@ -1,4 +1,4 @@
-name: Beta
+name: Release
 
 on:
   pull_request:
@@ -19,8 +19,29 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  version-policy:
+    name: Release version policy
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Check release policy behavior
+        run: python -m unittest discover -s automation/release -p 'test_*.py' -v
+      - name: Require a unique increasing source version
+        env:
+          OREBIT_EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$OREBIT_EVENT" = push ]; then
+            python automation/release/version_policy.py --sha "$GITHUB_SHA" --allow-existing
+          else
+            python automation/release/version_policy.py --sha "$GITHUB_SHA"
+          fi
+
   validate:
     if: github.event_name == 'pull_request'
+    needs: version-policy
     name: Validate ${{ matrix.platform }}
     strategy:
       fail-fast: false
@@ -44,8 +65,8 @@ jobs:
           validation: 'true'
 
   coop-tests:
-    if: github.event_name == 'pull_request'
     name: Co-op service regressions
+    needs: version-policy
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -59,17 +80,19 @@ jobs:
   checks:
     name: Beta checks
     if: always() && github.event_name == 'pull_request'
-    needs: [validate, coop-tests]
+    needs: [version-policy, validate, coop-tests]
     runs-on: ubuntu-24.04
     steps:
       - name: Require every platform, Web menu smoke and co-op regressions
         env:
           VALIDATION_RESULT: ${{ needs.validate.result }}
+          VERSION_RESULT: ${{ needs.version-policy.result }}
           COOP_RESULT: ${{ needs.coop-tests.result }}
-        run: test "$VALIDATION_RESULT" = success && test "$COOP_RESULT" = success
+        run: test "$VERSION_RESULT" = success && test "$VALIDATION_RESULT" = success && test "$COOP_RESULT" = success
 
   release-build:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [version-policy, coop-tests]
     name: Release ${{ matrix.platform }}
     environment: beta-release
     strategy:
@@ -114,6 +137,8 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'
+      - name: Recheck fresh public version tags before publication
+        run: python automation/release/version_policy.py --sha "$GITHUB_SHA" --allow-existing
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: beta-production-*

@@ -12,7 +12,8 @@ const BOT = "1565565791590420520";
 // Unlike $, this end assertion cannot accept a trailing newline.
 const KEY = /^leakyfontana\/orebit-beyond-the-lode:[0-9a-f]{40}(?![\s\S])/;
 const SNOWFLAKE = /^[1-9][0-9]{0,19}(?![\s\S])/;
-const DEFAULT_STATE = join(homedir(), "Library/Application Support/Orebit Intake/announcements");
+const DEFAULT_STATE = process.env.OREBIT_ANNOUNCEMENTS_STATE_DIR ||
+  join(homedir(), "Library/Application Support/Orebit Intake/announcements");
 
 type DeliveryResult = { created: boolean; messageId: string };
 type Intent = { state: "pending" | "sending" | "sent"; payload: string; message_id: string | null };
@@ -38,8 +39,18 @@ function checkKey(key: string): void {
   if (typeof key !== "string" || !KEY.test(key)) throw new DeliveryError("Invalid announcement deduplication key");
 }
 
-function releaseUrl(key: string): string {
-  return `https://github.com/leakyfontana/orebit-beyond-the-lode/releases/tag/beta-${key.split(":")[1]}`;
+function isReleaseUrl(value: unknown): value is string {
+  return typeof value === "string" &&
+    /^https:\/\/github\.com\/leakyfontana\/orebit-beyond-the-lode\/releases\/tag\/v0\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?![\s\S])/.test(value);
+}
+
+function storedReleaseUrl(payload: string): string {
+  const value: unknown = JSON.parse(payload);
+  if (!object(value) || !Array.isArray(value.embeds) || value.embeds.length !== 1 ||
+      !object(value.embeds[0]) || !isReleaseUrl(value.embeds[0].url)) {
+    throw new DeliveryError("Pending announcement has no canonical public release URL; operator review required");
+  }
+  return value.embeds[0].url;
 }
 
 function text(value: unknown, maximum: number): value is string {
@@ -47,7 +58,7 @@ function text(value: unknown, maximum: number): value is string {
 }
 
 // Snapshot before entering the queue: later caller mutations cannot change an intent.
-// The canonical release URL identifies the build without exposing machine IDs in the footer.
+// The canonical release URL identifies the version; the durable key and nonce remain commit-based.
 function freezePayload(key: string, payload: DiscordAnnouncement): string {
   try {
     const value: unknown = JSON.parse(JSON.stringify(payload));
@@ -59,7 +70,7 @@ function freezePayload(key: string, payload: DiscordAnnouncement): string {
     }
     const embed = value.embeds[0];
     if (!object(embed) || !exactKeys(embed, ["title", "url", "color", "description", "fields", "footer", "timestamp"])
-      || !text(embed.title, 256) || embed.url !== releaseUrl(key)
+      || !text(embed.title, 256) || !isReleaseUrl(embed.url)
       || !Number.isInteger(embed.color) || (embed.color as number) < 0 || (embed.color as number) > 0xffffff
       || !text(embed.description, 4096) || !text(embed.timestamp, 64)
       || !object(embed.footer) || !exactKeys(embed.footer, ["text"]) || !text(embed.footer.text, 2048)
@@ -223,9 +234,10 @@ export class AnnouncementDelivery {
       this.#database.query("INSERT INTO announcements(key, state, payload) VALUES (?, 'pending', ?)").run(key, frozen);
       intent = { state: "pending", payload: frozen, message_id: null };
     }
+    const expectedUrl = storedReleaseUrl(intent.payload);
     await this.#verifyDestination();
     // Also scan for brand-new keys, so a restored/lost ledger cannot create a replay.
-    const found = await this.#reconcile(key);
+    const found = await this.#reconcile(expectedUrl);
     if (found) return this.#sent(key, found, false);
     if (intent.state === "sending") {
       throw new DeliveryError("Announcement delivery remains uncertain; pending intent retained without reposting");
@@ -238,7 +250,7 @@ export class AnnouncementDelivery {
     let message: unknown;
     try {
       message = await this.#request(`/channels/${CHANNEL}/messages`, "POST", intent.payload);
-      if (!this.#matchingMessage(message, key)) throw new DeliveryError("Discord create-message response could not confirm delivery");
+      if (!this.#matchingMessage(message, expectedUrl)) throw new DeliveryError("Discord create-message response could not confirm delivery");
     } catch (error) {
       if (error instanceof DeliveryError && error.rejected) {
         // Discord explicitly rejected this request; there was no successful send.
@@ -248,7 +260,7 @@ export class AnnouncementDelivery {
       // Timeouts, 5xx and malformed success responses may all have created a message.
       // If history is unavailable or still empty, leave 'sending' intact forever
       // rather than eventually trusting Discord's short-lived nonce window.
-      const recovered = await this.#reconcile(key);
+      const recovered = await this.#reconcile(expectedUrl);
       if (recovered) return this.#sent(key, recovered, false);
       throw new DeliveryError("Announcement delivery remains uncertain; pending intent retained without reposting");
     }
@@ -269,15 +281,15 @@ export class AnnouncementDelivery {
     }
   }
 
-  #matchingMessage(value: unknown, key: string): boolean {
+  #matchingMessage(value: unknown, expectedUrl: string): boolean {
     return object(value) && typeof value.id === "string" && SNOWFLAKE.test(value.id)
       && value.channel_id === CHANNEL && value.type === 0 && !value.webhook_id
       && object(value.author) && value.author.id === BOT && value.author.bot === true
       && Array.isArray(value.embeds) && value.embeds.some((embed) => object(embed)
-        && embed.url === releaseUrl(key));
+        && embed.url === expectedUrl);
   }
 
-  async #reconcile(key: string): Promise<string | null> {
+  async #reconcile(expectedUrl: string): Promise<string | null> {
     let before: string | undefined;
     for (;;) {
       const page = await this.#request(`/channels/${CHANNEL}/messages?limit=100${before ? `&before=${before}` : ""}`);
@@ -290,7 +302,7 @@ export class AnnouncementDelivery {
           || (before && BigInt(message.id) >= BigInt(before))) {
           throw new DeliveryError("Discord message history response is invalid; pending intent retained");
         }
-        if (this.#matchingMessage(message, key)) return message.id;
+        if (this.#matchingMessage(message, expectedUrl)) return message.id;
         if (!oldest || BigInt(message.id) < BigInt(oldest)) oldest = message.id;
       }
       // Even a short page is followed to exhaustion; never infer absence from a

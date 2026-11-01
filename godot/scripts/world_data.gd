@@ -4,9 +4,15 @@ extends RefCounted
 # Map coordinates are [x][y], with y increasing downwards. A Unity tile center
 # is (x + .5, -y + .5). Rotation indices map to Unity degrees 90 * (rotation - 2).
 # The renderer must negate those degrees when converting to Godot y-down.
+const COOP_SURFACE_LEFT := -10
+const SURFACE_ROW := 5
+const RIA_SLAB_LEFT := -8
+const RIA_SLAB_RIGHT := -3
 var data: GameData
 var blockChangedTexture: bool = false
 var generation_seed: int = 0
+# Co-op-only columns, indexed by x - COOP_SURFACE_LEFT; never serialized in GameData.
+var western_columns: Array = []
 # A halfway-dug node stays solid and retains its original ore/name until digBlock,
 # even though my_map already reads empty. Keep that visual/collision state apart.
 var halfway_blocks: Dictionary = {}
@@ -402,56 +408,16 @@ func generate(seed_value: Variant = null) -> void:
 	data.my_map = []
 	halfway_blocks.clear()
 	blockChangedTexture = false
+	western_columns.clear()
 	for x in range(data.earthWidth):
-		var column: Array = []
-		for y in range(data.earthHeight):
-			column.append([-100, -100])
-		data.my_map.append(column)
-	for x in range(data.earthWidth):
-		for y in range(data.earthHeight):
-			var tile: Array = data.my_map[x][y]
-			tile[1] = random.Next(4)
-			if y < 5:
-				tile[0] = 0
-			elif y == 5:
-				tile[0] = random.Next(2) - 2
-			elif y == data.earthHeight - 12:
-				tile[0] = random.Next(2) - 7
-			elif y >= data.earthHeight - 11 and y < data.earthHeight - 5:
-				tile[0] = -999
-			elif y == data.earthHeight - 5:
-				tile[0] = -(9 + random.Next(4))
-			elif y > data.earthHeight - 5:
-				tile[0] = -8
-			else:
-				var mineral_range: int = int(float(y) / 65.0) + 2
-				if random.Next(5) == 0:
-					if random.Next(5) == 0:
-						if random.Next(5) == 0:
-							if random.Next(4) == 0 and y > 80:
-								tile[0] = random.Next(4) + 16
-								if tile[0] == 17:
-									tile[1] = 0
-							else:
-								tile[0] = mini(random.Next(mineral_range) + 8, 15)
-						else:
-							tile[0] = mini(random.Next(mineral_range) + 7, 15)
-					else:
-						tile[0] = mini(random.Next(mineral_range) + 6, 15)
-				else:
-					tile[0] = random.Next(5) + 1
-					if float(y) * 1.5 > int(float(data.earthHeight) / 3.0):
-						var hazard_range: int = int((float(data.earthHeight - y) / float(data.earthHeight)) * 15.0)
-						if random.Next(hazard_range) == 0:
-							if float(y) / 2.0 * 1.5 > float(data.earthHeight) / 3.0 and random.Next(2) == 0:
-								if float(y) / 3.0 * 1.5 > float(data.earthHeight) / 3.0 and random.Next(2) == 0:
-									tile[0] = 31
-								else:
-									tile[0] = 28 + random.Next(3)
-							else:
-								tile[0] = 25 + random.Next(3)
-				if random.Next(4) == 0:
-					tile[0] = 0
+		data.my_map.append(_generate_column(random))
+	# Keep every original RNG draw ahead of the west, in the original order.
+	if data.coop_mode:
+		for x in range(COOP_SURFACE_LEFT, 0):
+			var column: Array = _generate_column(random)
+			if x >= RIA_SLAB_LEFT and x <= RIA_SLAB_RIGHT:
+				column[SURFACE_ROW][0] = -3 if x == RIA_SLAB_LEFT else (-5 if x == RIA_SLAB_RIGHT else -4)
+			western_columns.append(column)
 	data.my_map[data.earthWidth - 3][data.earthHeight - 12][0] = 0
 	data.my_map[data.earthWidth - 4][data.earthHeight - 12][0] = 0
 	# Fixed surface buildings and pavement overwrite generated types, not rotations.
@@ -513,15 +479,80 @@ func generate(seed_value: Variant = null) -> void:
 func generateLevel(seed_value: Variant = null) -> void:
 	generate(seed_value)
 
+func _generate_column(random: DotNetRandom) -> Array:
+	var column: Array = []
+	for y in range(data.earthHeight):
+		var tile: Array = [-100, random.Next(4)]
+		if y < 5:
+			tile[0] = 0
+		elif y == 5:
+			tile[0] = random.Next(2) - 2
+		elif y == data.earthHeight - 12:
+			tile[0] = random.Next(2) - 7
+		elif y >= data.earthHeight - 11 and y < data.earthHeight - 5:
+			tile[0] = -999
+		elif y == data.earthHeight - 5:
+			tile[0] = -(9 + random.Next(4))
+		elif y > data.earthHeight - 5:
+			tile[0] = -8
+		else:
+			var mineral_range: int = int(float(y) / 65.0) + 2
+			if random.Next(5) == 0:
+				if random.Next(5) == 0:
+					if random.Next(5) == 0:
+						if random.Next(4) == 0 and y > 80:
+							tile[0] = random.Next(4) + 16
+							if tile[0] == 17:
+								tile[1] = 0
+						else:
+							tile[0] = mini(random.Next(mineral_range) + 8, 15)
+					else:
+						tile[0] = mini(random.Next(mineral_range) + 7, 15)
+				else:
+					tile[0] = mini(random.Next(mineral_range) + 6, 15)
+			else:
+				tile[0] = random.Next(5) + 1
+				if float(y) * 1.5 > int(float(data.earthHeight) / 3.0):
+					var hazard_range: int = int((float(data.earthHeight - y) / float(data.earthHeight)) * 15.0)
+					if random.Next(hazard_range) == 0:
+						if float(y) / 2.0 * 1.5 > float(data.earthHeight) / 3.0 and random.Next(2) == 0:
+							if float(y) / 3.0 * 1.5 > float(data.earthHeight) / 3.0 and random.Next(2) == 0:
+								tile[0] = 31
+							else:
+								tile[0] = 28 + random.Next(3)
+						else:
+							tile[0] = 25 + random.Next(3)
+			if random.Next(4) == 0:
+				tile[0] = 0
+		column.append(tile)
+	return column
+
 func inBounds(x: int, y: int) -> bool:
-	return x >= 0 and x < data.earthWidth and y >= 0 and y < data.earthHeight
+	return x >= surface_left() and x < data.earthWidth and y >= 0 and y < data.earthHeight
+
+func surface_left() -> int:
+	return COOP_SURFACE_LEFT if data.coop_mode else 0
+
+func getRawTile(x: int, y: int) -> Array:
+	# Resolve coordinates before indexing: GDScript's negative indices wrap arrays.
+	# The returned [type, rotation] is the mutable cell, or [] outside this mode's map.
+	if not inBounds(x, y):
+		return []
+	var columns: Array = western_columns if x < 0 else data.my_map
+	var column_index: int = x - COOP_SURFACE_LEFT if x < 0 else x
+	if column_index >= columns.size() or y >= columns[column_index].size():
+		return []
+	return columns[column_index][y]
 
 func _tile(filename: String, tile_name: String, rotation: int, layer: String, ore_value: int = 0, weight: int = 0) -> Dictionary:
 	return {"filename": filename, "name": tile_name, "rotation": rotation, "layer": layer, "ore_value": ore_value, "weight": weight}
 
 func getTileDataFromLevelData(x: int, y: int) -> Dictionary:
-	var n: int = int(data.my_map[x][y][0])
-	var rotation: int = int(data.my_map[x][y][1])
+	var raw: Array = getRawTile(x, y)
+	if raw.is_empty():
+		return _tile("Empty", "Empty", 0, "Traversable")
+	var n: int = int(raw[0])
+	var rotation: int = int(raw[1])
 	if n != 0:
 		if n < 6 and n > -1:
 			return _tile("Dirt" + str(n), "Dirt", rotation, "Diggable")
@@ -554,7 +585,8 @@ func getTileDataFromLevelData(x: int, y: int) -> Dictionary:
 	return getTunnelTileGraphicName(x, y)
 
 func _wallValue(x: int, y: int) -> String:
-	if not inBounds(x, y) or data.my_map[x][y][0] != 0:
+	var raw: Array = getRawTile(x, y)
+	if raw.is_empty() or raw[0] != 0:
 		return "1"
 	return "0"
 
@@ -572,7 +604,7 @@ func getTunnelTileGraphicName(x: int, y: int) -> Dictionary:
 
 func getBlockData(x: int, y: int) -> Dictionary:
 	var key: Vector2i = Vector2i(x, y)
-	if halfway_blocks.has(key):
+	if inBounds(x, y) and halfway_blocks.has(key):
 		return halfway_blocks[key]
 	return getTileDataFromLevelData(x, y)
 
@@ -588,18 +620,22 @@ func doesBlockExistAndIsDiggable(x: int, y: int) -> bool:
 
 func doesBlockExistAndIsNotDiggable(x: int, y: int) -> bool:
 	y = absi(y)
+	# Rock blocks drills but can still be excavated by explosives.
 	if not inBounds(x, y):
 		return false
 	var tile: Dictionary = getBlockData(x, y)
 	return tile.layer == "Invincible" or tile.name == "Rock"
 
 func halfwayDigBlock(x: int, y: int, previous_x: int, previous_y: int, desired_orientation: int) -> Dictionary:
+	var raw: Array = getRawTile(x, y)
 	var original: Dictionary = getBlockData(x, y).duplicate()
+	if raw.is_empty() or (x < 0 and original.layer != "Diggable"):
+		return {}
 	original.filename = "BlockHalfwayDug" + data.blockHalfwayDugFilename[Vector2i(original.rotation, desired_orientation)]
 	halfway_blocks[Vector2i(x, y)] = original
 	blockChangedTexture = true
-	data.my_map[x][y][0] = 0
-	data.my_map[x][y][1] = 0
+	raw[0] = 0
+	raw[1] = 0
 	# Original TilesManager intentionally swaps previous_y and previous_x.
 	var refresh: Array[Vector2i] = []
 	if inBounds(previous_y, previous_x) and getBlockData(previous_y, previous_x).layer == "Traversable":
@@ -607,6 +643,8 @@ func halfwayDigBlock(x: int, y: int, previous_x: int, previous_y: int, desired_o
 	return {"tile": original, "position": Vector2i(x, y), "refresh_cells": refresh}
 
 func digBlock(x: int, y: int) -> Array[Vector2i]:
+	if getRawTile(x, y).is_empty() or (x < 0 and getBlockData(x, y).name == "Pavement"):
+		return []
 	# Does not clear the map: halfwayDigBlock normally did that already.
 	blockChangedTexture = false
 	halfway_blocks.erase(Vector2i(x, y))
@@ -618,8 +656,10 @@ func digBlock(x: int, y: int) -> Array[Vector2i]:
 	return changed
 
 func instantDigBlock(x: int, y: int) -> Array[Vector2i]:
-	# The coordinate overload clears ANY tile. The original GameObject overload
-	# checked isDiggable first (including Rock); callers using that path check layer.
-	data.my_map[x][y][0] = 0
-	data.my_map[x][y][1] = 0
+	var raw: Array = getRawTile(x, y)
+	if raw.is_empty() or (x < 0 and getBlockData(x, y).name == "Pavement"):
+		return []
+	# Preserve original coordinate-overload behavior; protect the western Ria slab.
+	raw[0] = 0
+	raw[1] = 0
 	return digBlock(x, y)

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { PublicationSource, REPOSITORY, type Release, type WorkflowRun } from './github';
+import { PublicationSource, REPOSITORY, isPublicRelease, type Release, type WorkflowRun } from './github';
 import { validateReceipt, renderAnnouncement } from './message';
 import { AnnouncementDelivery } from './delivery';
 
@@ -16,10 +16,10 @@ export class ReleaseAnnouncer {
   constructor(private source: PublicationSource, private delivery: AnnouncementDelivery) {}
 
   async processRelease(release: Release, knownRun?: WorkflowRun): Promise<PublicationOutcome> {
-    if (release.draft || !release.prerelease || !release.published_at || !/^beta-[a-f0-9]{40}$/.test(release.tag_name)) {
+    if (!isPublicRelease(release)) {
       return { outcome: 'waiting_for_publication' };
     }
-    const commit = release.tag_name.slice(5);
+    const commit = release.target_commitish;
     const key = `${REPOSITORY}:${commit}`;
     if (this.delivery.hasPublished(key)) return { outcome: 'already_announced', commit };
     const run = knownRun ?? await this.source.successfulRun(commit);
@@ -28,7 +28,8 @@ export class ReleaseAnnouncer {
     }
     const asset = await this.source.receipt(release);
     const receipt = validateReceipt(asset.value);
-    if (receipt.commit !== commit || receipt.release_id !== commit || receipt.repository !== REPOSITORY) {
+    if (receipt.commit !== commit || receipt.release_id !== commit || receipt.repository !== REPOSITORY ||
+        `v${receipt.version}` !== release.tag_name) {
       throw new Error('Publication receipt identity differs from its trusted GitHub release');
     }
     const message = renderAnnouncement(receipt, { releaseUrl: release.html_url, receiptUrl: asset.url });
@@ -39,7 +40,8 @@ export class ReleaseAnnouncer {
   /** A real workflow event/replay uses the same gate as polling. Failed/PR runs never reach delivery. */
   async processRun(run: WorkflowRun): Promise<PublicationOutcome> {
     if (!await this.source.isSuccessful(run, run.head_sha)) return { outcome: 'not_successful', commit: run.head_sha };
-    const release = (await this.source.releases()).find(release => release.tag_name === `beta-${run.head_sha}`);
+    const release = (await this.source.releases()).find(release =>
+      isPublicRelease(release) && release.target_commitish === run.head_sha);
     return release ? this.processRelease(release, run) : { outcome: 'waiting_for_publication', commit: run.head_sha };
   }
 
@@ -65,7 +67,8 @@ async function main() {
       !(args.length === 2 && args[0] === '--run' && /^[1-9][0-9]*$/.test(args[1]))) {
     throw new Error('Usage: bun automation/announcements/service.ts [--once | --run GITHUB_RUN_ID]');
   }
-  const token = readFileSync(join(homedir(), 'Library/Application Support/Orebit Intake/discord-token'), 'utf8').trim();
+  const token = readFileSync(process.env.OREBIT_DISCORD_TOKEN_FILE ||
+    join(homedir(), 'Library/Application Support/Orebit Intake/discord-token'), 'utf8').trim();
   if (!token) throw new Error('Missing existing Orebit Intake bot credential');
   const source = new PublicationSource();
   const announcer = new ReleaseAnnouncer(source, new AnnouncementDelivery({ token, channelId: CHANNEL }));

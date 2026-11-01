@@ -10,7 +10,7 @@ const PLATFORM_NAMES = {
 
 export interface PublicationReceipt {
   schema: 1;
-  kind: "orebit.beta.publication";
+  kind: "orebit.publication";
   repository: typeof REPOSITORY;
   release_id: string;
   version: string;
@@ -94,13 +94,13 @@ function driveUrl(value: unknown, folder: boolean, label: string): string {
 /** Validate publication evidence only; GitHub workflow/release trust is checked by the poller. */
 export function validateReceipt(value: unknown): PublicationReceipt {
   const receipt = object(value, ["schema", "kind", "repository", "release_id", "version", "commit", "published_at", "platforms", "web", "notes"], "receipt");
-  requireValue(receipt.schema === 1 && receipt.kind === "orebit.beta.publication" && receipt.repository === REPOSITORY,
+  requireValue(receipt.schema === 1 && receipt.kind === "orebit.publication" && receipt.repository === REPOSITORY,
     "unsupported schema, kind, or repository");
   const commit = text(receipt.commit, 40, "commit");
   requireValue(SHA.test(commit) && receipt.release_id === commit, "release and commit identity disagree");
   const version = text(receipt.version, 128, "version");
-  requireValue(/^[0-9]+\.[0-9]+(?:\.[0-9]+)?-beta(?:[.-][0-9A-Za-z]+)*\+[0-9a-f]{12}$/.test(version)
-    && version.endsWith(`+${commit.slice(0, 12)}`), "version must identify this beta commit");
+  requireValue(/^0\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?![\s\S])/.test(version),
+    "version must be a plain 0.x.y release");
   const publishedAt = text(receipt.published_at, 32, "published_at");
   requireValue(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|\+00:00)$/.test(publishedAt)
     && Number.isFinite(Date.parse(publishedAt))
@@ -205,15 +205,15 @@ export function renderAnnouncement(receipt: PublicationReceipt, links: { release
   receipt = validateReceipt(receipt);
   const release = httpsUrl(links.releaseUrl, "release URL");
   const asset = httpsUrl(links.receiptUrl, "receipt URL");
-  const releasePath = `/${REPOSITORY}/releases/tag/beta-${receipt.commit}`;
-  const assetPath = `/${REPOSITORY}/releases/download/beta-${receipt.commit}/publication.json`;
+  const releasePath = `/${REPOSITORY}/releases/tag/v${receipt.version}`;
+  const assetPath = `/${REPOSITORY}/releases/download/v${receipt.version}/publication.json`;
   requireValue(release.hostname === "github.com" && release.pathname === releasePath && !release.search,
-    "release URL must identify this repository and commit");
+    "release URL must identify this repository and version");
   requireValue(asset.hostname === "github.com" && asset.pathname === assetPath && !asset.search,
     "receipt URL must identify this release's publication.json");
   const platforms = PLATFORM_ORDER.flatMap(key => receipt.platforms.filter(platform => platform.platform === key));
   const notes = highlights(receipt);
-  const description = notes.length ? `**Highlights**\n${notes.join("\n")}` : "A new beta is ready to play.";
+  const description = notes.length ? `**Highlights**\n${notes.join("\n")}` : "A new release is ready to play.";
   const downloads = platforms.map(platform => ({
     type: 2 as const,
     style: 5 as const,
@@ -223,12 +223,12 @@ export function renderAnnouncement(receipt: PublicationReceipt, links: { release
   }));
   return {
     embeds: [{
-      title: `Orebit · ${receipt.version.split("+")[0]}`,
+      title: `Orebit ${receipt.version}`,
       url: links.releaseUrl,
       color: 0xe6ab47,
       description,
       fields: [{ name: "Updating?", value: platforms.map(platform => `- ${UPDATE_INSTRUCTIONS[platform.platform]}`).join("\n") }],
-      footer: { text: "Beta release" },
+      footer: { text: "Release" },
       timestamp: receipt.published_at,
     }],
     components: [

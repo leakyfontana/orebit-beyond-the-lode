@@ -1,5 +1,5 @@
 name: Build Orebit platform
-description: Build a pinned native backend and an isolated Godot beta export.
+description: Build a pinned native backend and an isolated Godot release export.
 inputs:
   platform:
     required: true

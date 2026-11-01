@@ -23,7 +23,7 @@ func configure(world_data: WorldData, state: GameData, scene_bridge: SceneBridge
 	tile_layer.navigation_enabled = false
 	tile_layer.occlusion_enabled = false
 	add_child(tile_layer)
-	for x in data.earthWidth:
+	for x in range(world.surface_left(), data.earthWidth):
 		for y in data.earthHeight:
 			_update_tile(Vector2i(x, y))
 	z_index = 1
@@ -60,7 +60,7 @@ func _update_colliders() -> void:
 		if absi(cell.x - physics_center.x) > 12 or absi(cell.y - physics_center.y) > 12:
 			colliders[cell].queue_free()
 			colliders.erase(cell)
-	for x in range(maxi(0, physics_center.x - 12), mini(data.earthWidth, physics_center.x + 13)):
+	for x in range(maxi(world.surface_left(), physics_center.x - 12), mini(data.earthWidth, physics_center.x + 13)):
 		for y in range(maxi(0, physics_center.y - 12), mini(data.earthHeight, physics_center.y + 13)):
 			var cell := Vector2i(x, y)
 			if not colliders.has(cell) and _solid(cell):

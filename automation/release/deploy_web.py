@@ -2,7 +2,7 @@
 """Publish an immutable Web candidate for the outbound-only game deployment service.
 
 No CI-to-VPS SSH, inbound deployment endpoint, or server credential is used.
-Candidates are not successful beta receipts. The service validates the trusted
+Candidates are not successful publication receipts. The service validates the trusted
 push run and exact ZIP before invoking the scoped atomic deployment helper.
 """
 import argparse
@@ -20,6 +20,7 @@ import urllib.parse
 import urllib.request
 
 from remote_web_release import MAX_ARCHIVE, digest, inspect_archive, public_verify, require, valid_identity
+from version_policy import validate_remote_version
 
 ROOT = Path(__file__).resolve().parents[2]
 REPOSITORY = 'leakyfontana/orebit-beyond-the-lode'
@@ -156,7 +157,7 @@ def publish_candidate(archive, header, run_id):
     request_path.write_text(json.dumps(request, indent=2, sort_keys=True) + '\n')
     release = find_release(tag)
     if release is None:
-        release = json.loads(gh('api', '--method', 'POST', f'repos/{REPOSITORY}/releases', '-f', 'tag_name=' + tag, '-f', 'target_commitish=' + commit, '-f', 'name=Orebit deployment candidate ' + version, '-f', 'body=Pending Web deployment verification; not a successful beta publication or announcement receipt.', '-F', 'prerelease=true', '-F', 'draft=true'))
+        release = json.loads(gh('api', '--method', 'POST', f'repos/{REPOSITORY}/releases', '-f', 'tag_name=' + tag, '-f', 'target_commitish=' + commit, '-f', 'name=Orebit deployment candidate ' + version, '-f', 'body=Pending Web deployment verification; not a successful publication or announcement receipt.', '-F', 'prerelease=true', '-F', 'draft=true'))
     require(release['target_commitish'] == commit and release.get('prerelease'), 'Candidate release identity differs')
     for path in (archive, request_path):
         if any(item['name'] == path.name for item in release.get('assets', [])):
@@ -212,7 +213,7 @@ def main():
         manifest = repository_path(args.manifest)
         if args.verify_current and not manifest.is_file():
             build = fetch_json(SITE + '/build.json')
-            valid_identity(build.get('commit'), build.get('version'))
+            require(isinstance(build.get('commit'), str) and re.fullmatch(r'[0-9a-f]{40}', build['commit']) and isinstance(build.get('version'), str), 'Invalid deployed build identity')
             status = fetch_json(SITE + STATUS_PATH + build['commit'] + '.json')
             require(status.get('status') in ('deployed', 'verified-existing') and status.get('commit') == build['commit'], 'No verified publication status for current Web build')
             print(json.dumps({'schema': 1, 'status': 'verified-current', 'mutated': False, 'commit': build['commit'], 'version': build['version'], 'site': SITE, 'verification': 'public-build-identity-and-deployment-status'}))
@@ -232,6 +233,7 @@ def main():
         if args.rollback:
             request_rollback(header, run_id)
         else:
+            validate_remote_version(header['version'], header['commit'], allow_existing=True)
             publish_candidate(archive, header, run_id)
         result = wait_status(header, run_id, args.rollback, args.timeout)
         if before and before.get('commit') == header['commit'] and not args.rollback:
