@@ -3,9 +3,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock, MagicMock
-
-from aiohttp import ClientError
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from fuel_prices import FuelPrices, MAX_RESPONSE, PriceUnavailable, parse_aaa
 from server import APIError, Service
@@ -45,7 +43,7 @@ class FuelParsingTest(unittest.TestCase):
 class FuelProviderTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.now = NOW
-        self.provider = FuelPrices(None, clock=lambda: self.now)
+        self.provider = FuelPrices(clock=lambda: self.now)
         self.provider._fetch = AsyncMock(return_value=aaa())
 
     async def test_concurrent_consumers_share_current_quote(self):
@@ -96,15 +94,15 @@ class FuelProviderTest(unittest.IsolatedAsyncioTestCase):
         quote = await self.provider.price()
         self.assertEqual(quote["valid_until"] - self.now.timestamp(), 25 * 3600)
         self.now = datetime(2026, 3, 8, 5, tzinfo=UTC)
-        self.provider = FuelPrices(None, clock=lambda: self.now)
+        self.provider = FuelPrices(clock=lambda: self.now)
         self.provider._fetch = AsyncMock(return_value=aaa("3/8/26"))
         quote = await self.provider.price()
         self.assertEqual(quote["valid_until"] - self.now.timestamp(), 23 * 3600)
 
     async def test_failures_are_shared_for_sixty_seconds_then_retried(self):
-        for failure in (PriceUnavailable(), ClientError(), asyncio.TimeoutError(), ValueError()):
+        for failure in (PriceUnavailable(), asyncio.TimeoutError(), ValueError()):
             with self.subTest(failure=type(failure).__name__):
-                provider = FuelPrices(None, clock=lambda: self.now)
+                provider = FuelPrices(clock=lambda: self.now)
                 provider._fetch = AsyncMock(side_effect=failure)
                 results = await asyncio.gather(*(provider.price() for _ in range(10)), return_exceptions=True)
                 self.assertTrue(all(isinstance(result, PriceUnavailable) for result in results))
@@ -119,28 +117,69 @@ class FuelProviderTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual((await provider.price())["source"], "aaa")
                 self.assertEqual(provider._fetch.await_count, 2)
 
-    async def test_http_errors_oversized_and_invalid_documents_are_unavailable(self):
-        for status, raw in ((503, b"unavailable"), (200, b"x" * (MAX_RESPONSE + 1)),
-                (200, b"\xff"), (200, b"not a price")):
-            with self.subTest(status=status, size=len(raw)):
-                response = SimpleNamespace(status=status, content=SimpleNamespace(readexactly=AsyncMock()))
-                if len(raw) > MAX_RESPONSE:
-                    response.content.readexactly.return_value = raw
-                else:
-                    response.content.readexactly.side_effect = asyncio.IncompleteReadError(raw, MAX_RESPONSE + 1)
-                http = MagicMock()
-                http.request.return_value.__aenter__.return_value = response
-                provider = FuelPrices(http, clock=lambda: NOW)
-                with self.assertRaises(PriceUnavailable):
-                    await provider.price()
+    def process(self, raw=None, returncode=0):
+        reader = asyncio.StreamReader()
+        if raw is not None:
+            reader.feed_data(raw)
+            reader.feed_eof()
+        return SimpleNamespace(
+            stdout=reader, returncode=returncode,
+            wait=AsyncMock(return_value=returncode or 0), kill=MagicMock(),
+        )
 
-    async def test_bounded_http_response_can_supply_a_quote(self):
-        raw = aaa().encode()
-        response = SimpleNamespace(status=200, content=SimpleNamespace(readexactly=AsyncMock(
-            side_effect=asyncio.IncompleteReadError(raw, MAX_RESPONSE + 1))))
-        http = MagicMock()
-        http.request.return_value.__aenter__.return_value = response
-        self.assertEqual((await FuelPrices(http, clock=lambda: NOW).price())["price_per_gallon"], 3.259)
+    async def test_curl_errors_oversized_and_invalid_documents_are_unavailable(self):
+        for code, raw in ((22, b"unavailable"), (0, b"x" * (MAX_RESPONSE + 1)),
+                (0, b"\xff"), (0, b"not a price")):
+            with self.subTest(returncode=code, size=len(raw)):
+                process = self.process(raw, code)
+                with patch("fuel_prices.asyncio.create_subprocess_exec", AsyncMock(return_value=process)):
+                    with self.assertRaises(PriceUnavailable):
+                        await FuelPrices(clock=lambda: NOW).price()
+                process.wait.assert_awaited()
+
+    async def test_bounded_curl_response_can_supply_a_quote(self):
+        process = self.process(aaa().encode())
+        with patch("fuel_prices.asyncio.create_subprocess_exec", AsyncMock(return_value=process)):
+            quote = await FuelPrices(user_agent="Orebit test", clock=lambda: NOW).price()
+        self.assertEqual(quote["price_per_gallon"], 3.259)
+        process.kill.assert_not_called()
+        process.wait.assert_awaited()
+
+    async def test_missing_curl_is_sanitized(self):
+        with patch("fuel_prices.asyncio.create_subprocess_exec", AsyncMock(
+                side_effect=FileNotFoundError("private executable path"))):
+            with self.assertRaises(PriceUnavailable) as error:
+                await FuelPrices()._fetch()
+        self.assertEqual(str(error.exception), "")
+        self.assertTrue(error.exception.__suppress_context__)
+
+    async def test_timeout_kills_and_reaps_curl(self):
+        process = self.process(returncode=None)
+        with patch("fuel_prices.asyncio.create_subprocess_exec", AsyncMock(return_value=process)), \
+                patch("fuel_prices.FETCH_TIMEOUT", 0.01):
+            with self.assertRaises(PriceUnavailable):
+                await FuelPrices()._fetch()
+        process.kill.assert_called_once()
+        process.wait.assert_awaited()
+
+    async def test_oversized_stream_kills_and_reaps_curl(self):
+        process = self.process(b"x" * (MAX_RESPONSE + 1), returncode=None)
+        with patch("fuel_prices.asyncio.create_subprocess_exec", AsyncMock(return_value=process)):
+            with self.assertRaises(PriceUnavailable):
+                await FuelPrices()._fetch()
+        process.kill.assert_called_once()
+        process.wait.assert_awaited()
+
+    async def test_cancellation_kills_and_reaps_curl(self):
+        process = self.process(returncode=None)
+        with patch("fuel_prices.asyncio.create_subprocess_exec", AsyncMock(return_value=process)):
+            task = asyncio.create_task(FuelPrices()._fetch())
+            await asyncio.sleep(0)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+        process.kill.assert_called_once()
+        process.wait.assert_awaited()
 
 
 class FuelEndpointTest(unittest.IsolatedAsyncioTestCase):

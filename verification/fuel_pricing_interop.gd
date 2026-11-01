@@ -24,6 +24,25 @@ func _run() -> void:
 	host.add_child(pricing)
 	pricing.set_process(false)
 	host.fuel_pricing = pricing
+	pricing.host = host
+	pricing.install_shop_panel(host.ui_root)
+	check(not pricing._panel.visible, "Pricing controls must stay hidden outside the fuel shop")
+	var retry: Button = pricing._panel.find_children("*", "Button", true, false)[0]
+	GameInput.controller_active = true
+	host.ui._set_panel("FuelShopManager", true)
+	await process_frame
+	host.ui.controller_ui.sync_state()
+	var reached_retry := false
+	for step in range(32):
+		if host.get_viewport().gui_get_focus_owner() == retry:
+			reached_retry = true
+			break
+		host.ui.controller_ui._focus_next(host.get_viewport().gui_get_focus_owner(), 1)
+	check(reached_retry, "Controller navigation must reach the price retry button while the fuel shop is open")
+	host.ui._set_panel("FuelShopManager", false)
+	host.ui.controller_ui.sync_state()
+	check(not pricing._panel.visible and host.get_viewport().gui_get_focus_owner() != retry, "Closing the fuel shop must hide and release its pricing controls")
+	GameInput.controller_active = false
 	var day := Time.get_date_string_from_system(true)
 	pricing._completed(HTTPRequest.RESULT_SUCCESS, 200, [], JSON.stringify({"price_per_gallon": 4.0, "date": day, "valid_until": Time.get_unix_time_from_system() + 3600, "source": "aaa"}).to_utf8_buffer())
 	host.data.player_money = 100

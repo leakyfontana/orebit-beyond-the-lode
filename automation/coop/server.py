@@ -234,7 +234,6 @@ class Service:
         self.terrain = await asyncio.to_thread(generate, self.seed)
         self.http = ClientSession(timeout=ClientTimeout(total=20), raise_for_status=True)
         self.fuel_prices = FuelPrices(
-            self.http,
             user_agent=f"OrebitBeyondTheLode/1.0 (+{self.public_url})",
         )
         log_event("startup", world_id=self.world_id, members=len(self.members))

@@ -8,10 +8,9 @@ import math
 import re
 from zoneinfo import ZoneInfo
 
-from aiohttp import ClientError, ClientTimeout
-
 AAA_URL = "https://gasprices.aaa.com/"
 MAX_RESPONSE = 2 * 1024 * 1024
+FETCH_TIMEOUT = 20
 EASTERN = ZoneInfo("America/New_York")
 UTC = timezone.utc
 
@@ -78,8 +77,7 @@ def parse_aaa(document, now):
 
 
 class FuelPrices:
-    def __init__(self, http, *, user_agent="OrebitBeyondTheLode/1.0", clock=None):
-        self.http = http
+    def __init__(self, *, user_agent="OrebitBeyondTheLode/1.0", clock=None):
         self.user_agent = user_agent
         self.clock = clock or (lambda: datetime.now(UTC))
         self.lock = asyncio.Lock()
@@ -88,19 +86,42 @@ class FuelPrices:
         self.retry_at = None
 
     async def _fetch(self):
-        async with self.http.request(
-            "GET", AAA_URL, headers={"User-Agent": self.user_agent},
-            timeout=ClientTimeout(total=20), raise_for_status=False,
-        ) as response:
-            if response.status != 200:
-                raise PriceUnavailable()
-            try:
-                raw = await response.content.readexactly(MAX_RESPONSE + 1)
-            except asyncio.IncompleteReadError as completed:
-                raw = completed.partial
-            else:
-                raise PriceUnavailable()
-            return raw.decode("utf-8")
+        process = None
+        try:
+            # AAA challenges Python's HTTP/TLS client in production. Use the
+            # system HTTPS client directly, without cookies or challenge solving.
+            process = await asyncio.create_subprocess_exec(
+                "curl", "--disable", "--silent", "--fail",
+                "--proto", "=https", "--max-time", str(FETCH_TIMEOUT),
+                "--max-filesize", str(MAX_RESPONSE),
+                "--user-agent", self.user_agent, AAA_URL,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+
+            async def receive():
+                try:
+                    raw = await process.stdout.readexactly(MAX_RESPONSE + 1)
+                except asyncio.IncompleteReadError as completed:
+                    raw = completed.partial
+                else:
+                    raise PriceUnavailable()
+                if await process.wait() != 0:
+                    raise PriceUnavailable()
+                return raw.decode("utf-8")
+
+            return await asyncio.wait_for(receive(), FETCH_TIMEOUT)
+        except (OSError, asyncio.TimeoutError, UnicodeError):
+            raise PriceUnavailable() from None
+        finally:
+            if process is not None:
+                if process.returncode is None:
+                    try:
+                        process.kill()
+                    except ProcessLookupError:
+                        pass
+                await process.wait()
 
     async def price(self):
         async with self.lock:
@@ -115,7 +136,7 @@ class FuelPrices:
                 # both use the time at which the response actually arrived.
                 now = self.clock()
                 quote = parse_aaa(document, now)
-            except (PriceUnavailable, ClientError, asyncio.TimeoutError, ValueError, UnicodeError):
+            except (PriceUnavailable, asyncio.TimeoutError, ValueError, UnicodeError):
                 self.quote = None
                 self.expires = None
                 self.retry_at = self.clock() + timedelta(seconds=60)

@@ -128,8 +128,10 @@ The displayed price also determines gallon purchases. If AAA has no valid price
 for the current day, the service returns HTTP 503 and the station shows unavailable;
 it never invents a price, uses an expired quote, or charges for an unavailable
 purchase. **Retry today's AAA price** refreshes the quote. Install the updated
-service before shipping clients; no pricing credentials or platform permissions
-need to be configured.
+service before shipping clients, with `curl` available on the service's `PATH`.
+AAA fetching uses a bounded, HTTPS-only curl subprocess because AAA challenges
+Python's HTTP/TLS client on the production host. No challenge cookies, browser
+automation, pricing credentials or platform permissions are needed.
 
 The earlier Ria agent's successful artwork workflow assembled and repainted
 original shop rasters after a flat-vector storefront was rejected. Sinclair follows
