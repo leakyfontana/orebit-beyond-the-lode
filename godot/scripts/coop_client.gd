@@ -3,6 +3,7 @@ extends Node
 
 signal status_changed(message: String)
 signal identity_changed
+signal auth_state_changed
 signal joined_world(snapshot: Dictionary)
 signal connection_lost(message: String)
 signal world_event(event: Dictionary)
@@ -13,6 +14,11 @@ var base_url := DEFAULT_URL
 var world_id := "public"
 var token := ""
 var username := ""
+var expires_at := 0
+var session_checking := false
+var auth_busy: bool:
+	get:
+		return session_checking or not _http_kind.is_empty() or not _poll_token.is_empty()
 var player_id := ""
 var connected := false
 var connecting := false
@@ -34,7 +40,11 @@ var transfer_pending := false
 var _transfer_elapsed := 0.0
 var startup_mode := ""
 var _last_usec := 0
-var discord_url := ""
+var _auth_expires_at := 0
+var _auth_navigating := false
+var _session_expiry_after := 0.0
+var _join_after_session_check := false
+const ANDROID_AUTH_RETURN := "org.motherloadrecoded.game://auth/discord"
 
 func configure(main_host: Node) -> void:
 	host = main_host
@@ -45,19 +55,26 @@ func configure(main_host: Node) -> void:
 	_http.timeout = 20.0
 	add_child(_http)
 	_http.request_completed.connect(_http_completed)
+	var pending: Variant = {}
+	var auth_returned := false
 	if FileAccess.file_exists(SESSION_FILE):
 		var saved: Variant = JSON.parse_string(FileAccess.get_file_as_string(SESSION_FILE))
 		if saved is Dictionary:
 			token = str(saved.get("token", ""))
 			username = str(saved.get("username", ""))
 			base_url = str(saved.get("base_url", DEFAULT_URL))
+			expires_at = int(saved.get("expires_at", 0))
+			pending = saved.get("pending_auth", {})
 	var arguments := Array(OS.get_cmdline_user_args())
 	if OS.has_feature("web"):
 		var query: Variant = JSON.parse_string(str(JavaScriptBridge.eval("JSON.stringify(Object.fromEntries(new URLSearchParams(window.location.search)))")))
 		if query is Dictionary:
+			auth_returned = query.has("orebit_auth")
 			for key in ["mode", "coop-url", "coop-world"]:
 				if query.has(key):
 					arguments.append("--" + key + "=" + str(query[key]))
+		JavaScriptBridge.eval("(() => { const url = new URL(location.href); if (url.searchParams.has('orebit_auth')) { url.searchParams.delete('orebit_auth'); history.replaceState(null, '', url.href); } })()")
+		pending = JSON.parse_string(str(JavaScriptBridge.eval("(() => { try { return sessionStorage.getItem('orebit.pending_discord') || '{}'; } catch (_) { return '{}'; } })()")))
 	var saved_endpoint := base_url
 	var explicit_token := false
 	for argument in arguments:
@@ -67,12 +84,26 @@ func configure(main_host: Node) -> void:
 			world_id = str(argument).trim_prefix("--coop-world=")
 		elif str(argument).begins_with("--coop-token="):
 			token = str(argument).trim_prefix("--coop-token=")
+			expires_at = 0
 			explicit_token = true
 		elif str(argument).begins_with("--mode="):
 			startup_mode = str(argument).trim_prefix("--mode=")
 	if saved_endpoint != base_url and not explicit_token:
 		token = ""
 		username = ""
+		expires_at = 0
+	if pending is Dictionary and str(pending.get("base_url", "")) == base_url:
+		_auth_expires_at = int(pending.get("expires_at", 0))
+		if _auth_expires_at > int(Time.get_unix_time_from_system()):
+			_poll_token = str(pending.get("poll_token", ""))
+			auth_returned = auth_returned or not _poll_token.is_empty()
+	if auth_returned:
+		startup_mode = "auth_return"
+	if not _poll_token.is_empty():
+		_poll_after = 0.0
+	elif not token.is_empty():
+		session_checking = true
+		_validate_session.call_deferred()
 
 func endpoint_is_secure() -> bool:
 	if base_url.begins_with("https://"):
@@ -91,12 +122,21 @@ func authenticate(kind: String, user: String, password: String) -> void:
 	_request("/api/auth/" + kind, {"username": user, "password": password}, "native")
 
 func discord_login() -> void:
-	_request("/api/auth/discord/start", {}, "discord_start")
+	if auth_busy:
+		status_changed.emit("A sign-in request is already in progress.")
+		return
+	if not token.is_empty():
+		_validate_session()
+		return
+	var payload: Dictionary = {}
+	if OS.has_feature("web"):
+		payload.return_url = str(JavaScriptBridge.eval("(() => { const url = new URL(location.href); url.searchParams.delete('orebit_auth'); url.hash = ''; return url.href; })()"))
+	elif OS.get_name() == "Android":
+		payload.return_url = ANDROID_AUTH_RETURN
+	_request("/api/auth/discord/start", payload, "discord_start")
 
 func logout() -> void:
-	if not _http_kind.is_empty():
-		_http.cancel_request()
-		_http_kind = ""
+	cancel_auth(false)
 	if not token.is_empty():
 		var revocation := HTTPRequest.new()
 		revocation.accept_gzip = not OS.has_feature("web")
@@ -113,75 +153,183 @@ func logout() -> void:
 			status_changed.emit("Signed out locally; server session revocation could not be sent.")
 	token = ""
 	username = ""
-	_poll_token = ""
-	discord_url = ""
+	expires_at = 0
 	_store_session()
 	identity_changed.emit()
+	auth_state_changed.emit()
+	status_changed.emit("Signed out. You can sign in again or play anonymously.")
+
+func cancel_auth(show_message: bool = true) -> void:
+	if not _http_kind.is_empty():
+		_http.cancel_request()
+		_http_kind = ""
+	session_checking = false
+	_join_after_session_check = false
+	_clear_pending_auth()
+	_store_session()
+	auth_state_changed.emit()
+	if show_message:
+		status_changed.emit("Sign-in cancelled.")
+
+func _clear_pending_auth() -> void:
+	_poll_token = ""
+	_auth_expires_at = 0
+	_auth_navigating = false
+	if OS.has_feature("web"):
+		JavaScriptBridge.eval("(() => { try { sessionStorage.removeItem('orebit.pending_discord'); } catch (_) {} })()")
+
+func _validate_session() -> void:
+	if expires_at > 0 and expires_at <= int(Time.get_unix_time_from_system()):
+		_expire_session()
+		return
+	if token.is_empty():
+		session_checking = false
+		auth_state_changed.emit()
+		return
+	session_checking = true
+	_request("/api/auth/session", {}, "session", HTTPClient.METHOD_GET, true)
+
+func _expire_session() -> void:
+	token = ""
+	username = ""
+	expires_at = 0
+	session_checking = false
+	_join_after_session_check = false
+	_store_session()
+	identity_changed.emit()
+	auth_state_changed.emit()
+	if connected or connecting:
+		_fail("Your sign-in expired. Sign in again to restore your account progress.")
+	else:
+		status_changed.emit("Your sign-in expired. Sign in again or continue anonymously.")
 
 func _store_session() -> void:
 	var file := FileAccess.open(SESSION_FILE, FileAccess.WRITE)
 	if file != null:
-		file.store_string(JSON.stringify({"token": token, "username": username, "base_url": base_url}))
+		var pending := {"base_url": base_url, "poll_token": _poll_token, "expires_at": _auth_expires_at} if not _poll_token.is_empty() else {}
+		file.store_string(JSON.stringify({"token": token, "username": username, "expires_at": expires_at, "base_url": base_url, "pending_auth": pending}))
+		file.close()
+		if OS.has_feature("web"):
+			JavaScriptBridge.force_fs_sync()
 
-func _request(path: String, payload: Dictionary, kind: String) -> void:
+func _request(path: String, payload: Dictionary, kind: String, method: HTTPClient.Method = HTTPClient.METHOD_POST, authorized: bool = false) -> void:
 	if not _http_kind.is_empty():
 		status_changed.emit("An account request is already in progress.")
 		return
 	_http_kind = kind
-	var result := _http.request(base_url.trim_suffix("/") + path, ["Content-Type: application/json"], HTTPClient.METHOD_POST, JSON.stringify(payload))
+	var headers := PackedStringArray(["Content-Type: application/json"])
+	if authorized:
+		headers.append("Authorization: Bearer " + token)
+	var result := _http.request(base_url.trim_suffix("/") + path, headers, method, "" if method == HTTPClient.METHOD_GET else JSON.stringify(payload))
 	if result != OK:
 		_http_kind = ""
+		session_checking = false
 		status_changed.emit("Unable to contact account service: " + error_string(result))
 	else:
-		status_changed.emit("Contacting account service…")
+		status_changed.emit("Checking saved sign-in…" if kind == "session" else ("Waiting for Discord…" if kind == "discord_poll" else "Contacting account service…"))
+	auth_state_changed.emit()
 
 func _http_completed(result: int, code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
 	var kind := _http_kind
 	_http_kind = ""
+	session_checking = false
+	if kind == "session" and code == 401:
+		_expire_session()
+		return
+	if result != HTTPRequest.RESULT_SUCCESS:
+		if kind != "session":
+			_clear_pending_auth()
+		auth_state_changed.emit()
+		status_changed.emit("Account service unavailable. Your saved sign-in has not been removed." if kind == "session" else "Account service unavailable. Anonymous play is still available.")
+		return
 	var parsed: Variant = JSON.parse_string(body.get_string_from_utf8())
-	if result != HTTPRequest.RESULT_SUCCESS or not parsed is Dictionary:
-		_poll_token = ""
-		status_changed.emit("Account service unavailable. Anonymous play is still available.")
+	if not parsed is Dictionary:
+		if kind != "session":
+			_clear_pending_auth()
+		auth_state_changed.emit()
+		status_changed.emit("The account service returned an unreadable response.")
 		return
 	var response: Dictionary = parsed
 	if code < 200 or code >= 300:
-		_poll_token = ""
+		if kind != "session":
+			_clear_pending_auth()
+		auth_state_changed.emit()
 		status_changed.emit(str(response.get("message", response.get("error", "Account request failed (%d)." % code))))
+		return
+	if kind == "session":
+		expires_at = int(response.get("expires_at", 0))
+		var user: Dictionary = response.get("user", {})
+		username = str(user.get("name", username))
+		_store_session()
+		if _join_after_session_check:
+			_join_after_session_check = false
+			join_world.call_deferred()
+		identity_changed.emit()
+		auth_state_changed.emit()
+		status_changed.emit("Signed in as " + username + ".")
 		return
 	if kind == "discord_start":
 		_poll_token = str(response.get("poll_token", ""))
+		_auth_expires_at = int(response.get("expires_at", 0))
 		_poll_after = 2.0
 		var authorization_url := str(response.get("authorization_url", ""))
-		if _poll_token.is_empty() or not authorization_url.begins_with("https://"):
-			_poll_token = ""
+		if _poll_token.is_empty() or not authorization_url.begins_with("https://discord.com/oauth2/authorize?"):
+			_clear_pending_auth()
+			auth_state_changed.emit()
 			status_changed.emit("Discord authorization is unavailable on this server.")
 			return
-		discord_url = authorization_url
-		if not OS.has_feature("web"):
-			OS.shell_open(authorization_url)
-		status_changed.emit("Open Discord sign-in below, finish authorization in your browser, then return here.")
+		if OS.has_feature("web"):
+			var pending := JSON.stringify({"base_url": base_url, "poll_token": _poll_token, "expires_at": _auth_expires_at})
+			var stored: Variant = JavaScriptBridge.eval("(() => { try { sessionStorage.setItem('orebit.pending_discord', " + JSON.stringify(pending) + "); return true; } catch (_) { return false; } })()")
+			if not stored:
+				_clear_pending_auth()
+				auth_state_changed.emit()
+				status_changed.emit("Allow site storage in this browser to complete Discord sign-in.")
+				return
+			_auth_navigating = true
+			JavaScriptBridge.eval("window.location.assign(" + JSON.stringify(authorization_url) + ")")
+		else:
+			_store_session()
+			if OS.shell_open(authorization_url) != OK:
+				_clear_pending_auth()
+				_store_session()
+				auth_state_changed.emit()
+				status_changed.emit("Your browser could not open Discord. Try signing in again.")
+				return
+		auth_state_changed.emit()
+		status_changed.emit("Complete sign-in in Discord. You will return to Orebit automatically.")
 		return
 	if kind == "discord_poll" and response.get("status", "") == "pending":
 		_poll_after = 2.0
+		auth_state_changed.emit()
 		return
-	_poll_token = ""
-	discord_url = ""
 	if str(response.get("token", "")).is_empty():
-		status_changed.emit("The account service did not complete sign-in.")
+		_clear_pending_auth()
+		_store_session()
+		auth_state_changed.emit()
+		status_changed.emit(str(response.get("message", "The account service did not complete sign-in.")))
 		return
 	token = str(response.token)
+	expires_at = int(response.get("expires_at", 0))
 	var user: Variant = response.get("user", {})
 	username = str(user.get("username", user.get("name", "Account"))) if user is Dictionary else str(user)
+	_clear_pending_auth()
 	_store_session()
 	identity_changed.emit()
+	auth_state_changed.emit()
 	status_changed.emit("Signed in as " + username + ". Join to restore your server progress.")
+	if kind == "discord_poll" and not OS.has_feature("web") and OS.get_name() != "Android":
+		DisplayServer.window_move_to_foreground()
 
 func join_world() -> void:
+	if session_checking:
+		_join_after_session_check = true
+		return
 	if has_pending_actions():
 		status_changed.emit("Waiting for the current server transaction before rejoining.")
 		return
-	if not _http_kind.is_empty() or not _poll_token.is_empty():
-		status_changed.emit("Finish signing in, or use Sign out / cancel sign-in to join anonymously.")
+	if auth_busy:
+		status_changed.emit("Finish signing in, or cancel sign-in to join anonymously.")
 		return
 	leave_world()
 	_socket = WebSocketPeer.new()
@@ -271,7 +419,18 @@ func _process(delta: float) -> void:
 	var now := Time.get_ticks_usec()
 	delta = float(now - _last_usec) / 1000000.0 if _last_usec > 0 else 0.0
 	_last_usec = now
-	if not _poll_token.is_empty() and _http_kind.is_empty():
+	if not token.is_empty() and expires_at > 0:
+		_session_expiry_after -= delta
+		if _session_expiry_after <= 0.0:
+			_session_expiry_after = 1.0
+			if expires_at <= int(Time.get_unix_time_from_system()):
+				_expire_session()
+	if not _poll_token.is_empty() and _auth_expires_at <= int(Time.get_unix_time_from_system()):
+		_clear_pending_auth()
+		_store_session()
+		auth_state_changed.emit()
+		status_changed.emit("Discord sign-in expired. Try again.")
+	if not _auth_navigating and not _poll_token.is_empty() and _http_kind.is_empty():
 		_poll_after -= delta
 		if _poll_after <= 0.0:
 			_request("/api/auth/discord/poll", {"poll_token": _poll_token}, "discord_poll")

@@ -27,7 +27,9 @@ func configure(main_host: Node) -> void:
 	add_child(transfer)
 	transfer.configure(host, network)
 	# Existing deterministic replays retain private mode unless explicitly opted in.
-	if network.startup_mode == "coop":
+	if network.startup_mode == "auth_return":
+		lobby.show_lobby()
+	elif network.startup_mode == "coop":
 		lobby.show_lobby()
 		network.join_world()
 	elif network.startup_mode == "private" or not host.replay.is_empty():

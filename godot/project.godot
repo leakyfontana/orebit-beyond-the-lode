@@ -144,3 +144,6 @@ controller_back={
 "deadzone": 0.5,
 "events": [Object(InputEventJoypadButton,"device":-1,"button_index":1)]
 }
+
+[editor_plugins]
+enabled=PackedStringArray("res://addons/orebit_auth_return/plugin.cfg")
