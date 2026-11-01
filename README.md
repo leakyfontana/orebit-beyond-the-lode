@@ -193,9 +193,11 @@ anonymous entry as alternatives. Web/PWA uses same-tab authorization: a validate
 state-bound callback returns to the initiating game and its private pending poll.
 Neither the Orebit session nor the poll credential travels in the return URL.
 The packaged PWA worker handles game assets/entry pages, but leaves backend
-navigation and redirects to the browser. The archive-based Chromium CI smoke
-enables service workers and verifies a backend callback redirect reaches the game
-instead of an offline fallback; this routing check does not simulate Discord auth.
+navigation and redirects to the browser. Navigation preload is disabled: a
+speculative callback request can consume single-use OAuth state before normal
+navigation repeats it. The archive-based Chromium CI smoke enables service
+workers and exercises a single-use backend redirect, rejecting duplicate fetches
+and offline fallbacks; this routing check does not simulate Discord auth.
 Native clients use the external browser; desktop clients foreground the game
 when their poll succeeds, and Android resumes through
 `org.motherloadrecoded.game://auth/discord`. The Android export plugin registers

@@ -26,6 +26,8 @@ def main():
     from playwright.sync_api import sync_playwright
 
     server = None
+    callback_requests = []
+    callback_lock = threading.Lock()
     with tempfile.TemporaryDirectory(prefix='orebit-web-smoke-') as temporary:
         if args.zip:
             with zipfile.ZipFile(args.zip) as archive:
@@ -36,8 +38,14 @@ def main():
                 extensions_map = {**SimpleHTTPRequestHandler.extensions_map, '.wasm': 'application/wasm', '.json': 'application/json'}
 
                 def do_GET(self):
-                    # Routing regression only: no simulated Discord authorization.
+                    # Single-use backend redirect; no simulated Discord authorization.
                     if urlsplit(self.path).path == '/coop/auth/discord/callback':
+                        with callback_lock:
+                            consumed = bool(callback_requests)
+                            callback_requests.append(self.headers.get('Service-Worker-Navigation-Preload'))
+                        if consumed:
+                            self.send_error(400, 'Callback already consumed')
+                            return
                         self.send_response(303)
                         self.send_header('Location', '/?mode=private&pwa_callback=complete')
                         self.end_headers()
@@ -100,9 +108,13 @@ def main():
                     page.wait_for_function('navigator.serviceWorker.controller !== null', timeout=30000)
                     wait_for_menu()
                     ready.clear()
-                    page.goto(url + 'coop/auth/discord/callback?check=pwa', wait_until='domcontentloaded', timeout=120000)
+                    response = page.goto(url + 'coop/auth/discord/callback?check=pwa', wait_until='domcontentloaded', timeout=120000)
+                    if response is None or response.status != 200:
+                        raise RuntimeError('Single-use callback failed: HTTP %s; preload requests=%r' % (response.status if response else None, callback_requests))
                     page.wait_for_function("new URLSearchParams(location.search).get('pwa_callback') === 'complete'", timeout=30000)
                     wait_for_menu()
+                    if len(callback_requests) != 1:
+                        raise RuntimeError('Single-use callback was fetched more than once: %r' % callback_requests)
                     callback_redirect = True
                 args.screenshot.parent.mkdir(parents=True, exist_ok=True)
                 page.screenshot(path=str(args.screenshot))

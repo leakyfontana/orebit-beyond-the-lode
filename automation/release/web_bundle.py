@@ -68,6 +68,10 @@ def stage_web_bundle(directory):
                            'const CACHEABLE_FILES = ' + json.dumps([prefix + '/' + name for name in cacheable]) + ';', 'lazy cache list')
     worker = _replace_once(worker, r"const OFFLINE_URL = '[^']*';",
                            "const OFFLINE_URL = '" + prefix + "/index.offline.html';", 'offline page')
+    # The root worker also covers single-use backend callbacks. Speculative
+    # preload consumes them even when the fetch handler leaves navigation alone.
+    worker = _replace_once(worker, r'self\.registration\.navigationPreload\.enable\(\)',
+                           'self.registration.navigationPreload.disable()', 'disable root navigation preload')
     worker = _replace_once(worker,
                            r"\t\tconst referrer = event\.request\.referrer \|\| '';.*?\n\t\tconst isCacheable = [^\n]*;",
                            "\t\tconst base = self.registration.scope;\n"
