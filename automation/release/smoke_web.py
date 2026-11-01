@@ -6,6 +6,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
 import tempfile
+from urllib.parse import urlsplit
 import threading
 import time
 import urllib.request
@@ -34,6 +35,15 @@ def main():
             class Handler(SimpleHTTPRequestHandler):
                 extensions_map = {**SimpleHTTPRequestHandler.extensions_map, '.wasm': 'application/wasm', '.json': 'application/json'}
 
+                def do_GET(self):
+                    # Routing regression only: no simulated Discord authorization.
+                    if urlsplit(self.path).path == '/coop/auth/discord/callback':
+                        self.send_response(303)
+                        self.send_header('Location', '/?mode=private&pwa_callback=complete')
+                        self.end_headers()
+                        return
+                    super().do_GET()
+
                 def end_headers(self):
                     self.send_header('Cross-Origin-Opener-Policy', 'same-origin')
                     self.send_header('Cross-Origin-Embedder-Policy', 'require-corp')
@@ -59,7 +69,7 @@ def main():
             ready = []
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch()
-                page = browser.new_page(viewport={'width': 1280, 'height': 720}, service_workers='block')
+                page = browser.new_page(viewport={'width': 1280, 'height': 720}, service_workers='allow')
                 page.on('pageerror', lambda error: errors.append(str(error)))
 
                 def console(message):
@@ -68,23 +78,38 @@ def main():
                     if 'MOTHERLOAD_READY scene=MainMenu' in message.text:
                         ready.append(message.text)
 
+                def wait_for_menu():
+                    deadline = time.monotonic() + 120
+                    while not ready and not errors and time.monotonic() < deadline:
+                        page.wait_for_timeout(100)
+                    if errors:
+                        raise RuntimeError('Web runtime errors: ' + '\n'.join(errors))
+                    if not ready:
+                        raise RuntimeError('Web export did not reach MainMenu readiness signal')
+
                 page.on('console', console)
                 # Exercise the private MainMenu, not the startup mode chooser.
                 navigation_url = url + '?mode=private'
                 page.goto(navigation_url, wait_until='domcontentloaded', timeout=120000)
                 page.wait_for_function('window.crossOriginIsolated === true', timeout=30000)
                 page.wait_for_function('document.querySelector("canvas")?.width > 0', timeout=30000)
-                deadline = time.monotonic() + 120
-                while not ready and not errors and time.monotonic() < deadline:
-                    page.wait_for_timeout(100)
+                wait_for_menu()
+                callback_redirect = False
+                if args.zip:
+                    page.evaluate('navigator.serviceWorker.ready')
+                    ready.clear()
+                    page.reload(wait_until='domcontentloaded', timeout=120000)
+                    page.wait_for_function('navigator.serviceWorker.controller !== null', timeout=30000)
+                    wait_for_menu()
+                    ready.clear()
+                    page.goto(url + 'coop/auth/discord/callback?check=pwa', wait_until='domcontentloaded', timeout=120000)
+                    page.wait_for_function("new URLSearchParams(location.search).get('pwa_callback') === 'complete'", timeout=30000)
+                    wait_for_menu()
+                    callback_redirect = True
                 args.screenshot.parent.mkdir(parents=True, exist_ok=True)
                 page.screenshot(path=str(args.screenshot))
                 browser.close()
-            if errors:
-                raise RuntimeError('Web runtime errors: ' + '\n'.join(errors))
-            if not ready:
-                raise RuntimeError('Web export did not reach MainMenu readiness signal')
-            print(json.dumps({'commit': args.sha, 'url': url, 'navigation_url': navigation_url, 'menu_ready': True, 'readiness': ready[-1], 'screenshot': str(args.screenshot)}))
+            print(json.dumps({'commit': args.sha, 'url': url, 'navigation_url': navigation_url, 'menu_ready': True, 'pwa_callback_redirect': callback_redirect, 'readiness': ready[-1], 'screenshot': str(args.screenshot)}))
         finally:
             if server:
                 server.shutdown()

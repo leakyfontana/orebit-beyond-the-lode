@@ -72,7 +72,10 @@ def stage_web_bundle(directory):
                            r"\t\tconst referrer = event\.request\.referrer \|\| '';.*?\n\t\tconst isCacheable = [^\n]*;",
                            "\t\tconst base = self.registration.scope;\n"
                            "\t\tconst local = url.startsWith(base) ? url.slice(base.length).split('?')[0] : '';\n"
-                           "\t\tconst isCacheable = FULL_CACHE.includes(local);", 'cache URL scope')
+                           "\t\tconst isCacheable = FULL_CACHE.includes(local);\n"
+                           "\t\t// Leave backend navigation and its redirects to the browser.\n"
+                           "\t\tif (isNavigate && !isCacheable && !(url === base || url.startsWith(base + '?'))) return;",
+                           'cache URL scope')
     # A fresh navigation should discover a newer bundle even while the previous
     # worker is active. Offline navigation still uses a coherent cached bundle.
     worker = _replace_once(worker,
