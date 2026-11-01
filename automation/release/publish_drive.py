@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Publish a validated four-platform beta to the existing Google Drive archive.
+"""Publish a validated four-platform release to the existing Google Drive archive.
 
 Usage: python3 automation/release/publish_drive.py [--manifest dist/release.json]
 Use --validate-only for local validation and read-only remote preflight. The
@@ -22,6 +22,8 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
+
+from version_policy import valid_identity, validate_remote_version
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ROOT_ID = "1O6fBmcNqgVkVYUic88DOX3GTG94vB366"
@@ -109,11 +111,7 @@ def validate_manifest(path):
             manifest["schema"] == 1, "Unsupported release manifest schema")
     commit = manifest.get("commit")
     version = manifest.get("version")
-    require(isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40}", commit),
-            "Manifest commit must be a full lowercase 40-character Git SHA")
-    require(isinstance(version, str) and re.fullmatch(
-        r"[0-9]+\.[0-9]+(?:\.[0-9]+)?-beta(?:[.-][0-9A-Za-z]+)*\+[0-9a-f]{12}", version)
-        and version.endswith("+" + commit[:12]), "Invalid beta version or commit suffix")
+    valid_identity(commit, version)
     platforms = manifest.get("platforms")
     require(isinstance(platforms, list) and len(platforms) == len(PLATFORMS),
             "Release must contain exactly the four supported platforms")
@@ -329,6 +327,7 @@ def main():
         manifest_path = cli_path(args.manifest)
         output_path = cli_path(args.output, must_exist=False)
         manifest, uploads, release = validate_manifest(manifest_path)
+        validate_remote_version(manifest["version"], manifest["commit"], allow_existing=True)
         input_paths = {release.path} | {file.path for files in uploads.values() for file in files}
         require(output_path not in input_paths, "Publication output must not overwrite a release input")
         drive = Drive(args.remote, args.root_id)
@@ -372,7 +371,7 @@ def main():
         print(json.dumps({"published": True, "output": str(output_path.relative_to(ROOT)),
                           "commit": manifest["commit"], "version": manifest["version"]}))
         return 0
-    except (PublicationError, OSError, ValueError, configparser.Error) as error:
+    except (PublicationError, OSError, ValueError, configparser.Error, subprocess.SubprocessError) as error:
         print("Drive publication failed: " + str(error), file=sys.stderr)
         return 1
 

@@ -10,11 +10,19 @@ var keys: Dictionary = {}
 var states: FileAccess
 var random_states: FileAccess
 var physics_states: FileAccess
+var _physics_scene_id := 0
+var _physics_mothership_root: Node2D
+var _physics_mothership_animator: NativeAnimator
+var input_states: FileAccess
+var _input_source: GameInput
+var _last_input_snapshot := ""
 var capture_pending := false
+var _capture_tasks: Array[int] = []
 var finished := false
 var render_delta := 1.0 / 60.0
 var live_input := false
 const KEY_CODES := {"Escape": KEY_ESCAPE, "I": KEY_I, "LeftArrow": KEY_LEFT, "RightArrow": KEY_RIGHT, "UpArrow": KEY_UP, "DownArrow": KEY_DOWN, "Alpha1": KEY_1, "Alpha2": KEY_2, "Alpha3": KEY_3, "Alpha4": KEY_4, "Alpha5": KEY_5, "Alpha6": KEY_6}
+const PLAYER_METHODS := ["cancelVelocity", "enterShop", "exitShop"]
 const UI_METHODS := {
 	"MainMenuManager": ["startNewGame", "continueGame", "openInstructions", "closeInstructions"],
 	"UIManager": ["returnToMainMenu", "updateAllUI", "updateMoneyUI", "updateFuelUI", "updateHullUI", "updateDepthUI"],
@@ -56,11 +64,27 @@ func configure(game: Node, specification: Dictionary, directory: String) -> void
 		if random_states == null:
 			push_error("Cannot open replay random-state output: " + directory)
 			host.get_tree().quit(1)
+	if bool(scenario.get("capture_input", false)):
+		input_states = FileAccess.open(directory.path_join("input-states.jsonl"), FileAccess.WRITE)
+		if input_states == null:
+			_fail("Cannot open replay input output: " + directory)
+			return
+		Input.joy_connection_changed.connect(_record_controller_connection)
+		var hints: Dictionary = {}
+		for name in ["SDL_GAMECONTROLLERCONFIG", "SDL_JOYSTICK_HIDAPI", "SDL_JOYSTICK_HIDAPI_XBOX", "SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "SDL_JOYSTICK_WGI", "SDL_JOYSTICK_GAMEINPUT", "SDL_XINPUT_ENABLED"]:
+			if OS.has_environment(name):
+				hints[name] = OS.get_environment(name)
+		input_states.store_line(JSON.stringify({"event": "metadata", "engine": Engine.get_version_info(), "platform": OS.get_name(), "arguments": OS.get_cmdline_args(), "user_arguments": OS.get_cmdline_user_args(), "sdl_hints": hints}))
+		_record_input_snapshot()
 	Engine.max_fps = int(scenario.get("fps", 60))
 
 func pre_tick() -> void:
 	if finished:
 		return
+	if input_states != null and _input_source == null:
+		# Main creates GameInput after configuring the replay, before its first tick.
+		_input_source = host.get_tree().get_first_node_in_group("game_input") as GameInput
+		_input_source.controller_event.connect(_record_controller_event)
 	frame += 1
 	for action in scenario.get("actions", []):
 		if int(action.frame) != frame:
@@ -102,7 +126,7 @@ func pre_tick() -> void:
 func _invoke(action: Dictionary) -> void:
 	var target := str(action.target)
 	var method := str(action.method)
-	var supported: Array = UI_METHODS.get(target, [])
+	var supported: Array = PLAYER_METHODS if target == "PlayerMovement" else UI_METHODS.get(target, [])
 	if not method in supported and not (target == "Slider" and method == "set_value"):
 		_fail("Unhandled replay method: " + target + "." + method)
 		return
@@ -123,6 +147,8 @@ func _invoke(action: Dictionary) -> void:
 				_fail("Replay slider missing: " + str(action.get("target_object", owner)))
 				return
 			host.bridge.sliders[owner].value = float(argument)
+		elif target == "PlayerMovement":
+			host.player.call(method)
 		else:
 			host.ui._dispatch(str(id), method, argument)
 		return
@@ -194,12 +220,15 @@ func _fail(message: String) -> void:
 		random_states.close()
 	if physics_states != null:
 		physics_states.close()
+	_close_input_capture()
+	_wait_for_captures()
 	host.audio.finish_capture()
 	host.get_tree().quit(1)
 
 func post_tick() -> void:
 	if finished:
 		return
+	_reap_captures()
 	var data: GameData = host.data
 	var state := {"frame": frame, "scene": host.scene_name, "time_scale": Engine.time_scale, "fixed_delta": 1.0 / Engine.physics_ticks_per_second}
 	state.music_volume = data.music_volume
@@ -224,6 +253,10 @@ func post_tick() -> void:
 	if random_states != null:
 		random_states.store_line(JSON.stringify({"frame": frame, "state": host.unity_random.get_state()}))
 		random_states.flush()
+	if input_states != null:
+		_record_input_snapshot()
+		if frame % 120 == 0:
+			input_states.flush()
 	for requested_frame in scenario.get("captures", []):
 		if int(requested_frame) == frame:
 			capture_pending = true
@@ -237,8 +270,71 @@ func post_tick() -> void:
 			physics_states.close()
 		_finish()
 
+func _record_input_snapshot() -> void:
+	var devices: Array = []
+	for device in Input.get_connected_joypads():
+		var device_axes: Array = []
+		var buttons: Array = []
+		for axis in JOY_AXIS_MAX:
+			device_axes.append(Input.get_joy_axis(device, axis))
+		for button in JOY_BUTTON_MAX:
+			if Input.is_joy_button_pressed(device, button):
+				buttons.append(button)
+		devices.append({"device": device, "name": Input.get_joy_name(device), "guid": Input.get_joy_guid(device), "known": Input.is_joy_known(device), "info": Input.get_joy_info(device), "axes": device_axes, "buttons": buttons})
+	var actions: Dictionary = {}
+	for action in GameInput.CONTROLLER_ACTIONS:
+		actions[str(action)] = Input.get_action_raw_strength(action)
+	var blocked: Array = []
+	for key in GameInput._blocked_buttons:
+		blocked.append([key.x, key.y])
+	var held: Array = []
+	for key in GameInput._held_buttons:
+		held.append([key.x, key.y])
+	var owner: Control = host.get_viewport().gui_get_focus_owner()
+	var snapshot := {"devices": devices, "actions": actions, "window_focused": DisplayServer.window_is_focused(), "ignore_unfocused_joypads": Input.is_ignoring_joypad_on_unfocused_application(), "input_focused": GameInput._focused, "movement_ready": GameInput._movement_ready, "gameplay_available": GameInput._gameplay_available, "controller_active": GameInput.controller_active, "selected_consumable": GameInput.selected_consumable, "held_buttons": held, "blocked_buttons": blocked, "scene": host.scene_name, "paused": host.paused, "focus_owner": str(owner.get_path()) if owner != null else ""}
+	var signature := JSON.stringify(snapshot, "", true, true)
+	if signature == _last_input_snapshot:
+		return
+	_last_input_snapshot = signature
+	snapshot.event = "snapshot"
+	snapshot.frame = frame
+	snapshot.wall_usec = Time.get_ticks_usec()
+	snapshot.utc_seconds = Time.get_unix_time_from_system()
+	input_states.store_line(JSON.stringify(snapshot, "", true, true))
+
+func _record_controller_event(event: InputEvent) -> void:
+	if input_states == null or finished:
+		return
+	var entry := {"event": "dispatch", "frame": frame, "wall_usec": Time.get_ticks_usec(), "utc_seconds": Time.get_unix_time_from_system(), "device": event.device}
+	if event is InputEventJoypadButton:
+		entry.button = event.button_index
+		entry.pressed = event.pressed
+	elif event is InputEventJoypadMotion:
+		entry.axis = event.axis
+		entry.value = event.axis_value
+	input_states.store_line(JSON.stringify(entry, "", true, true))
+
+func _record_controller_connection(device: int, connected: bool) -> void:
+	if input_states != null and not finished:
+		input_states.store_line(JSON.stringify({"event": "connection", "frame": frame, "wall_usec": Time.get_ticks_usec(), "utc_seconds": Time.get_unix_time_from_system(), "device": device, "connected": connected}))
+
+func _close_input_capture() -> void:
+	if input_states == null:
+		return
+	if is_instance_valid(_input_source) and _input_source.controller_event.is_connected(_record_controller_event):
+		_input_source.controller_event.disconnect(_record_controller_event)
+	if Input.joy_connection_changed.is_connected(_record_controller_connection):
+		Input.joy_connection_changed.disconnect(_record_controller_connection)
+	input_states.close()
+	input_states = null
+
 func _physics_snapshot() -> Dictionary:
 	var result := {"frame": frame, "boss_p1": null, "boss_p2": null}
+	result.engine_process_frame = Engine.get_process_frames()
+	result.engine_physics_frame = Engine.get_physics_frames()
+	result.physics_interpolation_fraction = Engine.get_physics_interpolation_fraction()
+	result.simulation_physics_frame = host.physics_step
+	result.simulation_render_remainder = host.physics_render_delta
 	if host.player_alive:
 		var player_pose: Transform2D = PhysicsServer2D.body_get_state(host.body.get_rid(), PhysicsServer2D.BODY_STATE_TRANSFORM)
 		var player_position: Vector2 = player_pose.origin / PortBoss.UNITS
@@ -246,6 +342,8 @@ func _physics_snapshot() -> Dictionary:
 		result.physics_position = [player_position.x, player_position.y]
 		result.transform_position = [host.player_position.x, host.player_position.y]
 		result.velocity = [player_velocity.x, player_velocity.y]
+		var player_center: Vector2 = PhysicsServer2D.body_get_param(host.body.get_rid(), PhysicsServer2D.BODY_PARAM_CENTER_OF_MASS) / PortBoss.UNITS
+		result.center_of_mass = [player_center.x, player_center.y]
 		result.sleeping = PhysicsServer2D.body_get_state(host.body.get_rid(), PhysicsServer2D.BODY_STATE_SLEEPING)
 		result.boss_overlap_queries = _physics_boss_overlaps(player_pose)
 		result.player_state = {
@@ -264,6 +362,7 @@ func _physics_snapshot() -> Dictionary:
 		result.wall_usec = Time.get_ticks_usec()
 		if host.terrain != null:
 			result.terrain_space = PhysicsServer2D.body_get_space(host.terrain.physics_body.get_rid()).get_id()
+	result.mothership = _physics_mothership_snapshot()
 	if host.boss == null:
 		return result
 	for phase in host.boss.phases:
@@ -290,6 +389,33 @@ func _physics_snapshot() -> Dictionary:
 			"animator": {"source_state": phase.animator.current_state} if phase.animator != null else null,
 		}
 	return result
+
+func _physics_mothership_snapshot() -> Variant:
+	if _physics_scene_id != host.bridge.get_instance_id():
+		_physics_scene_id = host.bridge.get_instance_id()
+		_physics_mothership_root = null
+		_physics_mothership_animator = null
+		for id in host.bridge.nodes:
+			if host.bridge.properties(str(id), "MotherShipManager").is_empty():
+				continue
+			var root: Node = host.bridge.nodes[id]
+			for record in host.animators:
+				if record.root == root:
+					_physics_mothership_root = root
+					_physics_mothership_animator = record.animator
+					break
+			break
+	if not is_instance_valid(_physics_mothership_root):
+		return null
+	var animator := _physics_mothership_animator
+	var position: Vector2 = _physics_mothership_root.global_position / PortBoss.UNITS
+	return {
+		"active_self": _physics_mothership_root.visible,
+		"active_in_hierarchy": _physics_mothership_root.is_visible_in_tree(),
+		"transform_position": [position.x, position.y],
+		"animator": {"source_state": animator.current_state, "state_time": animator.state_time,
+			"play_position": animator.native_playback.get_current_play_position()},
+	}
 
 func _physics_colliders(owner: CollisionObject2D, pose: Transform2D, trigger: bool, enabled: bool) -> Array:
 	var colliders: Array = []
@@ -318,7 +444,7 @@ func _physics_floor_cells(position: Vector2) -> Array:
 	query.collision_mask = 1
 	for x in range(center.x - 1, center.x + 2):
 		for y in range(center.y - 1, center.y + 2):
-			if x < 0 or x >= host.data.earthWidth or y < 0 or y >= host.data.earthHeight:
+			if not host.world.inBounds(x, y):
 				continue
 			var solid := str(host.world.getBlockData(x, y).get("layer", "Traversable")) != "Traversable"
 			query.position = Vector2(x + 0.5, y - 0.5)
@@ -352,13 +478,36 @@ func _physics_boss_overlaps(player_pose: Transform2D) -> Array:
 
 func _capture(number: int) -> void:
 	await RenderingServer.frame_post_draw
+	if input_states != null:
+		# Timestamp the rendered frame, not the later asynchronous PNG write.
+		input_states.store_line(JSON.stringify({"event": "capture", "frame": number, "wall_usec": Time.get_ticks_usec(), "utc_seconds": Time.get_unix_time_from_system()}))
 	var image := host.get_viewport().get_texture().get_image()
-	var error := image.save_png(output_directory.path_join("frame-%06d.png" % number))
+	_reap_captures()
+	# Bound retained images without putting PNG encoding and disk I/O on the game loop.
+	if _capture_tasks.size() >= 4:
+		WorkerThreadPool.wait_for_task_completion(_capture_tasks.pop_front())
+	_capture_tasks.append(WorkerThreadPool.add_task(_write_capture.bind(image, output_directory.path_join("frame-%06d.png" % number)), false, "Replay PNG"))
+	capture_pending = false
+
+static func _write_capture(image: Image, path: String) -> void:
+	var error := image.save_png(path)
 	if error != OK:
 		push_error("Screenshot capture failed: " + str(error))
-	capture_pending = false
+
+func _reap_captures() -> void:
+	for index in range(_capture_tasks.size() - 1, -1, -1):
+		if WorkerThreadPool.is_task_completed(_capture_tasks[index]):
+			WorkerThreadPool.wait_for_task_completion(_capture_tasks[index])
+			_capture_tasks.remove_at(index)
+
+func _wait_for_captures() -> void:
+	for task in _capture_tasks:
+		WorkerThreadPool.wait_for_task_completion(task)
+	_capture_tasks.clear()
 
 func _finish() -> void:
 	if capture_pending:
 		await RenderingServer.frame_post_draw
+	_wait_for_captures()
+	_close_input_capture()
 	host.get_tree().quit(0 if host.audio.finish_capture() else 1)

@@ -1,0 +1,16 @@
+# Resolved with CPython 3.13 on macOS ARM64; install in .venv-rl only.
+cloudpickle==3.1.2
+Farama-Notifications==0.0.6
+filelock==4.2.5
+fsspec==2026.9.0
+gymnasium==1.4.0
+Jinja2==3.1.6
+MarkupSafe==3.0.4
+mpmath==1.3.0
+networkx==3.7
+numpy==2.5.4
+setuptools==84.2.1
+stable_baselines3==2.9.2
+sympy==1.14.0
+torch==2.15.0
+typing_extensions==4.16.0

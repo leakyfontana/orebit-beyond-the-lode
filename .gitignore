@@ -12,6 +12,7 @@
 !/verification/box2d-fixture-shape-sync.patch
 !/verification/godot-cpp-msvc-conformance.patch
 !/verification/coop_state_interop.gd
+!/verification/coop_surface_interop.gd
 
 # Built artifacts and per-machine credentials are never source inputs.
 /dist/

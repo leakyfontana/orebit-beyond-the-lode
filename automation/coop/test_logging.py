@@ -74,6 +74,7 @@ class LoggingServiceTest(unittest.IsolatedAsyncioTestCase):
         joined = await ws.receive_json(timeout=5)
         self.assertEqual(joined["type"], "joined")
         await ws.send_json({"type": "state", "state_revision": 0, "state": {"x": 5.5, "y": -3.5, "transmissions": [{"text": CANARY}]}})
+        await ws.receive_json(timeout=5)  # Ordered acknowledgement of the submitted state.
         await ws.send_json({"type": "ping"})
         self.assertEqual((await ws.receive_json(timeout=5))["type"], "pong")
         # A real write lock causes SQLite's actual timeout/error path, not a mock.

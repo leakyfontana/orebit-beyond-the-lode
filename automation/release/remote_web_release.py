@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Trusted deployment operation, sent over SSH; all filesystem writes stay in /srv/motherload."""
+"""Trusted isolated deployment operation; all filesystem writes stay in /srv/motherload."""
 import contextlib
 import fcntl
 import gzip
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -18,6 +19,14 @@ import urllib.parse
 import urllib.request
 import uuid
 import zipfile
+
+# Isolated installed helpers (-I) must load only reviewed root-owned siblings,
+# never a policy module from the writable deployment state or environment.
+_POLICY_SOURCE = Path(__file__).resolve().with_name('version_policy.py')
+_POLICY_SPEC = importlib.util.spec_from_file_location('orebit_version_policy', _POLICY_SOURCE)
+_POLICY = importlib.util.module_from_spec(_POLICY_SPEC)
+_POLICY_SPEC.loader.exec_module(_POLICY)
+valid_identity = _POLICY.valid_identity
 
 BASE = Path('/srv/motherload')
 MAX_ARCHIVE = 2 * 1024**3
@@ -42,12 +51,6 @@ def digest(path):
     return result.hexdigest()
 
 
-def valid_identity(commit, version):
-    require(isinstance(commit, str) and re.fullmatch(r'[0-9a-f]{40}', commit),
-            'Expected full lowercase commit SHA')
-    require(isinstance(version, str) and 0 < len(version) <= 160
-            and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9.+_-]*', version)
-            and version.endswith('+' + commit[:12]), 'Invalid source beta version/SHA identity')
 
 
 def safe_name(name, directory=False):

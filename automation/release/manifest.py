@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 import re
 
+from version_policy import valid_identity
+
 ROOT = Path(__file__).resolve().parents[2]
 PLATFORMS = ('android-arm64', 'macos-arm64', 'web', 'windows-x86_64')
 
@@ -28,8 +30,7 @@ def aggregate(commit):
         if item.get('schema') != 1 or item.get('platform') != platform or item.get('commit') != commit:
             raise ValueError('Platform identity mismatch: ' + platform)
         candidate = item.get('version', '')
-        if not isinstance(candidate, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9.+_-]*', candidate) or not candidate.endswith('+' + commit[:12]):
-            raise ValueError('Invalid version/SHA identity: ' + platform)
+        valid_identity(commit, candidate)
         if version is not None and candidate != version:
             raise ValueError('Platform versions differ')
         version = candidate
