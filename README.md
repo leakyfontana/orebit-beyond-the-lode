@@ -77,6 +77,11 @@ average, US-gallon fuel mechanics, and no device location collection.
 Release `0.5.1` fixes single-action Discord sign-in and automatic game return on
 Web/PWA and native clients, retains valid sessions across restarts, and simplifies
 the mobile account screens without changing Sinclair pricing or account progress.
+Release `0.5.2` fixes co-op HUD interception of the Android navigation joystick,
+adds the compact green modes/accounts header icon, aligns the player count with
+the hull/fuel captions, and fixes compact-window/live-resize header overlap.
+Server/account menus reuse the landing-page green styling without duplicate
+signed-in names. The native input/layout regression now runs in macOS CI builds.
 
 | Commit | Original version | Canonical version |
 | --- | --- | --- |
@@ -160,6 +165,35 @@ Co-op never reads or writes the private binary save. The server persists shared
 excavations, and account money, cargo, upgrades, items, transmissions and position.
 Physics runs locally; the server arbitrates excavation and awards each tile once.
 Pausing affects only the local player, not the server or other miners.
+
+The **MODES / ACCOUNTS** action is a borderless dark-green two-miner icon with
+light-green landing-menu typography. Its visible artwork matches INV's size and
+extends the icon row to the right of Help/Options with the existing visual
+spacing. The compact co-op player count sits at the far left on the Hull/Fuel
+caption line. Account/server-progress labels are omitted from gameplay. The
+server menus reuse the green palette and show the signed-in username only once.
+Decorative HUD containers and status text ignore pointer input; only their buttons
+capture touches, so the co-op overlay cannot mask the navigation joystick.
+
+On compact 16:9 viewports, the gauge/depth/warning group reserves space for the
+single-line count, and the original right-hand icons reserve a separate action
+slot instead of letting the new icon cover Help. Native anchor offsets are
+preserved across live resizing; both action text lines fit within its touch target.
+
+Run the native-touch regression after importing the Godot project:
+
+```sh
+verification/tools/Godot.app/Contents/MacOS/Godot --headless --path godot --script ../verification/coop_input_interop.gd -- --touch-controls --mode=private --coop-url=http://127.0.0.1:1 --coop-token=
+```
+
+It checks private/co-op movement commands, directional changes, release, pause
+cancellation, and opening/returning from the account menu. Layout checks cover
+16:9, 16:10, narrow and ultrawide viewports, caption alignment, nonoverlap,
+touch-sized targets, complete action text, and live-resize/fresh-scene equivalence.
+The isolated endpoint and empty explicit token prevent the probe from contacting
+external account or pricing services. The macOS CI build runs the same command.
+Real-device acceptance also requires dragging/releasing the stick in co-op and
+inspecting the Android header/menu; synthetic input is not a physical-device pass.
 
 Co-op adds ten full-depth mining columns west of the fuel station (x=-10…-1),
 with the shared **Ria Money Transfer** branch on an indestructible concrete

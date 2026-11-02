@@ -15,6 +15,7 @@
 !/verification/coop_surface_interop.gd
 !/verification/fuel_pricing_interop.gd
 !/verification/generate_sinclair_station.py
+!/verification/coop_input_interop.gd
 
 # Built artifacts and per-machine credentials are never source inputs.
 /dist/

@@ -266,7 +266,7 @@ func _http_completed(result: int, code: int, _headers: PackedStringArray, body: 
 			join_world.call_deferred()
 		identity_changed.emit()
 		auth_state_changed.emit()
-		status_changed.emit("Signed in as " + username + ".")
+		status_changed.emit("Saved session restored.")
 		return
 	if kind == "discord_start":
 		_poll_token = str(response.get("poll_token", ""))
@@ -317,7 +317,7 @@ func _http_completed(result: int, code: int, _headers: PackedStringArray, body: 
 	_store_session()
 	identity_changed.emit()
 	auth_state_changed.emit()
-	status_changed.emit("Signed in as " + username + ". Join to restore your server progress.")
+	status_changed.emit("Join to restore your server progress.")
 	if kind == "discord_poll" and not OS.has_feature("web") and OS.get_name() != "Android":
 		DisplayServer.window_move_to_foreground()
 
