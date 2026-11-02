@@ -86,6 +86,25 @@ func configure(game_host: Node, scene_bridge: SceneBridge, game_data: GameData, 
 	controller_ui = ControllerUI.new()
 	add_child(controller_ui)
 	controller_ui.configure(self)
+	get_viewport().size_changed.connect(_layout_close_targets, CONNECT_DEFERRED)
+	_layout_close_targets.call_deferred()
+
+func _layout_close_targets() -> void:
+	# Keep the authored X artwork, but provide a 48-pixel pointer/touch target
+	# after canvas stretching, including small landscape windows.
+	for id in bridge.buttons:
+		var button: Button = bridge.buttons[id]
+		var artwork := button.get_parent() as Control
+		if artwork == null or artwork.name != "CloseButton":
+			continue
+		var screen_transform := get_viewport().get_stretch_transform() * artwork.get_global_transform_with_canvas()
+		var screen_scale := screen_transform.get_scale().abs()
+		var target := Vector2(48.0 / screen_scale.x, 48.0 / screen_scale.y)
+		var padding := (target - artwork.size).max(Vector2.ZERO) * 0.5
+		button.offset_left = -padding.x
+		button.offset_right = padding.x
+		button.offset_top = -padding.y
+		button.offset_bottom = padding.y
 
 func _install_boss_health_layout() -> void:
 	_boss_health = bridge.node(_child(_panel("UIManager"), "BossHealth")) as Control

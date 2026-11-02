@@ -464,6 +464,7 @@ func flipCharacter() -> void:
 			popup_node.scale.x *= -1.0
 
 func stopMovement() -> void:
+	_previous_y_velocity = 0.0
 	body.linear_velocity = Vector2.ZERO
 	body.angular_velocity = 0.0
 	body.freeze_mode = RigidBody2D.FREEZE_MODE_STATIC
@@ -508,8 +509,12 @@ func _set_particles(property_name: String, emitting: bool) -> void:
 
 func manageCrashVerification() -> void:
 	var new_velocity: float = absf(velocity_unity.y)
-	if new_velocity < _previous_y_velocity - 7.0:
-		loseHP(int(0.5 * _previous_y_velocity))
+	# Modals, digging and teleporting can cancel velocity without an impact.
+	# A speed change alone is not evidence of a physical collision.
+	if not body.freeze and new_velocity < _previous_y_velocity - 7.0:
+		var state := PhysicsServer2D.body_get_direct_state(body.get_rid())
+		if state != null and state.get_contact_count() > 0:
+			loseHP(int(0.5 * _previous_y_velocity))
 	_previous_y_velocity = new_velocity
 
 func updateFuel() -> void:
@@ -535,6 +540,7 @@ func exitShop() -> void:
 	host.audio.ResumeSounds()
 
 func cancelVelocity() -> void:
+	_previous_y_velocity = 0.0
 	if not body.freeze:
 		velocity_unity = Vector2.ZERO
 		body.angular_velocity = 0.0

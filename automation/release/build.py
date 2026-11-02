@@ -427,6 +427,11 @@ def build(args):
                  "--touch-controls", "--mode=private",
                  "--coop-url=http://127.0.0.1:1", "--coop-token="],
                 cwd=work, env=environment)
+            for probe in ("spawn_impact_interop.gd", "close_target_interop.gd", "lobby_controller_interop.gd"):
+                run([godot, "--headless", "--path", project,
+                     "--script", ROOT / "verification" / probe, "--",
+                     "--mode=private", "--coop-url=http://127.0.0.1:1", "--coop-token="],
+                    cwd=work, env=environment)
         export = work / "export"
         export.mkdir()
         filename = {"macos": "Orebit.app", "windows": "Orebit.exe", "android": "Orebit.apk", "web": "index.html"}[target]

@@ -772,6 +772,10 @@ func _resize_camera() -> void:
 	# Unity's full-viewport orthographic size is the vertical half-span.
 	# Physics/world coordinates remain original metres; UI stays in pixels.
 	camera.zoom = Vector2.ONE * get_viewport_rect().size.y / (_camera_orthographic_size * 2.0)
+	if scene_name == "Game":
+		# Arrival keeps the player inactive, so normal camera tracking has not
+		# started yet. Constrain the initial view and any arrival-time resize too.
+		_confine_camera(get_viewport_rect().size.x / camera.zoom.x)
 
 func _update_camera(delta: float) -> void:
 	var viewport_units := get_viewport_rect().size / camera.zoom
@@ -780,8 +784,11 @@ func _update_camera(delta: float) -> void:
 	var offset := target - camera.global_position
 	var desired := camera.global_position + Vector2(signf(offset.x) * maxf(0, absf(offset.x) - dead.x), signf(offset.y) * maxf(0, absf(offset.y) - dead.y))
 	camera.global_position = camera.global_position.lerp(desired, 1.0 - exp(-4.605170186 * delta))
+	_confine_camera(viewport_units.x)
+
+func _confine_camera(viewport_width: float) -> void:
 	var left := float(world.surface_left())
-	var half_width := minf(viewport_units.x * 0.5, (data.earthWidth - left) * 0.5)
+	var half_width := minf(viewport_width * 0.5, (data.earthWidth - left) * 0.5)
 	camera.global_position.x = clampf(camera.global_position.x, left + half_width, data.earthWidth - half_width)
 
 func _vec(value: Dictionary, fallback: Vector2 = Vector2.ZERO) -> Vector2:
