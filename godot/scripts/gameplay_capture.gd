@@ -316,6 +316,9 @@ func _process(_delta: float) -> void:
 		_retry_at = 0
 	if not _request_kind.is_empty() or Time.get_ticks_msec() < _retry_at or not host.coop.network.endpoint_is_secure():
 		return
+	# Menus contain no gameplay episode and must not allocate capture sessions.
+	if session_id.is_empty() and episode_id.is_empty() and _queue.is_empty():
+		return
 	if session_id.is_empty():
 		_request_kind = "session"
 		var error := _http.request(_endpoint + "/api/captures/session", [], HTTPClient.METHOD_POST, "")
