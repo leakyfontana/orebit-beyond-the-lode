@@ -39,12 +39,19 @@ var _economic_baseline: Dictionary = {}
 var transfer_pending := false
 var _transfer_elapsed := 0.0
 var startup_mode := ""
+var mode := "coop"
 var _last_usec := 0
 var _auth_expires_at := 0
 var _auth_navigating := false
 var _session_expiry_after := 0.0
 var _join_after_session_check := false
 const ANDROID_AUTH_RETURN := "org.motherloadrecoded.game://auth/discord"
+var pvp_sequence := 0
+var _pvp_blasts: Dictionary = {}
+var _motion_sequence := 0
+var _last_motion_ack := 0
+var _motion_offset := Vector2.ZERO
+var _sent_motion_offsets: Dictionary = {}
 
 func configure(main_host: Node) -> void:
 	host = main_host
@@ -88,6 +95,8 @@ func configure(main_host: Node) -> void:
 			explicit_token = true
 		elif str(argument).begins_with("--mode="):
 			startup_mode = str(argument).trim_prefix("--mode=")
+	if startup_mode == "pvp":
+		mode = "pvp"
 	if saved_endpoint != base_url and not explicit_token:
 		token = ""
 		username = ""
@@ -96,6 +105,7 @@ func configure(main_host: Node) -> void:
 		_auth_expires_at = int(pending.get("expires_at", 0))
 		if _auth_expires_at > int(Time.get_unix_time_from_system()):
 			_poll_token = str(pending.get("poll_token", ""))
+			mode = "pvp" if str(pending.get("mode", mode)) == "pvp" else "coop"
 			auth_returned = auth_returned or not _poll_token.is_empty()
 	if auth_returned:
 		startup_mode = "auth_return"
@@ -130,7 +140,7 @@ func discord_login() -> void:
 		return
 	var payload: Dictionary = {}
 	if OS.has_feature("web"):
-		payload.return_url = str(JavaScriptBridge.eval("(() => { const url = new URL(location.href); url.searchParams.delete('orebit_auth'); url.hash = ''; return url.href; })()"))
+		payload.return_url = str(JavaScriptBridge.eval("(() => { const url = new URL(location.href); url.searchParams.delete('orebit_auth'); url.searchParams.set('mode', " + JSON.stringify(mode) + "); url.hash = ''; return url.href; })()"))
 	elif OS.get_name() == "Android":
 		payload.return_url = ANDROID_AUTH_RETURN
 	_request("/api/auth/discord/start", payload, "discord_start")
@@ -206,7 +216,7 @@ func _expire_session() -> void:
 func _store_session() -> void:
 	var file := FileAccess.open(SESSION_FILE, FileAccess.WRITE)
 	if file != null:
-		var pending := {"base_url": base_url, "poll_token": _poll_token, "expires_at": _auth_expires_at} if not _poll_token.is_empty() else {}
+		var pending := {"base_url": base_url, "poll_token": _poll_token, "expires_at": _auth_expires_at, "mode": mode} if not _poll_token.is_empty() else {}
 		file.store_string(JSON.stringify({"token": token, "username": username, "expires_at": expires_at, "base_url": base_url, "pending_auth": pending}))
 		file.close()
 		if OS.has_feature("web"):
@@ -279,7 +289,7 @@ func _http_completed(result: int, code: int, _headers: PackedStringArray, body: 
 			status_changed.emit("Discord authorization is unavailable on this server.")
 			return
 		if OS.has_feature("web"):
-			var pending := JSON.stringify({"base_url": base_url, "poll_token": _poll_token, "expires_at": _auth_expires_at})
+			var pending := JSON.stringify({"base_url": base_url, "poll_token": _poll_token, "expires_at": _auth_expires_at, "mode": mode})
 			var stored: Variant = JavaScriptBridge.eval("(() => { try { sessionStorage.setItem('orebit.pending_discord', " + JSON.stringify(pending) + "); return true; } catch (_) { return false; } })()")
 			if not stored:
 				_clear_pending_auth()
@@ -344,7 +354,7 @@ func join_world() -> void:
 	connecting = true
 	_connect_elapsed = 0.0
 	_join_sent = false
-	status_changed.emit("Joining " + world_id + "…")
+	status_changed.emit("Joining " + ("PvP sandbox" if mode == "pvp" else "Co-op") + " · " + world_id + "…")
 
 func leave_world() -> void:
 	if connected:
@@ -356,14 +366,64 @@ func leave_world() -> void:
 	connecting = false
 	player_id = ""
 	peers.clear()
+	_pvp_blasts.clear()
 	_pending_mines.clear()
 	_economic_baseline.clear()
 	transfer_pending = false
 	_transfer_elapsed = 0.0
+	_motion_sequence = 0
+	_reset_motion_history()
 
 func send_state() -> void:
 	if not has_pending_actions() and connected and host.is_coop and host.scene_name == "Game" and host.player != null and host.player.data == host.data:
-		_send({"type": "state", "state": host.coop_state(), "state_revision": state_revision})
+		if mode == "pvp" and not host.player_alive:
+			return
+		var message := {"type": "state", "state": host.coop_state(), "state_revision": state_revision}
+		if mode == "pvp":
+			_motion_sequence += 1
+			message.motion_seq = _motion_sequence
+			_sent_motion_offsets[_motion_sequence] = _motion_offset
+			# Only outstanding acknowledgements need history; old replies are ignored.
+			if _sent_motion_offsets.size() > 128:
+				_sent_motion_offsets.erase(_sent_motion_offsets.keys()[0])
+		_send(message)
+
+func _reset_motion_history() -> void:
+	_sent_motion_offsets.clear()
+	_motion_offset = Vector2.ZERO
+	_last_motion_ack = _motion_sequence
+
+func _acknowledge_motion(event: Dictionary) -> void:
+	var sequence := int(event.get("motion_seq", 0))
+	if sequence <= _last_motion_ack or not _sent_motion_offsets.has(sequence):
+		return
+	_last_motion_ack = sequence
+	var sent_offset: Vector2 = _sent_motion_offsets[sequence]
+	for pending in _sent_motion_offsets.keys():
+		if int(pending) <= sequence:
+			_sent_motion_offsets.erase(pending)
+	var requested: Array = event.get("requested_position", [])
+	if requested.size() != 2 or not host.player_alive or host.player == null or host.player.pvp_building_hidden:
+		return
+	var state: Dictionary = event.get("state", {})
+	var accepted := Vector2(float(state.x), float(state.y))
+	var requested_position := Vector2(float(requested[0]), float(requested[1]))
+	var correction := accepted - requested_position - (_motion_offset - sent_offset)
+	if correction.length_squared() > 0.000001:
+		host.player.apply_motion_correction(correction)
+		_motion_offset += correction
+
+func pvp_action(kind: String, fields: Dictionary = {}) -> String:
+	if connected and mode == "pvp":
+		pvp_sequence += 1
+		var message := fields.duplicate()
+		message.type = kind
+		message.request_id = "pvp-" + str(pvp_sequence)
+		if kind == "blast":
+			_pvp_blasts[message.request_id] = str(fields.get("item", ""))
+		_send(message)
+		return str(message.request_id)
+	return ""
 
 func has_pending_actions() -> bool:
 	return not _pending_mines.is_empty() or transfer_pending
@@ -444,13 +504,13 @@ func _process(delta: float) -> void:
 	if connecting:
 		_connect_elapsed += delta
 		if _connect_elapsed > 25.0:
-			_fail("The co-op server did not respond. Your private save is unchanged.")
+			_fail("The " + ("PvP" if mode == "pvp" else "co-op") + " server did not respond. Your private save is unchanged.")
 			return
 	if ready != WebSocketPeer.STATE_OPEN:
 		return
 	if not _join_sent:
 		_join_sent = true
-		_send({"type": "join", "token": token, "world_id": world_id})
+		_send({"type": "join", "token": token, "world_id": world_id, "mode": mode})
 	while _socket != null and _socket.get_available_packet_count() > 0:
 		var parsed: Variant = JSON.parse_string(_socket.get_packet().get_string_from_utf8())
 		if parsed is Dictionary:
@@ -469,11 +529,33 @@ func _process(delta: float) -> void:
 			return
 	_state_after -= delta
 	if _state_after <= 0.0:
-		_state_after = 0.5
+		_state_after = 0.05 if mode == "pvp" else 0.5
 		send_state()
 
 func _receive(event: Dictionary) -> void:
 	match str(event.get("type", "")):
+		"building_result":
+			# state_sync already reconciled the financial snapshot. Results only
+			# acknowledge the matching lifecycle request and must not merge it again.
+			world_event.emit(event)
+		"blast_result":
+			var request := str(event.get("request_id", ""))
+			if _pvp_blasts.has(request):
+				var item: String = _pvp_blasts[request]
+				_pvp_blasts.erase(request)
+				if bool(event.get("accepted", false)):
+					var items: Dictionary = _economic_baseline.get("player_items", {})
+					items[item] = maxi(0, int(items.get(item, 0)) - 1)
+				else:
+					host.data.player_items[item] += 1
+		"pvp_tick":
+			for peer in event.get("players", []):
+				peers[str(peer.player_id)] = peer
+				if str(peer.player_id) == player_id:
+					state_revision = int(peer.get("state_revision", state_revision))
+					if bool(peer.get("state", {}).get("alive", true)) != host.player_alive:
+						_reset_motion_history()
+			world_event.emit(event)
 		"joined":
 			connected = true
 			connecting = false
@@ -510,6 +592,8 @@ func _receive(event: Dictionary) -> void:
 			if own and _pending_mines.is_empty():
 				send_state()
 		"state_ack":
+			if mode == "pvp":
+				_acknowledge_motion(event)
 			if int(event.get("state_revision", 0)) == state_revision:
 				_economic_baseline = event.get("state", {}).duplicate(true)
 		"transfer_result":
@@ -520,6 +604,24 @@ func _receive(event: Dictionary) -> void:
 			world_event.emit(event)
 			send_state()
 		"state_sync":
+			if mode == "pvp" and (not bool(event.get("state", {}).get("alive", true)) or not host.player_alive):
+				_reset_motion_history()
+			if mode == "pvp":
+				var next_building := str(event.get("state", {}).get("building", ""))
+				if host.coop.pvp.building != next_building:
+					_reset_motion_history()
+				state_revision = int(event.get("state_revision", state_revision))
+				var authoritative: Dictionary = event.get("state", {})
+				if bool(authoritative.get("alive", true)) and host.player_alive:
+					var heal := maxi(0, host.data.player_hp - ceili(float(_economic_baseline.get("player_hp", host.data.player_hp))))
+					event.state = _reconcile_economic_state(authoritative)
+					if heal > 0:
+						event.state.player_hp = float(authoritative.get("player_hp", 0)) + heal
+				else:
+					_economic_baseline = authoritative.duplicate(true)
+					_pvp_blasts.clear()
+				world_event.emit(event)
+				return
 			if int(event.get("state_revision", 0)) > state_revision:
 				state_revision = int(event.state_revision)
 				event.state = _reconcile_economic_state(event.get("state", {}))

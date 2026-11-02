@@ -52,6 +52,7 @@ var position_unity: Vector2:
 		PhysicsServer2D.body_set_state(body.get_rid(), PhysicsServer2D.BODY_STATE_TRANSFORM, body.global_transform)
 		visual.global_position = body.global_position
 		host.player_position = value
+		_reset_pvp_fall_history()
 
 var _alive: bool = true
 var _smooth_velocity: float = 0.0
@@ -90,6 +91,12 @@ var _frame_delta: float = 0.0
 var _physics_delta: float = 0.02
 var _sprite: CanvasItem
 var _coop_mine_waiting := false
+var _pvp_fuel_death_pending := false
+var _pvp_fuel_death_sent := false
+var _pvp_death_prefab: Node2D
+var pvp_building_hidden := false
+var _building_particle_visibility: Dictionary = {}
+var _building_particle_emission: Dictionary = {}
 
 func configure(main_host: Node, player_body: RigidBody2D, player_visual: Node2D, serialized_properties: Dictionary) -> void:
 	host = main_host
@@ -125,10 +132,64 @@ func configure(main_host: Node, player_body: RigidBody2D, player_visual: Node2D,
 		animator_properties = bridge.properties(owner_id, "Animator")
 		controller = animator_properties.get("m_Controller", {})
 	animator = host.make_animator(visual, str(controller.get("guid", "")))
+	if data.pvp_mode:
+		_configure_pvp_drill_animation()
 	animator.animation_event.connect(_animation_event)
 	animator.state_entered.connect(_state_entered)
 	animator.state_exited.connect(_state_exited)
 	host.ui.updateAllUI()
+
+func _configure_pvp_drill_animation() -> void:
+	# Original animation graphs assume drilling only begins after landing.
+	# Keep the authored clips/events, but allow PvP attacks and terrain entry
+	# to stow the rotor in air without falsifying ground contact or flight input.
+	var machine: AnimationNodeStateMachine = animator._tree.tree_root.duplicate(true)
+	for index in machine.get_transition_count():
+		var from_name := str(animator._set.states.get(machine.get_transition_from(index), {}).get("name", ""))
+		var to_name := str(animator._set.states.get(machine.get_transition_to(index), {}).get("name", ""))
+		var transition := machine.get_transition(index)
+		if from_name == "FlyingBladeRotation_Animation" and to_name == "FlyingClosingBlades_Animation":
+			transition.advance_expression = transition.advance_expression.replace('native_parameters["IsOnGround"]', '(native_parameters["IsOnGround"] or native_parameters["IsDiggingBottom"] or native_parameters["IsDiggingSide"])')
+		elif from_name == "MovingOnGround_Animation" and to_name == "PlayerIdle_Animation":
+			transition.advance_expression = transition.advance_expression.replace('not native_parameters["IsOnGround"]', '(not native_parameters["IsOnGround"] and not native_parameters["IsDiggingSide"])')
+	animator._tree.tree_root = machine
+	animator._playback = animator._tree.get("parameters/playback")
+
+func pvp_drill_direction() -> Vector2:
+	if not data.pvp_mode or not _alive or _pvp_fuel_death_pending or host.paused or is_in_shop or _is_teleporting or _is_creating_explosions:
+		return Vector2.ZERO
+	# Finish the current terrain tile on release: retracting or restoring its
+	# collision midway would leave the vehicle inside an unexcavated tile.
+	if is_digging_bottom:
+		return Vector2(0.0, -1.0)
+	if is_digging_side:
+		return Vector2.RIGHT if isFacingRight else Vector2.LEFT
+	var direction := Vector2.ZERO
+	if moveY < 0.0:
+		direction = Vector2(0.0, -1.0)
+	elif moveX != 0.0 and (moveX > 0.0) == isFacingRight:
+		direction = Vector2(signf(moveX), 0.0)
+	if direction == Vector2.ZERO:
+		return direction
+	var own_velocity := velocity_unity
+	for peer in host.coop.network.peers.values():
+		if str(peer.player_id) == host.coop.network.player_id or not bool(peer.state.get("alive", true)) or not str(peer.state.get("building", "")).is_empty():
+			continue
+		var offset := Vector2(float(peer.state.get("x", 0)), float(peer.state.get("y", 0))) - position_unity
+		var forward := offset.dot(direction)
+		if forward <= 0.3:
+			continue
+		if forward <= 1.5 and absf(offset.cross(direction)) <= 0.65:
+			return direction
+		# Deploy before fast opposing craft reach contact, not after their hulls
+		# collide. Damage still requires the server's much tighter contact bounds.
+		var relative_velocity := Vector2(float(peer.state.get("vx", 0)), float(peer.state.get("vy", 0))) - own_velocity
+		var closing_speed := -relative_velocity.dot(direction)
+		if closing_speed > 0.0 and forward <= 1.5 + closing_speed * 0.35:
+			var approach_time := clampf((forward - 0.9) / closing_speed, 0.0, 0.35)
+			if absf((offset + relative_velocity * approach_time).cross(direction)) <= 0.65:
+				return direction
+	return Vector2.ZERO
 
 func begin_render_pose() -> void:
 	_pose_render_frame = -1
@@ -160,9 +221,26 @@ func sync_physics_pose(render_pose: bool = true) -> void:
 	visual.global_rotation = pose.get_rotation()
 	host.player_position = pose.origin / UNITS
 
+func apply_motion_correction(delta: Vector2) -> void:
+	if delta == Vector2.ZERO:
+		return
+	var current_position := position_unity
+	if not _block_target_data.is_empty() and (_block_target_position - current_position).dot(delta) < 0.0:
+		cancelDig()
+	var velocity := velocity_unity
+	if velocity.x * delta.x < 0.0:
+		velocity.x = 0.0
+	if velocity.y * delta.y < 0.0:
+		velocity.y = 0.0
+	velocity_unity = velocity
+	position_unity = current_position + delta
+	_pose_history_start_step = host.physics_step
+	_pose_render_frame = -1
+	_reset_pvp_fall_history()
+
 func tick(delta: float) -> void:
 	_poll_item_keys()
-	if not _alive or host.paused:
+	if not _alive or _pvp_fuel_death_pending or pvp_building_hidden or host.paused:
 		return
 	_frame_delta = delta
 	sync_physics_pose()
@@ -174,8 +252,11 @@ func tick(delta: float) -> void:
 		_time_until_can_use_item = _f32(_time_until_can_use_item - _f32(delta))
 	if _drill_clink_audio_cooldown >= 0.0:
 		_drill_clink_audio_cooldown = _f32(_drill_clink_audio_cooldown - _f32(delta))
-	if _can_move():
+	if data.pvp_mode:
 		_read_axes()
+	if _can_move():
+		if not data.pvp_mode:
+			_read_axes()
 		if not isFlying and moveY > 0.0:
 			isFlying = true
 			host.audio.PlaySound("RotorPlayer")
@@ -207,10 +288,18 @@ func tick(delta: float) -> void:
 		host.audio.ChangeSoundPitch("RotorPlayer", velocity_unity.y / 10.0)
 	if not _block_target_data.is_empty() and position_unity.distance_to(_block_target_position) > 1.5:
 		cancelDig()
+	if data.pvp_mode:
+		var direction := pvp_drill_direction()
+		animator.condition("IsDiggingBottom", direction.y < 0.0)
+		animator.condition("IsDiggingSide", direction.x != 0.0)
+		animator.condition("IsStillPressingDown", direction.y < 0.0)
 	animator.advance(delta)
 
 func physics_tick(delta: float) -> void:
-	if not _alive or host.paused:
+	if _pvp_fuel_death_pending and _alive:
+		_report_pvp_fuel_death()
+		return
+	if not _alive or pvp_building_hidden or host.paused:
 		return
 	_physics_delta = delta
 	sync_physics_pose(false)
@@ -320,7 +409,7 @@ func refresh_ground_after_step() -> void:
 
 func _update_ground_contact() -> void:
 	isOnGround = false
-	if _ground_query == null:
+	if _ground_query == null or pvp_building_hidden:
 		return
 	# Box2D query transforms carry rotation/translation, not shape scaling.
 	var transform := _ground_node.global_transform
@@ -331,6 +420,8 @@ func _update_ground_contact() -> void:
 			break
 
 func _is_ground(collider: Object) -> bool:
+	if collider is Node and data.pvp_mode and collider.is_in_group("PvpMiner"):
+		return collider is CollisionObject2D and collider.collision_layer != 0
 	return collider is Node and (collider.is_in_group("Ground") or str(collider.get_meta("unity_tag", "")) == "Ground" or str(collider.get_meta("tag", "")) == "Ground")
 
 func getBlockPositionBottomPlayer() -> Vector2i:
@@ -344,9 +435,12 @@ func _detector_cell(detector: Node2D) -> Vector2i:
 		push_error("PlayerCollisions is missing a serialized block detector")
 		return Vector2i(-1, -1)
 	var point: Vector2 = detector.global_position / UNITS
-	return Vector2i(floori(point.x), absi(floori(point.y)))
+	return Vector2i(floori(point.x), -floori(point.y) if data.pvp_mode else absi(floori(point.y)))
 
 func _try_start_dig(cell: Vector2i, bottom: bool) -> void:
+	# Legacy terrain queries accept mirrored coordinates; PvP sky is not earth.
+	if data.pvp_mode and not world.inBounds(cell.x, cell.y):
+		return
 	if world.doesBlockExistAndIsDiggable(cell.x, cell.y):
 		is_digging_bottom = bottom
 		is_digging_side = not bottom
@@ -378,7 +472,16 @@ func dig() -> void:
 	var step := _f32(_f32(0.4) * _f32(data.player_dig_speed))
 	step = _f32(step * _f32(_frame_delta))
 	step = _f32(step * getDepthModifier(floori(position_unity.y)))
-	position_unity = position_unity.move_toward(_block_target_position, step)
+	var next_position := position_unity.move_toward(_block_target_position, step)
+	if data.pvp_mode:
+		for peer in host.coop.network.peers.values():
+			if str(peer.player_id) == host.coop.network.player_id or not bool(peer.state.get("alive", true)):
+				continue
+			var offset := next_position - Vector2(float(peer.state.get("x", 0)), float(peer.state.get("y", 0)))
+			if absf(offset.x) < 0.8 and absf(offset.y) < 0.9:
+				cancelDig()
+				return
+	position_unity = next_position
 	updateMousePointerRotation()
 	var distance: float = position_unity.distance_to(_block_target_position)
 	if distance < 0.5 and not world.blockChangedTexture and not host.is_coop:
@@ -437,12 +540,13 @@ func _finish_dig() -> void:
 	host.audio.StopSound("Drill")
 
 func cancelDig() -> void:
+	_reset_pvp_fall_history()
 	_finish_dig()
 
 func coop_mining_resolved(x: int, y: int, accepted: bool, own_drill: bool) -> void:
 	if _block_target != Vector2i(x, y):
 		return
-	if accepted and own_drill and str(_block_target_data.get("name", "")) == "Lava":
+	if not data.pvp_mode and accepted and own_drill and str(_block_target_data.get("name", "")) == "Lava":
 		loseHP(int(45.0 * (1.0 - data.player_radiator)))
 	_finish_dig()
 	cancelVelocity()
@@ -471,13 +575,16 @@ func stopMovement() -> void:
 	body.freeze = true
 
 func startMovement() -> void:
+	if data.pvp_mode and (_pvp_fuel_death_pending or pvp_building_hidden):
+		return
 	if body.freeze:
+		_reset_pvp_fall_history()
 		_pose_history_start_step = host.physics_step
 	body.freeze = false
 	body.sleeping = false
 
 func startPlayerCollisions() -> void:
-	if _alive:
+	if _alive and not pvp_building_hidden:
 		body.collision_layer = _collision_layer
 		body.collision_mask = _collision_mask
 		for shape in _shapes:
@@ -485,6 +592,10 @@ func startPlayerCollisions() -> void:
 	_set_particles("dirt_particle_emitter", false)
 
 func stopPlayerCollisions() -> void:
+	if data.pvp_mode and _alive:
+		body.collision_layer = 2
+		body.collision_mask = 2
+		return
 	body.collision_layer = 0
 	body.collision_mask = 0
 	for shape in _shapes:
@@ -508,16 +619,43 @@ func _set_particles(property_name: String, emitting: bool) -> void:
 			pending.append(child)
 
 func manageCrashVerification() -> void:
-	var new_velocity: float = absf(velocity_unity.y)
-	# Modals, digging and teleporting can cancel velocity without an impact.
-	# A speed change alone is not evidence of a physical collision.
-	if not body.freeze and new_velocity < _previous_y_velocity - 7.0:
-		var state := PhysicsServer2D.body_get_direct_state(body.get_rid())
-		if state != null and state.get_contact_count() > 0:
+	if data.pvp_mode:
+		if body.freeze or not _can_move():
+			_reset_pvp_fall_history()
+			return
+		# Unity Y points up. Rotor braking an ascent is not a fall, and a
+		# downward slowdown is an impact only with actual terrain support.
+		var falling_speed := maxf(0.0, -velocity_unity.y)
+		if _previous_y_velocity - falling_speed > 7.0 and _has_terrain_support():
 			loseHP(int(0.5 * _previous_y_velocity))
-	_previous_y_velocity = new_velocity
+		_previous_y_velocity = falling_speed
+	else:
+		var new_velocity: float = absf(velocity_unity.y)
+		# Modals, digging and teleporting can cancel velocity without an impact.
+		# A speed change alone is not evidence of a physical collision.
+		if not body.freeze and new_velocity < _previous_y_velocity - 7.0:
+			var state := PhysicsServer2D.body_get_direct_state(body.get_rid())
+			if state != null and state.get_contact_count() > 0:
+				loseHP(int(0.5 * _previous_y_velocity))
+		_previous_y_velocity = new_velocity
+
+func _has_terrain_support() -> bool:
+	var state := PhysicsServer2D.body_get_direct_state(body.get_rid())
+	if state == null:
+		return false
+	for index in state.get_contact_count():
+		var collider := state.get_contact_collider_object(index)
+		if collider is Node and not collider.is_in_group("PvpMiner") and _is_ground(collider) and state.get_contact_local_normal(index).y < -0.5:
+			return true
+	return false
+
+func _reset_pvp_fall_history() -> void:
+	if data != null and data.pvp_mode:
+		_previous_y_velocity = 0.0
 
 func updateFuel() -> void:
+	if pvp_building_hidden:
+		return
 	var rate := 0.08
 	if is_digging_bottom or is_digging_side:
 		rate = 0.33
@@ -538,6 +676,52 @@ func exitShop() -> void:
 	is_in_shop = false
 	host.paused = false
 	host.audio.ResumeSounds()
+
+func set_pvp_building_hidden(hidden: bool) -> void:
+	if pvp_building_hidden == hidden:
+		return
+	pvp_building_hidden = hidden
+	if not hidden:
+		for particle_node in _building_particle_visibility:
+			if is_instance_valid(particle_node):
+				particle_node.visible = _building_particle_visibility[particle_node]
+		_building_particle_visibility.clear()
+		for particle in _building_particle_emission:
+			if is_instance_valid(particle) and _alive and not _pvp_fuel_death_pending:
+				particle.emitting = _building_particle_emission[particle]
+		_building_particle_emission.clear()
+	if hidden:
+		cancelDig()
+		_deactivate_attacks()
+		_is_creating_explosions = false
+		_is_teleporting = false
+		moveX = 0.0
+		moveY = 0.0
+		isFlying = false
+		isOnGround = false
+		stopMovement()
+		body.collision_layer = 0
+		body.collision_mask = 0
+		for shape in _shapes:
+			shape.set_deferred("disabled", true)
+		for emitter in ["dirt_particle_emitter", "smoke_particle_emitter"]:
+			var particle_node: Node = bridge.node(properties.get(emitter, {}))
+			if particle_node is CanvasItem:
+				_building_particle_visibility[particle_node] = particle_node.visible
+				particle_node.hide()
+			if particle_node != null:
+				for particle in particle_node.get_children():
+					if particle is GPUParticles2D or particle is CPUParticles2D:
+						_building_particle_emission[particle] = particle.emitting
+			_set_particles(emitter, false)
+		visual.hide()
+		for sound in ["Drill", "IdlePlayer", "RotorPlayer"]:
+			host.audio.StopSound(sound)
+	elif _alive and not _pvp_fuel_death_pending:
+		startPlayerCollisions()
+		startMovement()
+		visual.show()
+		host.audio.PlaySound("IdlePlayer")
 
 func cancelVelocity() -> void:
 	_previous_y_velocity = 0.0
@@ -575,6 +759,9 @@ func use_item(index: int) -> void:
 		createPopup("No " + item_name, "IsWarning")
 		host.audio.PlaySoundOneShot("NoItemAvailable")
 		return
+	if data.pvp_mode and index in [2, 3]:
+		host.coop.network.send_state()
+		host.coop.network.pvp_action("blast", {"item": item_name})
 	data.player_items[item_name] -= 1
 	match index:
 		0:
@@ -646,6 +833,8 @@ func _prefab_name(property_name: String) -> String:
 	return ""
 
 func destroyBlocksFromExplosion(explosion_range: int) -> void:
+	if data.pvp_mode:
+		return
 	var changed: Array[Vector2i] = []
 	for x in range(maxi(world.surface_left(), _explosion_location.x - explosion_range), mini(data.earthWidth, _explosion_location.x + explosion_range + 1)):
 		for y in range(maxi(0, _explosion_location.y - explosion_range), mini(data.earthHeight, _explosion_location.y + explosion_range + 1)):
@@ -730,6 +919,10 @@ func _tick_invincibility(delta: float) -> void:
 			_sprite.modulate = Color.WHITE
 
 func loseHP(amount: int) -> void:
+	if data.pvp_mode:
+		if _alive and not pvp_building_hidden and amount > 0:
+			host.coop.network.pvp_action("damage", {"source": "crash", "amount": amount})
+		return
 	if _alive and not is_invincible and not is_permanently_invincible:
 		host.audio.PlaySound("PlayerCrash")
 		data.player_hp -= amount
@@ -746,7 +939,86 @@ func gainHP(amount: int) -> void:
 		killPlayer()
 	host.ui.updateAllUI()
 
+func apply_pvp_life(alive: bool, position: Vector2) -> void:
+	if alive == _alive and alive == host.player_alive:
+		return
+	_alive = alive
+	set_pvp_building_hidden(false)
+	host.player_alive = alive
+	cancelDig()
+	_is_creating_explosions = false
+	_is_teleporting = false
+	is_in_shop = false
+	isFlying = false
+	moveX = 0.0
+	moveY = 0.0
+	_smooth_velocity = 0.0
+	_deactivate_attacks()
+	if alive:
+		_clear_pvp_death_prefab()
+		_pvp_fuel_death_pending = false
+		_pvp_fuel_death_sent = false
+		for parameter_name in animator.native_parameters:
+			animator.native_parameters[parameter_name] = animator._set.parameters[parameter_name].default
+		animator.native_playback.start(animator._set.default_node)
+		position_unity = position
+		body.rotation = 0.0
+		visual.global_rotation = 0.0
+		startMovement()
+		startPlayerCollisions()
+		visual.show()
+		host.audio.PlaySound("IdlePlayer")
+	else:
+		host.audio.PlaySoundOneShot("KillPlayer")
+		for sound in ["LowFuelWarning", "VeryLowFuelWarning", "Drill", "IdlePlayer", "RotorPlayer"]:
+			host.audio.StopSound(sound)
+		_pvp_death_prefab = host.spawn_prefab(_prefab_name("dead_player_prefab"), position_unity, host.world_root)
+		stopMovement()
+		body.collision_layer = 0
+		body.collision_mask = 0
+		visual.hide()
+
+func pvp_death_animation_active() -> bool:
+	if not is_instance_valid(_pvp_death_prefab):
+		return false
+	for record in _pvp_death_prefab.get_meta("native_animators", []):
+		if record.animator.current_state in ["", "DeadPlayer_Anim"]:
+			return true
+	return false
+
+func _clear_pvp_death_prefab() -> void:
+	if is_instance_valid(_pvp_death_prefab):
+		# The authored second clip loops forever. Hide now, retire its native
+		# animators with the container's normal tree-exit cleanup.
+		_pvp_death_prefab.hide()
+		_pvp_death_prefab.queue_free()
+	_pvp_death_prefab = null
+
+func _exit_tree() -> void:
+	_clear_pvp_death_prefab()
+
+func _report_pvp_fuel_death() -> void:
+	var network: CoopClient = host.coop.network
+	if _pvp_fuel_death_sent or not network.connected or network.has_pending_actions():
+		return
+	# Reconcile mining/transfers first, then preserve the latest purchases,
+	# carried money and physics position before the server creates the bag.
+	data.player_fuel = minf(0.0, data.player_fuel)
+	network.send_state()
+	_pvp_fuel_death_sent = true
+	network.pvp_action("damage", {"source": "fuel", "amount": 10})
+
 func killPlayer() -> void:
+	if data.pvp_mode:
+		if not _alive or _pvp_fuel_death_pending:
+			return
+		# Do not predict life: an earlier alive snapshot may still be in flight.
+		# Latch exhaustion until authority confirms death and the next life.
+		_pvp_fuel_death_pending = true
+		stopMovement()
+		_deactivate_attacks()
+		_report_pvp_fuel_death()
+		return
 	if not _alive:
 		return
 	_alive = false
@@ -763,7 +1035,7 @@ func killPlayer() -> void:
 	_deactivate_attacks()
 
 func _animation_event(method: String, argument: Variant) -> void:
-	if not _alive:
+	if not _alive or _pvp_fuel_death_pending or pvp_building_hidden:
 		return
 	if has_method(method):
 		if argument == null:

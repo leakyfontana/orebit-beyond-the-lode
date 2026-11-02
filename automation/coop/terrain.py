@@ -6,6 +6,10 @@ consume draws even though the service only needs tile types.
 
 WIDTH, HEIGHT = 36, 600
 MIN_X = -10
+# Mirrored by WorldData's PvP-only overlay; never advance the legacy stream.
+PVP_HAZARD_SEED_XOR = 0x505650
+PVP_HAZARD_CHANCE = 8
+ORTHOGONAL_NEIGHBOURS = ((0, 1), (1, 0), (0, -1), (-1, 0))
 MINERALS = (
     "Ironium", "Bronzium", "Silverium", "Goldium", "Platinium", "Einsteinium",
     "Emerald", "Ruby", "Diamond", "Amazonite", "Dinosaur Bones", "Treasure",
@@ -66,10 +70,11 @@ class DotNetRandom:
         return int((float(value) * (1.0 / float(self.BIG))) * maximum)
 
 
-def generate(seed: int) -> dict[int, list[int]]:
+def generate(seed: int, *, pvp: bool = False) -> dict[int, list[int]]:
+    """Generate co-op terrain by default, or the original-width PvP sandbox."""
     random = DotNetRandom(seed)
     # Preserve every original draw before extending the same stream westward.
-    columns = (*range(WIDTH), *range(MIN_X, 0))
+    columns = tuple(range(WIDTH)) if pvp else (*range(WIDTH), *range(MIN_X, 0))
     cells = {x: [0] * HEIGHT for x in columns}
     for x in columns:
         for y in range(HEIGHT):
@@ -119,9 +124,85 @@ def generate(seed: int) -> dict[int, list[int]]:
     # Buildings are traversable, pavement invincible; none can be excavated.
     for x in (2, 3, 4, 5, 9, 10, 11, 12, 13, 14, 21, 22, 23, 24, 25, 26, 30, 31, 32, 33):
         cells[x][5] = -3
-    for x in range(-8, -2):
-        cells[x][5] = -3 if x == -8 else (-5 if x == -3 else -4)
+    if not pvp:
+        for x in range(-8, -2):
+            cells[x][5] = -3 if x == -8 else (-5 if x == -3 else -4)
+    else:
+        _stamp_pvp_surface(cells)
+        _generate_pvp_hazards(cells, seed)
     return cells
+
+
+def _stamp_pvp_surface(cells: dict[int, list[int]]) -> None:
+    """Retain exact Godot surface codes for PvP collision/terrain snapshots.
+
+    Co-op historically stores equivalent air/pavement types instead; its seeded
+    representation is deliberately left unchanged.
+    """
+    for left, top, rows in (
+        (3, 3, ((-125, -126, -127), (-128, -129, -130))),
+        (10, 2, ((-110, -111, -112, -113), (-114, -115, -116, -117), (-118, -119, -120, -121))),
+        (22, 3, ((-102, -103, -104, -105), (-106, -107, -108, -109))),
+        (30, 3, ((-131, -132, -133), (-134, -135, -136))),
+    ):
+        for dy, row in enumerate(rows):
+            for dx, tile in enumerate(row):
+                cells[left + dx][top + dy] = tile
+    cells[25][2] = -101
+    for left, right in ((2, 5), (9, 14), (21, 26), (30, 33)):
+        for x in range(left, right + 1):
+            cells[x][5] = -3 if x == left else (-5 if x == right else -4)
+
+
+def _generate_pvp_hazards(cells: dict[int, list[int]], seed: int) -> None:
+    # Draw only for eligible cells, x-major then y-major, exactly like Godot.
+    random = DotNetRandom(signed32(seed) ^ PVP_HAZARD_SEED_XOR)
+    for x in range(WIDTH):
+        for y in range(5, HEIGHT - 12):
+            tile = cells[x][y]
+            if supports_hazard(tile) and random.next(PVP_HAZARD_CHANCE) == 0:
+                cells[x][y] = 25 + random.next(6)
+
+
+def is_falling_hazard(tile: int) -> bool:
+    """Rock and lava variants can detach; gas and core scenery cannot."""
+    return 25 <= tile <= 30
+
+
+def supports_hazard(tile: int) -> bool:
+    """Only normal earth/grass or minerals anchor a neighbouring hazard."""
+    return tile in (-1, -2) or 1 <= tile <= 24
+
+
+def unsupported_hazards(
+    cells: dict[int, list[int]],
+    excavated: set[tuple[int, int]] | frozenset[tuple[int, int]] = frozenset(),
+) -> list[tuple[int, int]]:
+    """Return detached rock/lava origins in deterministic x-major order.
+
+    Only orthogonal normal-earth/mineral contact anchors a hazard. Adjacent
+    hazards, gas, invincible scenery, diagonals and map edges do not anchor it.
+    Excavated coordinates are air even if the caller retains the seeded tile;
+    callers with fully mutated terrain can leave the mask empty.
+    """
+    detached = []
+    for x in sorted(cells):
+        for y, tile in enumerate(cells[x]):
+            if not is_falling_hazard(tile) or (x, y) in excavated:
+                continue
+            for dx, dy in ORTHOGONAL_NEIGHBOURS:
+                nx, ny = x + dx, y + dy
+                column = cells.get(nx)
+                if (
+                    column is not None
+                    and 0 <= ny < len(column)
+                    and (nx, ny) not in excavated
+                    and supports_hazard(column[ny])
+                ):
+                    break
+            else:
+                detached.append((x, y))
+    return detached
 
 
 def tile_name(tile: int) -> str:

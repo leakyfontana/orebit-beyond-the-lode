@@ -110,7 +110,7 @@ func configure(main_host: Node, network: CoopClient) -> void:
 	var account := Button.new()
 	account.name = "GameModesAccount"
 	account.text = "MODES\nACCOUNTS"
-	account.tooltip_text = "Choose game mode or manage your co-op account"
+	account.tooltip_text = "Choose game mode or manage your server account"
 	_style_button(account, false)
 	account.autowrap_mode = TextServer.AUTOWRAP_OFF
 	account.add_theme_font_size_override("font_size", 13)
@@ -438,26 +438,41 @@ func show_mode() -> void:
 	_label("OREBIT · Choose your game")
 	_label("Private play stays on this device. Co-op shares one server world with up to five miners.", true)
 	_button("Private · this device", _choose_private, "ChoosePrivate", true)
-	_button("Co-op · shared server", show_lobby, "ChooseCoop")
-	_label("Co-op accounts keep your server progress. You can also play without an account.", true)
+	_button("Co-op · shared server", func(): _choose_server("coop"), "ChooseCoop")
+	_button("PvP · mining sandbox [BETA]", func(): _choose_server("pvp"), "ChoosePvp")
+	_label("PvP is in beta — this mode is still a work in progress.", true)
+	_label("Server accounts keep separate Co-op and PvP progress. You can also play without an account.", true)
 	_finish_page()
+
+func _choose_server(mode: String) -> void:
+	if _busy():
+		return
+	if client.connected and client.mode != mode:
+		if not host.leave_coop():
+			return
+		host.change_scene("MainMenu")
+	client.mode = mode
+	_message = ""
+	show_lobby()
 
 func show_lobby() -> void:
 	_open_page("lobby")
 	_lobby_state = _state_key()
-	_label("Co-op · shared world")
+	_label("PvP · mining sandbox [BETA]" if client.mode == "pvp" else "Co-op · shared world")
 	_identity = _label("", true)
 	_identity.name = "AccountIdentity"
+	if client.mode == "pvp":
+		_label("Hull is health. Death drops your cash; respawn in 10 seconds with a stock vehicle. Explosives cannot hurt their owner. Drill into opponents or drop isolated rock/lava onto them.", true)
 	if client.connected:
-		_label("Your shared world is ready. Return to play, or leave before changing accounts.", true)
-		_button("Return to shared world", hide_lobby, "ReturnToWorld", true)
+		_label("Your sandbox is ready. Return to play, or leave before changing accounts." if client.mode == "pvp" else "Your shared world is ready. Return to play, or leave before changing accounts.", true)
+		_button("Return to sandbox" if client.mode == "pvp" else "Return to shared world", hide_lobby, "ReturnToWorld", true)
 		_button("Leave server", _leave, "LeaveServer")
 	elif not client.token.is_empty():
-		_label("Your account keeps money, cargo, upgrades, items and position on this server.", true)
+		_label("Your account keeps money, cargo, upgrades, items and position separately for " + ("PvP" if client.mode == "pvp" else "Co-op") + " on this server.", true)
 		_button("Join server", _join, "JoinServer", true)
 		_button("Sign out", _sign_out, "SignOut")
 	else:
-		_label("Keep your server progress with an account. Private saves stay separate.", true)
+		_label("Keep your " + ("PvP" if client.mode == "pvp" else "Co-op") + " progress with an account. Private saves stay separate.", true)
 		_button("Continue with Discord", _discord_auth, "ContinueDiscord", true)
 		_button("Use username / password", _show_password, "UsePassword")
 		_label("Just exploring? Anonymous progress ends when you leave the server.", true)
@@ -475,7 +490,7 @@ func _show_password() -> void:
 		return
 	_open_page("password")
 	_auth_heading = _label("")
-	_label("This account keeps your progress on this server only.", true)
+	_label("This account keeps separate Co-op and PvP progress on this server only.", true)
 	_username = _field("Username", _username_draft, "AuthUsername")
 	_username.placeholder_text = "Your username"
 	_username.text_submitted.connect(func(_text: String): _password.grab_focus())
@@ -487,7 +502,7 @@ func _show_password() -> void:
 	reveal.toggle_mode = true
 	_auth_submit = _button("", func(): _native_auth(_auth_kind), "SubmitPassword", true)
 	_auth_toggle = _button("", _toggle_auth_kind, "SwitchPasswordMode")
-	_button("Back to co-op", show_lobby, "PasswordBack")
+	_button("Back to PvP" if client.mode == "pvp" else "Back to co-op", show_lobby, "PasswordBack")
 	_update_password_mode()
 	_finish_page()
 
@@ -515,12 +530,12 @@ func _show_server() -> void:
 	if _busy() or client.connected:
 		return
 	_open_page("server")
-	_label("Advanced · server")
+	_label("Advanced · " + ("PvP" if client.mode == "pvp" else "Co-op") + " server")
 	_label("Use the default Orebit server unless you run your own. Changing servers signs out this account; progress stays on its original server.", true)
 	_url = _field("Server HTTPS address", client.base_url, "ServerAddress")
 	_url.virtual_keyboard_type = LineEdit.KEYBOARD_TYPE_URL
 	_url.text_submitted.connect(func(_text: String): _save_server())
-	_label("Shared world: public", true)
+	_label(("PvP sandbox" if client.mode == "pvp" else "Shared world") + ": " + client.world_id, true)
 	_button("Save server address", _save_server, "SaveServer", true)
 	_button("Use default server", _default_server, "DefaultServer")
 	_button("Back without changes", show_lobby, "ServerBack")
@@ -554,7 +569,7 @@ func hide_lobby(reset_pause: bool = false) -> void:
 func refresh_hud() -> void:
 	if not is_instance_valid(_hud_label):
 		return
-	var header_text := "Co-op · %d/5" % client.peers.size() if host.is_coop else "Private"
+	var header_text := "%s · %d/5" % ["PvP" if client.mode == "pvp" else "Co-op", client.peers.size()] if host.is_coop else "Private"
 	var needs_layout: bool = _hud_label.text != header_text or _hud_scene != host.scene_name or not _hud.visible
 	_hud.visible = not modal and (host.is_coop or host.scene_name == "MainMenu")
 	if _hud_label.text != header_text:
@@ -591,7 +606,7 @@ func _join() -> void:
 	if not client.endpoint_is_secure():
 		_set_status("Use an HTTPS server address in Advanced before joining.")
 		return
-	_message = "Connecting to the shared world…"
+	_message = "Connecting to the PvP sandbox…" if client.mode == "pvp" else "Connecting to the shared world…"
 	client.join_world()
 	_auth_state_changed()
 
@@ -676,7 +691,7 @@ func _update_status() -> void:
 	elif client.auth_busy:
 		_status.text = _message if not _message.is_empty() else "Signing in…"
 	elif client.connecting:
-		_status.text = "Connecting to the shared world…"
+		_status.text = "Connecting to the PvP sandbox…" if client.mode == "pvp" else "Connecting to the shared world…"
 	else:
 		_status.text = _message
 	_status.visible = not _status.text.is_empty()

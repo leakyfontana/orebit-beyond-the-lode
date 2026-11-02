@@ -404,6 +404,8 @@ const TRANSMISSION_TABLE: Array = [
 
 var savefile: String = "user://motherloadrecodedsavedata.data"
 var coop_mode := false
+# PvP shares the online transport but not co-op's western bank extension.
+var pvp_mode := false
 signal coop_save_requested
 var string_format: Dictionary = {"NumberGroupSeparator": " "}
 var player_money: int = 20

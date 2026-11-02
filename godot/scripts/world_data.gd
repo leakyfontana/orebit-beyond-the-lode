@@ -8,6 +8,9 @@ const COOP_SURFACE_LEFT := -10
 const SURFACE_ROW := 5
 const RIA_SLAB_LEFT := -8
 const RIA_SLAB_RIGHT := -3
+# Keep PvP hazards on their own RNG stream, mirrored in automation/coop/terrain.py.
+const PVP_HAZARD_SEED_XOR := 0x505650
+const PVP_HAZARD_CHANCE := 8
 var data: GameData
 var blockChangedTexture: bool = false
 var generation_seed: int = 0
@@ -412,7 +415,7 @@ func generate(seed_value: Variant = null) -> void:
 	for x in range(data.earthWidth):
 		data.my_map.append(_generate_column(random))
 	# Keep every original RNG draw ahead of the west, in the original order.
-	if data.coop_mode:
+	if data.coop_mode and not data.pvp_mode:
 		for x in range(COOP_SURFACE_LEFT, 0):
 			var column: Array = _generate_column(random)
 			if x >= RIA_SLAB_LEFT and x <= RIA_SLAB_RIGHT:
@@ -474,6 +477,8 @@ func generate(seed_value: Variant = null) -> void:
 	data.my_map[31][5][0] = -4
 	data.my_map[32][5][0] = -4
 	data.my_map[33][5][0] = -5
+	if data.pvp_mode:
+		_generate_pvp_hazards()
 	# Generation itself did not set level_is_already_generated in Unity.
 
 func generateLevel(seed_value: Variant = null) -> void:
@@ -527,11 +532,25 @@ func _generate_column(random: DotNetRandom) -> Array:
 		column.append(tile)
 	return column
 
+func _generate_pvp_hazards() -> void:
+	# The original terrain draws, structures and story/core rows stay untouched.
+	# A second stream gives rock and lava equal chances at every mineable depth,
+	# including exposed surface grass, without changing any other mode's seed.
+	var random := DotNetRandom.new(generation_seed ^ PVP_HAZARD_SEED_XOR)
+	for x in range(data.earthWidth):
+		for y in range(SURFACE_ROW, data.earthHeight - 12):
+			var raw: Array = data.my_map[x][y]
+			var tile: int = int(raw[0])
+			if tile == -1 or tile == -2 or (tile >= 1 and tile <= 24):
+				if random.Next(PVP_HAZARD_CHANCE) == 0:
+					raw[0] = 25 + random.Next(6)
+
+
 func inBounds(x: int, y: int) -> bool:
 	return x >= surface_left() and x < data.earthWidth and y >= 0 and y < data.earthHeight
 
 func surface_left() -> int:
-	return COOP_SURFACE_LEFT if data.coop_mode else 0
+	return COOP_SURFACE_LEFT if data.coop_mode and not data.pvp_mode else 0
 
 func getRawTile(x: int, y: int) -> Array:
 	# Resolve coordinates before indexing: GDScript's negative indices wrap arrays.

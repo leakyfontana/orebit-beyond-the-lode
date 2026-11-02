@@ -40,6 +40,7 @@ var current_transmission_index: int = 0
 var _boss_health: Control
 var _boss_health_offsets := Vector4.ZERO
 var controller_ui: ControllerUI
+var _building_panel_sync := false
 
 func configure(game_host: Node, scene_bridge: SceneBridge, game_data: GameData, game_audio: GameAudio) -> void:
 	host = game_host
@@ -402,6 +403,8 @@ func _dispatch(target_id: String, method: String, argument: Variant) -> void:
 				var popup: Node = bridge.node(target_id)
 				if popup != null:
 					popup.queue_free()
+	if data.pvp_mode and host.is_coop:
+		host.coop.network.send_state()
 
 func isUIOpen() -> bool:
 	if host.coop != null and host.coop.transfer.modal:
@@ -431,6 +434,10 @@ func _set_panel(script: String, enabled: bool) -> void:
 func _panel_lifecycle(script: String, enabled: bool) -> void:
 	if not SHOP_SCRIPTS.has(script):
 		return
+	if data.pvp_mode and host.is_coop and not _building_panel_sync:
+		host.coop.pvp.request_building(script, enabled)
+		if not enabled or not bool(panel_active.get(script, false)):
+			return
 	if enabled:
 		host.enterShop()
 		match script:
@@ -446,6 +453,21 @@ func _panel_lifecycle(script: String, enabled: bool) -> void:
 			host.fuel_pricing.show_shop(false)
 		host.exitShop()
 		updateAllUI()
+
+func sync_building_panel(building: String) -> void:
+	# Authority restoration is not a fresh user entry/exit request.
+	_building_panel_sync = true
+	for script in SHOP_SCRIPTS:
+		bridge.set_active(_panel(script), script == building)
+	_sync_panels()
+	_building_panel_sync = false
+	if building.is_empty():
+		audio.PlayMusic("MainLevelMusic")
+	else:
+		audio.PlayMusic("ShopMusic")
+
+func _can_trade(script: String) -> bool:
+	return not data.pvp_mode or not host.is_coop or (host.coop.pvp.building == script and not host.coop.pvp.building_pending)
 
 func open_shop(reference: Variant) -> void:
 	if isUIOpen():
@@ -478,6 +500,9 @@ func open_options() -> void:
 
 func _close_panel(script: String) -> void:
 	if SHOP_SCRIPTS.has(script):
+		if data.pvp_mode and host.is_coop and not _building_panel_sync:
+			host.coop.pvp.request_building(script, false)
+			return
 		if script == "UpgradeShopUI":
 			current_category = ""
 			current_potential_upgrade = ""
@@ -493,7 +518,10 @@ func _close_panel(script: String) -> void:
 			7: bonus = 25000
 		if bonus != 0:
 			host.createPopup("Bonus\n+$" + str(bonus), "IsMineral")
-			data.player_money += bonus
+			if data.pvp_mode:
+				host.coop.network.pvp_action("claim_transmission", {"index": current_transmission_index})
+			else:
+				data.player_money += bonus
 			audio.PlaySoundOneShot("Purchase")
 		current_transmission_index = 0
 	# Main-menu instructions have the same broken HelpUUIManager with null player;
@@ -693,6 +721,8 @@ func displayPotentialUpgrade(upgrade_index: int) -> void:
 	audio.PlaySoundOneShot("SelectUpgrade")
 
 func buyUpgrade() -> void:
+	if not _can_trade("UpgradeShopUI"):
+		return
 	# Do not invent a default selection: Unity errors if Buy is pressed before one.
 	var upgrade: Dictionary = data.upgrades[current_category][current_potential_upgrade]
 	if float(upgrade.effect) <= float(data.upgrades[current_category][data.current_upgrades[current_category]].effect):
@@ -720,6 +750,8 @@ func _update_fuel_bar() -> void:
 	_text(p.fuel_display_text, "%.1f/%.0f gal" % [data.player_fuel, data.player_max_fuel])
 
 func addFuel(dollar_amount: int) -> void:
+	if not _can_trade("FuelShopManager"):
+		return
 	if data.player_fuel >= data.player_max_fuel:
 		_shop_popup("FuelShopManager", "Tank is full!")
 		audio.PlaySoundOneShot("Error2")
@@ -774,6 +806,8 @@ func updateItemInformationScreen(item_name: String) -> void:
 	audio.PlaySoundOneShot("SelectUpgrade")
 
 func buyItem() -> void:
+	if not _can_trade("ItemShopManager"):
+		return
 	var price: int = int(data.items[currently_selected_item].price)
 	if data.tryToBuy(price):
 		data.addItem(currently_selected_item)
@@ -785,6 +819,8 @@ func buyItem() -> void:
 	_update_item_display()
 
 func addHull(dollar_amount: int) -> void:
+	if not _can_trade("ItemShopManager"):
+		return
 	if data.player_hp == data.player_max_hp:
 		_shop_popup("ItemShopManager", "No damage to repair!")
 		audio.PlaySoundOneShot("Error2")
@@ -821,6 +857,8 @@ func _update_mineral_buyer() -> void:
 	_text(_child(grid, "SellAllButton/TotalValue"), "$" + _grouped(total))
 
 func sellAllMinerals() -> void:
+	if not _can_trade("MineralBuyerManager"):
+		return
 	var total: int = data.sellCargo()
 	updateMoneyUI()
 	_update_mineral_buyer()

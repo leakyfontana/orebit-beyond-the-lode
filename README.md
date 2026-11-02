@@ -194,6 +194,73 @@ python -m unittest discover -s automation/coop -p 'test_*.py' -v
 verification/tools/Godot.app/Contents/MacOS/Godot --headless --path godot --script ../verification/fuel_pricing_interop.gd
 ```
 
+## PvP mining sandbox · 0.6.0
+
+Choose **PvP · mining sandbox [BETA]**, launch with `--mode=pvp`, or use
+`?mode=pvp` on Web. This ongoing sandbox has no match timer, winner or campaign
+ending. The existing service hosts separate persistent co-op and PvP worlds,
+each with five human-player slots. **Practice bots are not included in this release.**
+Private saves and existing co-op progress remain unchanged.
+
+PvP uses the original 36-column mine and Sinclair, without Ria or the western
+extension. The mode reuses co-op's responsive green header, compact player count
+and MODES / ACCOUNTS icon. Its chooser explicitly identifies the mode as unfinished.
+
+- Stock hull is 10 HP. Directional drill contact works on the ground and in flight;
+  damage integrates elapsed time rather than packet count. Passive player contact
+  causes no damage. Genuine hard terrain landings can still damage hull.
+- Explosives consume inventory and cannot damage their owner. The server owns
+  combat, cash collection and death/respawn deadlines. Motion acknowledgements
+  rebase corrections over newer local movement instead of rewinding the vehicle.
+- Unsupported rock/lava falls with normal gravity. Detachment redraws neighboring
+  earth borders. Impact plays the break/splash animation, then keeps its final
+  broken/puddle frame while blinking faster until removal at 2.5 seconds. Late
+  snapshots cannot restore intact sprites or resurrect expired residue.
+- Death drops all cash. Bags fall in their column onto solid earth, fall again
+  when support is removed, and credit their full amount once when touched or
+  hovered over within 0.1 tile of hull clearance. Earth blocks collection.
+- After ten seconds, respawn restores stock upgrades, full stock hull and fuel,
+  retaining remaining cargo, items and transmissions but granting no cash.
+  Fuel exhaustion preserves the original two-part wreck animation and sounds,
+  and triggers the same cash-drop/respawn sequence.
+- The translucent respawn overlay keeps the live mine visible and reuses the
+  original metal frame, green CRT glass and Arial Black menu motif. It waits for
+  authoritative respawn rather than leaving a zero-second countdown onscreen.
+- Fuel, mineral, upgrade and item shops are server-authorized safe interiors:
+  entering removes the vehicle from the mine, pauses fuel and prevents damage,
+  attacks, mining, outside pickups and obstruction. Entry requires proximity to
+  the real door. A blocked exit remains protected until a safe position is found.
+  Inventory, help and options do not grant safety.
+- PvP account state persists separately from co-op; anonymous progress ends on
+  departure. Transmission rewards cannot be farmed through death or stale state.
+
+Deploy `pvp.py` together with the updated `server.py` and `terrain.py` before
+publishing clients. Startup adds separate PvP tables/world state without resetting
+the existing SQLite database. Keep the service's existing OAuth configuration.
+
+Initial damage values remain playtest tunables:
+
+| Attack | Default | Service environment variable |
+| --- | ---: | --- |
+| Dynamite | 4 HP | `OREBIT_PVP_DYNAMITE_DAMAGE` |
+| Plastic explosives | 7 HP | `OREBIT_PVP_PLASTIC_DAMAGE` |
+| Falling rock | 3 HP | `OREBIT_PVP_ROCK_DAMAGE` |
+| Falling/drilled lava | 5 HP | `OREBIT_PVP_LAVA_DAMAGE` |
+| Drill contact | 2 HP/second | `OREBIT_PVP_DRILL_DPS` |
+
+Verification uses disposable databases and isolated native fixtures:
+
+```sh
+python -m unittest discover -s automation/coop -p 'test_*.py' -v
+python verification/pvp_sandbox_smoke.py
+verification/tools/Godot.app/Contents/MacOS/Godot --headless --path godot --script ../verification/pvp_impact_interop.gd -- --mode=private --coop-url=http://127.0.0.1:1 --coop-token= --seed=1
+```
+
+macOS CI additionally runs the native PvP state, crash, drill, terrain, impact,
+fuel and building regressions. The five-client WebSocket smoke checks independent
+co-op/PvP capacity, combat, bag collection and real ten-second respawn. Impact art
+can be regenerated with `verification/generate_impact_art.py` and Pillow.
+
 ## Private play and cross-platform co-op
 
 The startup chooser keeps private on-device play separate from a shared co-op
