@@ -202,14 +202,18 @@ func _load_scene(which: String) -> void:
 		terrain.configure(world, data, bridge)
 		_setup_player()
 		_setup_static_collisions()
-		boss = PortBoss.new()
-		add_child(boss)
-		boss.configure(self)
+		if not data.pvp_mode:
+			boss = PortBoss.new()
+			add_child(boss)
+			boss.configure(self)
 		_install_fuel_station()
 		audio.PlayMusic("MainLevelMusic")
 	for id in bridge.scene.game_objects:
 		var visual := bridge.nodes.get(id) as CanvasItem
 		if visual == null or id == player_go:
+			continue
+		if data.pvp_mode and (not bridge.properties(id, "MotherShipManager").is_empty() or not bridge.properties(id, "P1BossMethods").is_empty() or not bridge.properties(id, "P2BossMethods").is_empty() or not bridge.properties(id, "P1LaserAttackBehavior").is_empty()):
+			visual.hide()
 			continue
 		if boss != null and (boss.owned_root_ids.has(str(id)) or not bridge.properties(id, "P1LaserAttackBehavior").is_empty()):
 			continue
@@ -251,7 +255,7 @@ func _setup_player() -> void:
 	body = RigidBody2D.new()
 	body.name = "PlayerPhysics"
 	body.collision_layer = 2
-	body.collision_mask = 1
+	body.collision_mask = 3 if data.pvp_mode else 1
 	body.lock_rotation = true
 	body.contact_monitor = true
 	body.max_contacts_reported = 16
@@ -367,6 +371,8 @@ func _setup_static_collisions() -> void:
 		var area: Area2D
 		for component in bridge.components(id):
 			var script: String = component.get("script", "")
+			if data.pvp_mode and script == "StartBossfightTrigger":
+				continue
 			if script in ["ShopDoorCollision", "ExitShopDoorCollision", "TransmissionTrigger", "StartBossfightTrigger", "BackgroundChangeColorTrigger"]:
 				if area == null:
 					area = Area2D.new()
@@ -425,7 +431,7 @@ func _setup_static_collisions() -> void:
 		for component in bridge.components(id):
 			if component.get("type", "").ends_with("Collider2D") and not bool(component.properties.get("m_IsTrigger", false)):
 				_add_shape(solid, component, visual.global_scale)
-		if data.coop_mode:
+		if data.coop_mode and not data.pvp_mode:
 			_extend_surface_boundary(solid, str(bridge.scene.game_objects[id].get("name", "")))
 
 func _extend_surface_boundary(solid: StaticBody2D, boundary_name: String) -> void:

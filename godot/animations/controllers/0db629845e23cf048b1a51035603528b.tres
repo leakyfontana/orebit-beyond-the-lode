@@ -538,6 +538,20 @@ tracks/2/keys = {
 "update": 0,
 "values": [Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0)]
 }
+tracks/3/type = "method"
+tracks/3/imported = false
+tracks/3/enabled = true
+tracks/3/path = NodePath(".")
+tracks/3/interp = 1
+tracks/3/loop_wrap = true
+tracks/3/keys = {
+"times": PackedFloat32Array(0.3),
+"transitions": PackedFloat32Array(1),
+"values": [{
+"args": [&"g_n2448444912747755359", false],
+"method": &"_native_gate"
+}]
+}
 metadata/sprite_tracks = PackedInt32Array(0, 1, 2)
 metadata/boundaries = PackedFloat64Array(0.3)
 metadata/source_state = "2005960051420627150"
@@ -812,6 +826,20 @@ tracks/2/keys = {
 "transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1),
 "update": 0,
 "values": [Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0)]
+}
+tracks/3/type = "method"
+tracks/3/imported = false
+tracks/3/enabled = true
+tracks/3/path = NodePath(".")
+tracks/3/interp = 1
+tracks/3/loop_wrap = true
+tracks/3/keys = {
+"times": PackedFloat32Array(0.2),
+"transitions": PackedFloat32Array(1),
+"values": [{
+"args": [&"g_7467701112927302133", false],
+"method": &"_native_gate"
+}]
 }
 metadata/sprite_tracks = PackedInt32Array(0, 1, 2)
 metadata/boundaries = PackedFloat64Array(0.2)
@@ -1234,6 +1262,20 @@ tracks/2/keys = {
 "update": 0,
 "values": [Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0)]
 }
+tracks/3/type = "method"
+tracks/3/imported = false
+tracks/3/enabled = true
+tracks/3/path = NodePath(".")
+tracks/3/interp = 1
+tracks/3/loop_wrap = true
+tracks/3/keys = {
+"times": PackedFloat32Array(0.4),
+"transitions": PackedFloat32Array(1),
+"values": [{
+"args": [&"g_3440132683972288564", false],
+"method": &"_native_gate"
+}]
+}
 metadata/sprite_tracks = PackedInt32Array(0, 1, 2)
 metadata/boundaries = PackedFloat64Array(0.4)
 metadata/source_state = "6833526006177501524"
@@ -1593,6 +1635,20 @@ tracks/3/keys = {
 "times": PackedFloat32Array(0.13333334),
 "transitions": PackedFloat32Array(1),
 "values": [{
+"args": [&"g_n6270139479140675948", false],
+"method": &"_native_gate"
+}]
+}
+tracks/4/type = "method"
+tracks/4/imported = false
+tracks/4/enabled = true
+tracks/4/path = NodePath(".")
+tracks/4/interp = 1
+tracks/4/loop_wrap = true
+tracks/4/keys = {
+"times": PackedFloat32Array(0.13333334),
+"transitions": PackedFloat32Array(1),
+"values": [{
 "args": [&"end_s_n4834799886500151198"],
 "method": &"_native_endpoint"
 }]
@@ -1651,6 +1707,20 @@ tracks/3/keys = {
 "times": PackedFloat32Array(0.05),
 "transitions": PackedFloat32Array(1),
 "values": [{
+"args": [&"g_n4810120314705439493", false],
+"method": &"_native_gate"
+}]
+}
+tracks/4/type = "method"
+tracks/4/imported = false
+tracks/4/enabled = true
+tracks/4/path = NodePath(".")
+tracks/4/interp = 1
+tracks/4/loop_wrap = true
+tracks/4/keys = {
+"times": PackedFloat32Array(0.05),
+"transitions": PackedFloat32Array(1),
+"values": [{
 "args": [&"end_s_n6159084942248220344"],
 "method": &"_native_endpoint"
 }]
@@ -1697,6 +1767,20 @@ tracks/2/keys = {
 "transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
 "update": 0,
 "values": [Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0)]
+}
+tracks/3/type = "method"
+tracks/3/imported = false
+tracks/3/enabled = true
+tracks/3/path = NodePath(".")
+tracks/3/interp = 1
+tracks/3/loop_wrap = true
+tracks/3/keys = {
+"times": PackedFloat32Array(0.4),
+"transitions": PackedFloat32Array(1),
+"values": [{
+"args": [&"g_683922446487183122", false],
+"method": &"_native_gate"
+}]
 }
 metadata/sprite_tracks = PackedInt32Array(0, 1, 2)
 metadata/boundaries = PackedFloat64Array(0.4)
@@ -1756,6 +1840,20 @@ tracks/2/keys = {
 "transitions": PackedFloat32Array(1, 1, 1, 1),
 "update": 0,
 "values": [Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0)]
+}
+tracks/3/type = "method"
+tracks/3/imported = false
+tracks/3/enabled = true
+tracks/3/path = NodePath(".")
+tracks/3/interp = 1
+tracks/3/loop_wrap = true
+tracks/3/keys = {
+"times": PackedFloat32Array(0.13333334),
+"transitions": PackedFloat32Array(1),
+"values": [{
+"args": [&"g_n7767678885379209003", false],
+"method": &"_native_gate"
+}]
 }
 metadata/sprite_tracks = PackedInt32Array(0, 1, 2)
 metadata/boundaries = PackedFloat64Array(0.13333334)
@@ -1819,6 +1917,20 @@ tracks/2/keys = {
 "transitions": PackedFloat32Array(1, 1, 1, 1, 1),
 "update": 0,
 "values": [Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0), Vector2(0, 0)]
+}
+tracks/3/type = "method"
+tracks/3/imported = false
+tracks/3/enabled = true
+tracks/3/path = NodePath(".")
+tracks/3/interp = 1
+tracks/3/loop_wrap = true
+tracks/3/keys = {
+"times": PackedFloat32Array(0.16666667),
+"transitions": PackedFloat32Array(1),
+"values": [{
+"args": [&"g_6983900492467537235", false],
+"method": &"_native_gate"
+}]
 }
 metadata/sprite_tracks = PackedInt32Array(0, 1, 2)
 metadata/boundaries = PackedFloat64Array(0.16666667)
@@ -2209,7 +2321,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_illgq"]
 priority = 6
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsStillPressingDown\"] and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsStillPressingDown\"] and native_gates[\"g_n6270139479140675948\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_odxjn"]
 advance_mode = 2
@@ -2244,7 +2356,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 xfade_time = 0.25
 priority = 7
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsDiggingSide\"] and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsDiggingSide\"] and native_gates[\"g_n4810120314705439493\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_m65sd"]
 advance_mode = 2
@@ -2268,7 +2380,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_5krlx"]
 priority = 5
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_gates[\"g_683922446487183122\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_gsxpk"]
 priority = 6
@@ -2297,7 +2409,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_3h4ki"]
 priority = 5
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_gates[\"g_n7767678885379209003\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_rp3rd"]
 advance_mode = 2
@@ -2321,7 +2433,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_qfw48"]
 priority = 5
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_gates[\"g_6983900492467537235\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_5enxn"]
 advance_mode = 2
@@ -2359,7 +2471,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_2jf0p"]
 priority = 4
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_gates[\"g_n2448444912747755359\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_q7gsr"]
 advance_mode = 2
@@ -2402,7 +2514,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_cvdgr"]
 priority = 5
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_gates[\"g_7467701112927302133\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_x1d6p"]
 priority = 6
@@ -2479,7 +2591,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_fmdq8"]
 priority = 4
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_gates[\"g_3440132683972288564\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_jqt16"]
 priority = 5
@@ -2551,7 +2663,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_x0wd6"]
 priority = 4
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_gates[\"g_3440132683972288564\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_lepfb"]
 priority = 5
@@ -2585,7 +2697,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_bqgqc"]
 priority = 4
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_gates[\"g_3440132683972288564\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_eq804"]
 priority = 5
@@ -2619,7 +2731,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_n5sd8"]
 priority = 4
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_gates[\"g_n2448444912747755359\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_gwb2q"]
 advance_mode = 2
@@ -2638,7 +2750,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_7i6ln"]
 priority = 4
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_gates[\"g_n2448444912747755359\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_dcl2c"]
 advance_mode = 2
@@ -2749,7 +2861,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 xfade_time = 0.25
 priority = 7
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsDiggingSide\"] and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsDiggingSide\"] and native_gates[\"g_n4810120314705439493\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_6ih45"]
 advance_mode = 2
@@ -2784,7 +2896,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 xfade_time = 0.25
 priority = 7
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsDiggingSide\"] and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsDiggingSide\"] and native_gates[\"g_n4810120314705439493\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_wmjf3"]
 advance_mode = 2
@@ -2819,7 +2931,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 xfade_time = 0.25
 priority = 7
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsDiggingSide\"] and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsDiggingSide\"] and native_gates[\"g_n4810120314705439493\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_s00n4"]
 advance_mode = 2
@@ -2854,7 +2966,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 xfade_time = 0.25
 priority = 7
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsDiggingSide\"] and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsDiggingSide\"] and native_gates[\"g_n4810120314705439493\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_pu2wp"]
 advance_mode = 2
@@ -2878,7 +2990,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_47433"]
 priority = 5
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_gates[\"g_6983900492467537235\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_0goi4"]
 advance_mode = 2
@@ -2902,7 +3014,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_8213b"]
 priority = 5
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_gates[\"g_6983900492467537235\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_twfbm"]
 advance_mode = 2
@@ -2926,7 +3038,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_gvb36"]
 priority = 5
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_gates[\"g_7467701112927302133\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_cq645"]
 priority = 6
@@ -2960,7 +3072,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_0skfl"]
 priority = 5
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_gates[\"g_7467701112927302133\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_n08yf"]
 priority = 6
@@ -2999,7 +3111,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_2t76u"]
 priority = 6
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsStillPressingDown\"] and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsStillPressingDown\"] and native_gates[\"g_n6270139479140675948\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_hdpqk"]
 advance_mode = 2
@@ -3028,7 +3140,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_ax2ux"]
 priority = 6
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsStillPressingDown\"] and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsStillPressingDown\"] and native_gates[\"g_n6270139479140675948\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_8peem"]
 advance_mode = 2
@@ -3120,7 +3232,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_i2d74"]
 priority = 5
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_gates[\"g_6983900492467537235\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_jcdsc"]
 advance_mode = 2
@@ -3144,7 +3256,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_uu2oq"]
 priority = 5
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_gates[\"g_6983900492467537235\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_vpm5v"]
 advance_mode = 2
@@ -3247,7 +3359,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 xfade_time = 0.25
 priority = 7
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsDiggingSide\"] and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsDiggingSide\"] and native_gates[\"g_n4810120314705439493\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_rk70v"]
 advance_mode = 2
@@ -3282,7 +3394,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 xfade_time = 0.25
 priority = 7
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsDiggingSide\"] and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsDiggingSide\"] and native_gates[\"g_n4810120314705439493\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_aybtd"]
 advance_mode = 2
@@ -3306,7 +3418,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_1rf2c"]
 priority = 5
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_gates[\"g_6983900492467537235\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_dg1tb"]
 advance_mode = 2
@@ -3330,7 +3442,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_48d5n"]
 priority = 5
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_gates[\"g_6983900492467537235\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_rti4b"]
 advance_mode = 2
@@ -3423,7 +3535,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 xfade_time = 0.25
 priority = 7
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsDiggingSide\"] and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsDiggingSide\"] and native_gates[\"g_n4810120314705439493\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_xrcmn"]
 advance_mode = 2
@@ -3458,7 +3570,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 xfade_time = 0.25
 priority = 7
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsDiggingSide\"] and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsDiggingSide\"] and native_gates[\"g_n4810120314705439493\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_8t6h1"]
 advance_mode = 2
@@ -3493,7 +3605,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 xfade_time = 0.25
 priority = 7
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsDiggingSide\"] and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsDiggingSide\"] and native_gates[\"g_n4810120314705439493\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_n34gm"]
 advance_mode = 2
@@ -3528,7 +3640,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 xfade_time = 0.25
 priority = 7
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsDiggingSide\"] and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsDiggingSide\"] and native_gates[\"g_n4810120314705439493\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_5g68y"]
 advance_mode = 2
@@ -3557,7 +3669,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_5l075"]
 priority = 6
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsStillPressingDown\"] and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsStillPressingDown\"] and native_gates[\"g_n6270139479140675948\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_7lkmp"]
 advance_mode = 2
@@ -3586,7 +3698,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_e75nk"]
 priority = 6
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsStillPressingDown\"] and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsStillPressingDown\"] and native_gates[\"g_n6270139479140675948\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_afitu"]
 advance_mode = 2
@@ -3621,7 +3733,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 xfade_time = 0.25
 priority = 7
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsDiggingSide\"] and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsDiggingSide\"] and native_gates[\"g_n4810120314705439493\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_laiwo"]
 advance_mode = 2
@@ -3656,7 +3768,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 xfade_time = 0.25
 priority = 7
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsDiggingSide\"] and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsDiggingSide\"] and native_gates[\"g_n4810120314705439493\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_utsms"]
 advance_mode = 2
@@ -3680,7 +3792,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_xrulh"]
 priority = 5
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_gates[\"g_6983900492467537235\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_shps7"]
 advance_mode = 2
@@ -3704,7 +3816,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_dsslh"]
 priority = 5
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_gates[\"g_6983900492467537235\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_co4s2"]
 advance_mode = 2
@@ -3723,7 +3835,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_h5fi5"]
 priority = 4
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_gates[\"g_n2448444912747755359\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_vvqkm"]
 advance_mode = 2
@@ -3742,7 +3854,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_rihlf"]
 priority = 4
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_gates[\"g_n2448444912747755359\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_4l4o8"]
 advance_mode = 2
@@ -3766,7 +3878,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_fap6w"]
 priority = 5
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_gates[\"g_683922446487183122\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_scob3"]
 priority = 6
@@ -3795,7 +3907,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_kdd5d"]
 priority = 5
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_gates[\"g_683922446487183122\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_b44hl"]
 priority = 6
@@ -3824,7 +3936,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_womcu"]
 priority = 5
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_gates[\"g_n7767678885379209003\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_0lheb"]
 advance_mode = 2
@@ -3848,7 +3960,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_xkv2e"]
 priority = 5
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_gates[\"g_n7767678885379209003\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_n5fdx"]
 advance_mode = 2
@@ -3930,7 +4042,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_6x266"]
 priority = 5
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_gates[\"g_n7767678885379209003\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_32rie"]
 advance_mode = 2
@@ -3954,7 +4066,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_vgvyu"]
 priority = 5
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_gates[\"g_n7767678885379209003\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_eprmd"]
 advance_mode = 2
@@ -3989,7 +4101,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 xfade_time = 0.25
 priority = 7
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsDiggingSide\"] and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsDiggingSide\"] and native_gates[\"g_n4810120314705439493\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_dc75c"]
 advance_mode = 2
@@ -4024,7 +4136,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 xfade_time = 0.25
 priority = 7
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsDiggingSide\"] and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsDiggingSide\"] and native_gates[\"g_n4810120314705439493\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_wr2lg"]
 advance_mode = 2
@@ -4059,7 +4171,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 xfade_time = 0.25
 priority = 7
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsDiggingSide\"] and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsDiggingSide\"] and native_gates[\"g_n4810120314705439493\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_1m6uw"]
 advance_mode = 2
@@ -4094,7 +4206,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 xfade_time = 0.25
 priority = 7
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsDiggingSide\"] and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsDiggingSide\"] and native_gates[\"g_n4810120314705439493\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_naf3q"]
 advance_mode = 2
@@ -4129,7 +4241,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 xfade_time = 0.25
 priority = 7
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsDiggingSide\"] and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsDiggingSide\"] and native_gates[\"g_n4810120314705439493\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_wts1o"]
 advance_mode = 2
@@ -4164,7 +4276,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 xfade_time = 0.25
 priority = 7
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsDiggingSide\"] and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"IsDiggingSide\"] and native_gates[\"g_n4810120314705439493\"]"
 
 [sub_resource type="AnimationNodeStateMachine" id="AnimationNodeStateMachine_0k0u0"]
 states/s_2005960051420627150/node = SubResource("AnimationNodeAnimation_dov2f")
@@ -6519,4 +6631,4 @@ states = {
 "triggers": Array[String]([])
 }
 }
-gates = PackedStringArray("g_n5450166392525615064", "g_4759103729596582498")
+gates = PackedStringArray("g_n6270139479140675948", "g_n4810120314705439493", "g_683922446487183122", "g_n7767678885379209003", "g_6983900492467537235", "g_n5450166392525615064", "g_n2448444912747755359", "g_7467701112927302133", "g_3440132683972288564", "g_4759103729596582498")

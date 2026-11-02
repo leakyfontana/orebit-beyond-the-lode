@@ -260,6 +260,20 @@ tracks/4/keys = {
 "times": PackedFloat32Array(0.3),
 "transitions": PackedFloat32Array(1),
 "values": [{
+"args": [&"g_n7815225387213984483", false],
+"method": &"_native_gate"
+}]
+}
+tracks/5/type = "method"
+tracks/5/imported = false
+tracks/5/enabled = true
+tracks/5/path = NodePath(".")
+tracks/5/interp = 1
+tracks/5/loop_wrap = true
+tracks/5/keys = {
+"times": PackedFloat32Array(0.3),
+"transitions": PackedFloat32Array(1),
+"values": [{
 "args": [&"end_s_n125897631529229563"],
 "method": &"_native_endpoint"
 }]
@@ -376,6 +390,20 @@ tracks/4/keys = {
 "times": PackedFloat32Array(0.4),
 "transitions": PackedFloat32Array(1),
 "values": [{
+"args": [&"g_n7815225387213984483", false],
+"method": &"_native_gate"
+}]
+}
+tracks/5/type = "method"
+tracks/5/imported = false
+tracks/5/enabled = true
+tracks/5/path = NodePath(".")
+tracks/5/interp = 1
+tracks/5/loop_wrap = true
+tracks/5/keys = {
+"times": PackedFloat32Array(0.4),
+"transitions": PackedFloat32Array(1),
+"values": [{
 "args": [&"end_s_n1482822014182189825"],
 "method": &"_native_endpoint"
 }]
@@ -480,6 +508,20 @@ tracks/4/keys = {
 "times": PackedFloat32Array(0.3),
 "transitions": PackedFloat32Array(1),
 "values": [{
+"args": [&"g_n7815225387213984483", false],
+"method": &"_native_gate"
+}]
+}
+tracks/5/type = "method"
+tracks/5/imported = false
+tracks/5/enabled = true
+tracks/5/path = NodePath(".")
+tracks/5/interp = 1
+tracks/5/loop_wrap = true
+tracks/5/keys = {
+"times": PackedFloat32Array(0.3),
+"transitions": PackedFloat32Array(1),
+"values": [{
 "args": [&"end_s_n9007855781577563386"],
 "method": &"_native_endpoint"
 }]
@@ -527,7 +569,7 @@ animation = &"s_n1482822014182189825"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_shto6"]
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"ExplosionNumber\"] == 1.0 and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"ExplosionNumber\"] == 1.0 and native_gates[\"g_n7815225387213984483\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_t417c"]
 priority = 2
@@ -545,7 +587,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_2yhd4"]
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"ExplosionNumber\"] == 1.0 and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"ExplosionNumber\"] == 1.0 and native_gates[\"g_n7815225387213984483\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_p0h5b"]
 priority = 2
@@ -572,7 +614,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_7stsa"]
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"ExplosionNumber\"] == 1.0 and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"ExplosionNumber\"] == 1.0 and native_gates[\"g_n7815225387213984483\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_bbhbq"]
 priority = 2
@@ -581,7 +623,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_a6vjr"]
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"ExplosionNumber\"] == 1.0 and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"ExplosionNumber\"] == 1.0 and native_gates[\"g_n7815225387213984483\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_a50dh"]
 priority = 2
@@ -590,7 +632,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_q51if"]
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"ExplosionNumber\"] == 1.0 and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"ExplosionNumber\"] == 1.0 and native_gates[\"g_n7815225387213984483\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_qslmr"]
 priority = 2
@@ -599,7 +641,7 @@ advance_expression = "native_transition_available and native_playback.get_fading
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_71jcf"]
 advance_mode = 2
-advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"ExplosionNumber\"] == 1.0 and native_playback.get_current_play_position() > 0.0"
+advance_expression = "native_transition_available and native_playback.get_fading_from_node() == \"\" and native_parameters[\"ExplosionNumber\"] == 1.0 and native_gates[\"g_n7815225387213984483\"]"
 
 [sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_w0wfs"]
 priority = 2
@@ -838,4 +880,4 @@ states = {
 "triggers": Array[String]([])
 }
 }
-gates = PackedStringArray()
+gates = PackedStringArray("g_n7815225387213984483")

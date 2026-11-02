@@ -2062,5 +2062,5 @@
 	},
 	"track_documentation": "https://docs.godotengine.org/en/stable/tutorials/animation/animation_track_types.html",
 	"used_clips": 44,
-	"zero_exit_evaluation": "Native positive playback time; one source transition per Update"
+	"zero_exit_evaluation": "Native clip-end method gate, repeating for loops; one source transition per Update"
 }

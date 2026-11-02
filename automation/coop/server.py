@@ -35,6 +35,7 @@ from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError
 
 from fuel_prices import FuelPrices, PriceUnavailable
+from pvp import PvpWorld
 from terrain import HEIGHT, MIN_X, WIDTH, WEIGHTS, award, generate, tile_name
 from telemetry import configure_logging, event as log_event, log_context
 
@@ -187,6 +188,10 @@ class Player:
     mine_accepted: int = 0
     mine_rejected: int = 0
     mine_duplicates: int = 0
+    moved_at: float = field(default_factory=time.monotonic)
+    contact_at: float = field(default_factory=time.monotonic)
+    damage_times: dict = field(default_factory=dict)
+    motion_seq: int = 0
 
     def public(self):
         return {"player_id": self.player_id, "name": self.name, "state": self.state}
@@ -221,6 +226,7 @@ class Service:
         self.excavated = set()
         self.http: ClientSession | None = None
         self.fuel_prices: FuelPrices | None = None
+        self.pvp = PvpWorld(self, APIError)
 
     async def startup(self, app):
         asyncio.get_running_loop().set_exception_handler(
@@ -236,6 +242,7 @@ class Service:
             return seed, cells
         self.seed, self.excavated = await self.store.run(load)
         self.terrain = await asyncio.to_thread(generate, self.seed)
+        await self.pvp.startup()
         self.http = ClientSession(timeout=ClientTimeout(total=20), raise_for_status=True)
         self.fuel_prices = FuelPrices(
             user_agent=f"OrebitBeyondTheLode/1.0 (+{self.public_url})",
@@ -243,7 +250,8 @@ class Service:
         log_event("startup", world_id=self.world_id, members=len(self.members))
 
     async def shutdown(self, app):
-        players = list(self.members.values())
+        await self.pvp.stop()
+        players = [*self.members.values(), *self.pvp.members.values()]
         results = await asyncio.gather(*(p.socket.close(code=1001, message=b"Server shutting down; reconnect to resume") for p in players), return_exceptions=True)
         for player, result in zip(players, results):
             if isinstance(result, BaseException):
@@ -360,7 +368,7 @@ class Service:
         request["user_id"] = user["id"]
         hashed = digest(token)
         await self.store.run(lambda db: db.execute("DELETE FROM tokens WHERE hash=?", (hashed,)))
-        for player in list(self.members.values()):
+        for player in [*self.members.values(), *self.pvp.members.values()]:
             if player.token_hash == hashed:
                 await player.socket.close(code=1008, message=b"Signed out")
         log_event("auth_success", operation="native_logout", user_id=user["id"])
@@ -539,7 +547,7 @@ class Service:
         return web.json_response(result)
 
     async def health(self, request):
-        return web.json_response({"status": "ok", "protocol": 1, "world_id": self.world_id, "players": len(self.members), "capacity": 5, "discord_configured": bool(self.client_id and self.client_secret)})
+        return web.json_response({"status": "ok", "protocol": 1, "world_id": self.world_id, "players": len(self.members), "capacity": 5, "modes": {"coop": {"players": len(self.members), "capacity": 5}, "pvp": {"players": len(self.pvp.members), "capacity": 5}}, "discord_configured": bool(self.client_id and self.client_secret)})
 
     async def send(self, player, message):
         try:
@@ -553,7 +561,7 @@ class Service:
     async def broadcast(self, message, exclude=None):
         await asyncio.gather(*(self.send(p, message) for p in list(self.members.values()) if p is not exclude))
 
-    def validate_state(self, state):
+    def validate_state(self, state, *, open_sky=False):
         if not isinstance(state, dict) or set(state) - STATE_KEYS:
             raise APIError("invalid_state", "Invalid player state fields.")
         try:
@@ -570,7 +578,7 @@ class Service:
                     raise APIError("invalid_state", "Invalid player numeric value.")
                 if key == "x" and not -15 <= value <= WIDTH + 5:
                     raise APIError("invalid_state", "Player position is outside this world.")
-                if key == "y" and not -HEIGHT - 10 <= value <= 20:
+                if key == "y" and (value < -HEIGHT - 10 or (not open_sky and value > 20)):
                     raise APIError("invalid_state", "Player position is outside this world.")
                 minimum = {"player_money": 0, "player_hp": -10000, "player_fuel": -100}.get(key)
                 if minimum is not None and value < minimum:
@@ -718,6 +726,7 @@ class Service:
             contexts.enter_context(log_context(session_id=request["request_id"]))
             log_event("session_upgrade", status=101, duration_ms=(started - request["started"]) * 1000)
             player = None
+            world = self
             received = 0
             self.joining += 1
             try:
@@ -733,26 +742,32 @@ class Service:
                     raise APIError("join_required", "Send a join object first.")
                 if join.get("world_id", self.world_id) != self.world_id:
                     raise APIError("world_not_found", "That server world does not exist.", 404)
+                mode = join.get("mode", "coop")
+                if mode not in ("coop", "pvp"):
+                    raise APIError("invalid_mode", "Choose coop or pvp.")
+                world = self.pvp if mode == "pvp" else self
                 token = join.get("token", "")
                 user = await self.lookup_token(token) if token else None
                 if user:
                     request["user_id"] = user["id"]
                     contexts.enter_context(log_context(user_id=user["id"]))
-                async with self.world_lock:
-                    if len(self.members) >= 5:
+                async with world.world_lock:
+                    if len(world.members) >= 5:
                         raise APIError("server_full", "This server has five players. Please try again when a place opens.", 409)
-                    if user and any(p.user_id == user["id"] for p in self.members.values()):
+                    if user and any(p.user_id == user["id"] for p in world.members.values()):
                         raise APIError("already_connected", "This account is already connected to this server.", 409)
-                    row = await self.store.run(lambda db: db.execute("SELECT state,revision FROM player_states WHERE world_id=? AND user_id=?", (self.world_id, user["id"])).fetchone()) if user else None
+                    row = await self.store.run(lambda db: db.execute("SELECT state,revision FROM player_states WHERE world_id=? AND user_id=?", (world.world_id, user["id"])).fetchone()) if user else None
                     player = Player(socket, secrets.token_hex(8), user["display_name"] if user else "Anonymous " + secrets.token_hex(2), user["id"] if user else None, digest(token) if user else None, user["expires_at"] if user else 0, json.loads(row["state"]) if row else {}, row["revision"] if row else 0)
+                    if world is self.pvp:
+                        await world.prepare_player(player)
                     player.session_id = request["request_id"]
                     player.received = received
                     request["player_id"] = player.player_id
                     contexts.enter_context(log_context(player_id=player.player_id))
-                    self.members[player.player_id] = player
-                    log_event("session_join", members=len(self.members), joining=self.joining)
-                    await self.send(player, {"type": "joined", "player_id": player.player_id, "world_id": self.world_id, "seed": self.seed, "excavated": sorted(self.excavated), "players": [p.public() for p in self.members.values()], "state": player.state, "state_revision": player.revision})
-                    await self.broadcast({"type": "player_joined", "player": player.public()}, exclude=player)
+                    world.members[player.player_id] = player
+                    log_event("session_join", members=len(world.members), joining=self.joining)
+                    await self.send(player, {"type": "joined", "player_id": player.player_id, "world_id": self.world_id, "seed": world.seed, "excavated": sorted(world.excavated), "players": [p.public() for p in world.members.values()], "state": player.state, "state_revision": player.revision, **(world.join_details() if world is self.pvp else {})})
+                    await world.broadcast({"type": "player_joined", "player": world.public(player) if world is self.pvp else player.public()}, exclude=player)
                 async for incoming in socket:
                     if incoming.type != WSMsgType.TEXT:
                         if incoming.type == WSMsgType.ERROR:
@@ -774,13 +789,17 @@ class Service:
                         raise APIError("invalid_json", "Game messages must be valid JSON.")
                     if not isinstance(message, dict):
                         raise APIError("invalid_message", "Game messages must be JSON objects.")
-                    async with self.world_lock:
+                    async with world.world_lock:
                         if message.get("type") == "state":
-                            await self.update_state(player, message)
+                            await world.update_state(player, message)
                         elif message.get("type") == "mine":
-                            await self.mine(player, message)
+                            await world.mine(player, message)
                         elif message.get("type") == "transfer":
-                            await self.transfer(player, message)
+                            await world.transfer(player, message)
+                        elif message.get("type") in ("blast", "damage", "claim_transmission") and world is self.pvp:
+                            await world.action(player, message)
+                        elif message.get("type") == "building" and world is self.pvp:
+                            await world.building(player, message)
                         elif message.get("type") == "ping":
                             await self.send(player, {"type": "pong"})
                         elif message.get("type") == "leave":
@@ -815,13 +834,13 @@ class Service:
                 self.joining -= 1
                 try:
                     if player:
-                        async with self.world_lock:
-                            self.members.pop(player.player_id, None)
-                            await self.broadcast({"type": "player_left", "player_id": player.player_id})
+                        async with world.world_lock:
+                            world.members.pop(player.player_id, None)
+                            await world.broadcast({"type": "player_left", "player_id": player.player_id})
                 finally:
                     log_event(
                         "session_leave", duration_ms=(time.monotonic() - started) * 1000,
-                        close_code=socket.close_code, members=len(self.members), joining=self.joining,
+                        close_code=socket.close_code, members=len(world.members), joining=self.joining,
                         received=player.received if player else received, sent=player.sent if player else 0,
                         state_updates=player.state_updates if player else 0,
                         mine_accepted=player.mine_accepted if player else 0,

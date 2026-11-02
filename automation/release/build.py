@@ -427,10 +427,13 @@ def build(args):
                  "--touch-controls", "--mode=private",
                  "--coop-url=http://127.0.0.1:1", "--coop-token="],
                 cwd=work, env=environment)
-            for probe in ("spawn_impact_interop.gd", "close_target_interop.gd", "lobby_controller_interop.gd"):
+            for probe in ("spawn_impact_interop.gd", "close_target_interop.gd", "lobby_controller_interop.gd",
+                          "pvp_state_interop.gd", "pvp_crash_interop.gd", "pvp_drill_interop.gd",
+                          "pvp_terrain_interop.gd", "pvp_impact_interop.gd", "pvp_fuel_interop.gd",
+                          "pvp_building_interop.gd"):
                 run([godot, "--headless", "--path", project,
                      "--script", ROOT / "verification" / probe, "--",
-                     "--mode=private", "--coop-url=http://127.0.0.1:1", "--coop-token="],
+                     "--mode=private", "--coop-url=http://127.0.0.1:1", "--coop-token=", "--seed=1"],
                     cwd=work, env=environment)
         export = work / "export"
         export.mkdir()
