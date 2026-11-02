@@ -67,6 +67,39 @@ release. Deployment evidence is retained as the `beta-publication-evidence` work
 artifact and successful receipts as release assets. Do not announce candidates
 without a verified receipt.
 
+### Required release board reconciliation
+
+The release owner MUST update `automation/Orebit.tasks.md` for **every bug fix
+and feature request included in a release**; passing CI or publishing release
+notes does not complete the release handoff.
+
+- Before merging the release, reconcile its changes and release notes against
+  existing board cards by source identity and linked ticket, including stale
+  unchecked cards whose fixes already shipped. Do not implement an already-fixed
+  report again merely because its checkbox is unchecked.
+- For each fully implemented and verified request, move the existing card to
+  **Done** and check it. Preserve its source identity, tags, reporter text and
+  ticket link. Append verification commands/results and release status to the
+  linked ticket. A locally verified fix must explicitly say **not yet released**;
+  partial or unverified requests stay open with their remaining acceptance gaps.
+- After successful publication, record the actual version, source commit, release
+  URL and verified publication/CI evidence in each included ticket. Failed builds
+  and transport candidates are not shipped fixes. Reconcile any rollback with
+  the ticket's availability status rather than leaving a false shipping claim.
+- Before announcing or handing off the release, compare the published bug/feature
+  notes with the saved board and ticket evidence. Every matching request must have
+  an accurate lane, checkbox and shipped-version record. Note changes without an
+  existing request explicitly; do not invent a completed reporter request.
+
+When the authoritative board is open in Tern, use its existing native board API
+and preserve live edits; do not overwrite its buffer from a release worktree.
+Keep private board/report contents out of the public repository: update the
+authoritative local board and linked tickets through their native document API,
+then record the reconciliation in the PR/release handoff. Never force-add intake
+records or credentials merely to make a public release commit self-contained.
+The intake bot deliberately preserves triage status and does not perform this
+release reconciliation automatically.
+
 ### Historical version migration
 
 The initial verified four-platform release is `0.1.0`; the branding/controller/physics
@@ -82,6 +115,11 @@ adds the compact green modes/accounts header icon, aligns the player count with
 the hull/fuel captions, and fixes compact-window/live-resize header overlap.
 Server/account menus reuse the landing-page green styling without duplicate
 signed-in names. The native input/layout regression now runs in macOS CI builds.
+Release `0.5.3` fixes wide-screen arrival camera confinement, expands interaction
+close-button capture targets to at least 48 rendered pixels, and prevents
+scripted motion cancellation during bonus popups from causing impact-free crash
+damage. Real hard-landing damage remains intact. Native spawn/close/controller
+regressions now gate macOS builds, and release handoff requires board reconciliation.
 
 | Commit | Original version | Canonical version |
 | --- | --- | --- |
