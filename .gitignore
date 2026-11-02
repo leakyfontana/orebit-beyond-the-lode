@@ -7,6 +7,7 @@
 # Verification toolchains, captures and source-reference downloads stay local.
 /verification/*
 !/verification/build_web.py
+!/verification/bake_capture_build.py
 !/verification/box2d_build.json
 !/verification/box2d-godot-4.7.2.patch
 !/verification/box2d-fixture-shape-sync.patch
@@ -33,3 +34,7 @@
 __pycache__/
 *.pyc
 .DS_Store
+
+# Gameplay archives are private runtime data, not source.
+/captures/
+/automation/coop/captures/

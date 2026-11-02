@@ -1,0 +1,4 @@
+class_name GameplayCaptureBuild
+extends RefCounted
+
+const SOURCE_SHA256 := "6d2720374dbb01e0ac0e73b7839a803ba1be259941e38edf88cd64c5ecbefe86"

@@ -421,6 +421,249 @@ Discord retains identify-only authorization, state and PKCE; its documented
 consent for already-approved scopes. Native browser/return handling follows
 [RFC 8252](https://www.rfc-editor.org/rfc/rfc8252).
 
+### Always-on gameplay capture
+
+Normal private, co-op and PvP gameplay is recorded automatically, including
+anonymous play; there is no opt-in switch. Capture uses the configured co-op
+HTTP service even during private play. The isolated bot/training environment is
+not started by capture or export. This section describes the capture protocol
+and operating procedure, not a receipt for published clients or a VPS deployment.
+Manifest `actor` distinguishes normal runtime controls (`human`) from a configured
+replay runner (`replay`). Replay archives are not human demonstrations; export
+rejects mixing actor types and labels Minari provenance accordingly. Automated
+capture verification must use an isolated local service/archive root, not upload
+test fixtures to the live dataset.
+
+The client obtains an opaque, short-lived session capability from
+`POST /api/captures/session`, then uploads gzip JSONL to
+`POST /api/captures/{session_id}/chunks/{chunk_index}` with a separate Bearer
+capture token. Anonymous capability issuance is intentionally available; every
+chunk upload requires its capability, not a public arbitrary-file upload.
+Co-op/PvP link the capability to their WebSocket session for sanitized server
+event correlation. Tokens remain in memory and are never archived or put in URLs.
+The server validates a fixed allowlisted schema and writes canonical gzip JSONL,
+not arbitrary JSON or raw WebSocket packets.
+
+Archives contain observations before and after each applied movement interval,
+item use, shop entry/exit, purchases, sales and cargo drops, plus money/hull/fuel
+deltas, physics ticks, elapsed milliseconds and episode boundaries. Each chunk
+includes a checkpoint, seed, engine version and a SHA-256 runtime-source
+fingerprint; the fingerprint is **not** a release commit or complete binary hash.
+Observations include numeric player state, inventory, cargo, upgrade tier indices
+and a row-major visible local 9×9 terrain grid. Grid codes are -1 unknown/not
+visible, 0 traversable, 1 soil, 2 other solid, 3 lava, 4 gas and 10–19 minerals.
+This is a partial observation, **not** a full world/RNG snapshot or a promise of
+bit-exact replay. Credentials, chat, names, account identifiers, IP addresses and
+raw network messages are excluded. Random capture/episode IDs correlate archives,
+not accounts; behavioral captures are still private operator data.
+
+The source fingerprint concatenates each filename's UTF-8 bytes followed by its
+file bytes, without separators, in this fixed `godot/scripts/` order:
+`main.gd`, `port_player.gd`, `game_ui.gd`, `coop_client.gd`, `coop_session.gd`,
+`world_data.gd`, `game_data.gd`, `gameplay_capture.gd`. Before a direct Godot
+export, run `python3 verification/bake_capture_build.py` against the source project
+(or `--project <staged-project>` for a staging copy), **then** export that same
+project without changing those sources. The generated embedded fingerprint keeps
+provenance available when export strips script text. Release staging and
+`verification/build_web.py` perform this baking automatically.
+
+Physics ticks are at 50 Hz and may repeat while paused. Chunk rotation does not
+end an episode. Private death is terminal; scene changes, disconnect and deliberate
+shutdown are truncations. PvP death/respawn is a life event, not match termination.
+Separate authoritative records retain allowlisted outcomes and safe correlation
+sequences (and hashed request correlation where available), not account identities.
+An absent authoritative record is missing evidence, not an inferred success.
+
+#### Storage, failures and operator access
+
+`OREBIT_CAPTURE_DIR` overrides the archive root; otherwise it is `captures/`
+beside the service database. The VPS operator root is
+`/var/lib/orebit-coop/captures`, outside the public Web root, with service-owned
+0700 directories and 0600 files. Service code lives in `/srv/orebit-coop`.
+Session chunks are `<root>/<32hex-session>/<8digit-index>.jsonl.gz`;
+authoritative events are under the same session's
+`authority/<12digit-first-sequence>-<12digit-last-sequence>.jsonl.gz`, batched
+at up to 128 records or approximately one second. Copy both trees together using
+private operator access; there is no public archive browsing/download endpoint.
+The existing HTTPS `/coop` proxy is used; it needs no new public port.
+
+Storage pauses admission/writes at **80% filesystem usage**, accounting for the
+incoming write and a 16 MiB safety reserve. It never deletes archives to make room.
+Current protocol bounds are 256 KiB compressed / 2 MiB decompressed per upload,
+1,000 transitions per chunk, 4,096 chunk indices and a conservative 256 MiB
+session budget (compressed transition bytes plus raw authority reservations).
+Capabilities expire after 24 hours, at most 512 are active, and each permits
+120 chunk requests per minute.
+Capacity/rate limits, service restarts, expired capabilities and network failures
+must not pause gameplay or change game outcomes.
+
+The client flushes after at most 100 transitions, approximately 128 KiB raw data,
+or two seconds, and retains about 8 MiB of pending transition data in memory.
+Failed requests retry with exponential backoff capped at 60 seconds; an insecure
+non-loopback endpoint is not used. When the queue fills, newer chunks are dropped,
+with loss ranges reported when subsequent records survive. This is bounded
+buffering, **not** guaranteed capture delivery: there is no durable client spool.
+A deliberate window close allows only a bounded two-second flush grace; crashes,
+browser/tab termination and prolonged outages can lose the unsent tail, including
+its terminal record. Keep incomplete archives; do not invent transitions or
+declare an open chunk terminal. Server authoritative event buffering has a
+256-record pending queue and may leave sequence gaps under overload/storage
+failure. Surviving `server_gap` events report known authority-loss ranges; losing
+the socket before that notice can leave only missing referenced sequence evidence.
+
+For an isolated local run, set an explicit archive root rather than an existing
+private-data location:
+
+```sh
+OREBIT_CAPTURE_DIR=/tmp/orebit-capture /tmp/orebit-coop/bin/python \
+  automation/coop/server.py --db /tmp/orebit-capture.sqlite3
+# Launch a normal client with --coop-url=http://127.0.0.1:8765.
+```
+
+#### Validate and export to Minari
+
+The standalone exporter does not import the RL environment, launch Godot or
+train anything. Validation uses the server's strict stdlib-only schema validator.
+Export uses the real installed **Minari 0.5.4** HDF5 backend and **Gymnasium
+1.4.0**, with NumPy 2.x and Pillow (required by Minari's backend import).
+Dependencies are isolated from training requirements:
+
+```sh
+python3 -m venv /tmp/orebit-capture-export
+/tmp/orebit-capture-export/bin/python -m pip install -r orebit_rl/capture-requirements.txt
+python3 orebit_rl/capture_export.py validate /tmp/orebit-capture
+MINARI_DATASETS_PATH=/tmp/orebit-minari /tmp/orebit-capture-export/bin/python \
+  orebit_rl/capture_export.py export /tmp/orebit-capture --dataset-id orebit/capture-v0
+```
+
+Use an archive root, a single session directory, or explicit chunk files as inputs.
+Schema/build/engine/mode mismatches, changed episode provenance, overlapping
+sequences, mismatched checkpoints and contiguous state/tick discontinuities are
+rejected. Different seeds/episodes join only under consistent dataset provenance.
+Session-global chunk indices need not start at zero for each episode; transition
+sequence zero establishes its start. Default export requires a captured start and
+terminal/truncated end and no gaps. `--allow-incomplete` explicitly preserves open
+tails and splits missing chunks/transitions into separately annotated Minari
+segments: it never bridges missing intervals or synthesizes termination/truncation.
+Inspect `options.capture_complete` and `options.capture_incomplete_json` before
+using such segments. Export into a new dataset ID/version; existing datasets are
+not overwritten. Large exports are assembled in memory: select session subsets
+instead of passing an unbounded production archive tree.
+An episode can span renewed upload capabilities: its random episode ID, immutable
+episode provenance and exact adjacent sequence/tick/state must match before
+chunks from different upload sessions are joined. Per-transition
+`infos.capture_session_id` retains the actual upload session for each source chunk.
+
+Observations are a Gymnasium `Dict` of float64 `state` and int64 `tiles` Boxes.
+The ordered state names are saved in `dataset.storage.metadata["orebit_capture"]`.
+
+State order begins `x,y,vx,vy,fuel,hp,max_fuel,max_hp,money,cargo_capacity,alive,
+paused,facing,in_shop,digging,grounded`, then `item_0..5` (Reserve Fuel Tank, Hull
+Repair Nanobots, Dynamite, Plastic Explosives, Quantum Teleporter, Matter
+Transmitter), `cargo_0..9` (Ironium, Bronzium, Silverium, Goldium, Platinium,
+Einsteinium, Emerald, Ruby, Diamond, Amazonite), `upgrade_0..5` (Drill, Hull,
+Engine, Fuel, Radiator, Cargo tier indices), then `cargo_weight`. Inventory/cargo
+values are counts; upgrade values are indices, not names or prices.
+After `cargo_weight`, four episode-local peer slots each contain
+`peer_N_present,peer_N_x,peer_N_y,peer_N_facing,peer_N_alive` for N=0–3, in that
+order. A slot is populated only when the actual remote miner and its Pod visual
+are visible in the scene tree and its rendered center is inside the viewport;
+hidden/offscreen/absent peers and every slot in private mode are zeroed.
+`alive=1` means that visible rendered miner exists, not access to hidden health.
+Slot assignment stays stable while the episode-local remote object exists and is
+released only when that object is freed; no identifiers/names are archived.
+Opponent inventory, upgrades and hidden state are not observations.
+
+The final four fields are `ui_panel_mask`, `selected_shop_item`,
+`selected_upgrade_category`, `selected_upgrade_tier` (63 state values total).
+Panel-mask bits 0–7 are fuel shop, mineral buyer, item shop, upgrade shop, help,
+options, inventory and transmission. Selected shop item is -1 when absent, or the
+item-table index (the six inventory items listed above followed by Core Teleporter).
+Upgrade selection is -1 when absent; category uses Drill/Hull/Engine/Fuel/Radiator/
+Cargo=0–5 and tier uses its upgrade-table index. Selection fields are populated
+only while their corresponding shop is visible.
+
+Actions use a lossless float64 Box encoding:
+`[move_x, move_y, command_count, kind, item, amount, category, ...]`.
+There are enough four-number command slots for the largest recorded action
+(at least one); unused slots are zero and `command_count` identifies valid slots.
+Kind codes are 1-based alphabetical command enum order, with zero reserved for
+padding; the full mapping/slot count is stored in dataset metadata. Exact ordered
+commands and sanitized events are additionally preserved in `infos.commands_json`
+and `infos.events_json` (HDF5 loads strings as bytes). Server sequence pointers
+remain in events; their authoritative archives remain separate and must be kept
+alongside source chunks for outcome/reconstruction audits.
+For shop entry/exit, category -1 means generic pause/inventory/transmission,
+0 fuel shop, 1 mineral buyer, 2 item shop and 3 upgrade shop; purchase/upgrade
+commands retain their own recorded item/category/amount values. A server event's
+`session_id` is its authority sequence domain, which can differ from the upload
+manifest's session after capability renewal. Resolve `(event.session_id,
+event.server_sequence)` against the corresponding authority tree, not blindly
+against the current chunk's session.
+
+For T transitions there are **T+1 observations and infos**, and T actions,
+rewards, termination flags and truncation flags. `infos[0]` is the checkpoint
+(`has_transition=false`); `infos[i+1]` records transition i, its source chunk
+hash/index/upload-session, ticks, reason and unmodified reward components. The episode manifest
+is retained in `options.capture_manifest_json`. Rewards default to **zero**:
+capture imposes no training objective. Optional `--money-weight`, `--hp-weight`
+and `--fuel-weight` compute the linear combination of recorded deltas; e.g.
+`--money-weight 1 --hp-weight 0 --fuel-weight 0`. All components remain in infos
+regardless of weights, and weights are recorded in dataset metadata.
+
+After exporting genuine gameplay, load and inspect alignment and boundary flags:
+
+```sh
+MINARI_DATASETS_PATH=/tmp/orebit-minari /tmp/orebit-capture-export/bin/python - <<'PY'
+import json
+import minari
+dataset = minari.load_dataset("orebit/capture-v0")
+print(dataset.observation_space, dataset.action_space)
+print(dataset.storage.metadata["orebit_capture"])
+for episode in dataset.iterate_episodes():
+    n = len(episode.actions)
+    assert len(episode.observations["state"]) == n + 1
+    assert len(episode.observations["tiles"]) == n + 1
+    assert len(episode.infos["has_transition"]) == n + 1
+    assert len(episode.rewards) == len(episode.terminations) == len(episode.truncations) == n
+    print(episode.id, n, episode.terminations[-1], episode.truncations[-1])
+    print(episode.actions[0], json.loads(episode.infos["commands_json"][1]))
+PY
+```
+
+Local acceptance exercised native movement, item use, shop purchases/sales and
+private death during an upload outage, then recovered a complete archive.
+Minari loading verified 96 transitions, 97 observations, diagonal movement,
+semantic commands and a true terminal flag. The compiled Web export also uploaded
+a valid gzip chunk with the matching embedded source fingerprint in Chromium.
+The filesystem admission guard rejected recording on a full host volume; smoke
+uploads used a separate empty test volume without weakening that guard.
+Operator commands above use illustrative paths and dataset IDs. Primary APIs:
+[Minari create_dataset_from_buffers](https://minari.farama.org/main/api/minari_functions/)
+and [EpisodeBuffer](https://minari.farama.org/main/api/data_collector/episode_buffer/).
+No environment recovery is registered: the capture is observational data, not a
+fabricated Gymnasium simulator.
+
+#### Planned Backblaze B2 migration (not enabled)
+
+VPS disk is the current archive sink. No B2 credentials, uploads, lifecycle
+deletion or active local deletion are configured by this feature. A future
+reviewed migration must first inventory immutable local chunk and authoritative
+objects, recording session/path, schema, compressed-byte SHA-256 and byte count.
+Use a private B2 bucket and a least-privilege upload credential kept only in the
+operator secret store. Upload by immutable content-addressed/versioned keys;
+retry idempotently and never overwrite different bytes at an existing key.
+
+Read back each uploaded object and verify byte count, SHA-256, gzip integrity,
+JSONL schema and manifest identity against the local inventory. Persist a
+durable local-to-B2 receipt/index, audit completeness and perform sampled restores
+plus a real Minari export/load before changing readers. Keep local archives
+intact throughout cutover, maintain the disk admission guard, and treat failed or
+unverified uploads as local-only, not migrated. Only a separately approved
+retention/deletion policy after verified restores may consider deleting local
+copies; migration itself must never silently reclaim them. B2 lifecycle rules
+and retention periods require their own explicit review.
+
 ### Server diagnostics
 
 The service writes privacy-filtered JSON events to journald and

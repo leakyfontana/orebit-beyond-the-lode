@@ -259,6 +259,7 @@ def stage_project(destination):
             shutil.copy2(source, destination / name)
         else:
             raise RuntimeError("Missing source runtime project path: " + name)
+    run([sys.executable, ROOT / "verification/bake_capture_build.py", "--project", destination])
 
 
 def read_presets(path):

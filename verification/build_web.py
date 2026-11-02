@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import zipfile
+import sys
 
 ROOT = Path(__file__).resolve().parent.parent
 TOOLS = ROOT / "verification/tools"
@@ -36,6 +37,8 @@ def main():
                  ROOT / "godot/addons/godot-box2d/bin" / library)
     output = ROOT / "godot/exports/web/index.html"
     output.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run([sys.executable, ROOT / "verification/bake_capture_build.py",
+                    "--project", ROOT / "godot"], cwd=ROOT, check=True)
     subprocess.run([args.godot, "--headless", "--path", str(ROOT / "godot"),
                     "--export-release", "Web", str(output)], cwd=ROOT, check=True)
     print("Web/PWA export: " + str(output))

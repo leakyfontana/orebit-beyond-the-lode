@@ -34,9 +34,10 @@ from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError
 
+from capture import CaptureError, CaptureStore, MAX_COMPRESSED
 from fuel_prices import FuelPrices, PriceUnavailable
-from pvp import PvpWorld
-from terrain import HEIGHT, MIN_X, WIDTH, WEIGHTS, award, generate, tile_name
+from pvp import PvpWorld, UPGRADE_NAMES
+from terrain import HEIGHT, MIN_X, MINERALS, WIDTH, WEIGHTS, award, generate, tile_name
 from telemetry import configure_logging, event as log_event, log_context
 
 TOKEN_LIFETIME = 30 * 86400
@@ -192,6 +193,8 @@ class Player:
     contact_at: float = field(default_factory=time.monotonic)
     damage_times: dict = field(default_factory=dict)
     motion_seq: int = 0
+    capture_session: str = ""
+    capture_context: dict = field(default_factory=dict)
 
     def public(self):
         return {"player_id": self.player_id, "name": self.name, "state": self.state}
@@ -227,6 +230,10 @@ class Service:
         self.http: ClientSession | None = None
         self.fuel_prices: FuelPrices | None = None
         self.pvp = PvpWorld(self, APIError)
+        self.capture = CaptureStore(os.environ.get("OREBIT_CAPTURE_DIR", str(Path(args.db).expanduser().absolute().parent / "captures")))
+        self.capture_queue = asyncio.Queue(maxsize=256)
+        self.capture_task = None
+        self.capture_gaps = OrderedDict()
 
     async def startup(self, app):
         asyncio.get_running_loop().set_exception_handler(
@@ -242,6 +249,7 @@ class Service:
             return seed, cells
         self.seed, self.excavated = await self.store.run(load)
         self.terrain = await asyncio.to_thread(generate, self.seed)
+        self.capture_task = asyncio.create_task(self.capture_writer())
         await self.pvp.startup()
         self.http = ClientSession(timeout=ClientTimeout(total=20), raise_for_status=True)
         self.fuel_prices = FuelPrices(
@@ -256,6 +264,17 @@ class Service:
         for player, result in zip(players, results):
             if isinstance(result, BaseException):
                 log_event("session_error", level=logging.ERROR, error=result, world_id=self.world_id, request_id=player.session_id, session_id=player.session_id, player_id=player.player_id, user_id=player.user_id)
+        if self.capture_task:
+            try:
+                await asyncio.wait_for(self.capture_queue.join(), timeout=5)
+            except asyncio.TimeoutError:
+                pass
+            self.capture_task.cancel()
+            try:
+                await self.capture_task
+            except asyncio.CancelledError:
+                pass
+            self.capture_task = None
 
     async def cleanup(self, app):
         if self.http:
@@ -549,7 +568,104 @@ class Service:
     async def health(self, request):
         return web.json_response({"status": "ok", "protocol": 1, "world_id": self.world_id, "players": len(self.members), "capacity": 5, "modes": {"coop": {"players": len(self.members), "capacity": 5}, "pvp": {"players": len(self.pvp.members), "capacity": 5}}, "discord_configured": bool(self.client_id and self.client_secret)})
 
+    async def capture_session(self, request):
+        self.rate_limit(request, "capture_issue", 30, 3600)
+        if request.can_read_body:
+            raise CaptureError("invalid_capture", "Capture issuance does not accept a body.")
+        return web.json_response(await asyncio.to_thread(self.capture.issue))
+
+    async def capture_chunk(self, request):
+        self.rate_limit(request, "capture_upload", 240, 60)
+        session = request.match_info["session_id"]
+        authorization = request.headers.get("Authorization", "")
+        token = authorization[7:] if authorization.startswith("Bearer ") else ""
+        await asyncio.to_thread(self.capture.charge, session, token)
+        index_text = request.match_info["chunk_index"]
+        if not re.fullmatch(r"0|[1-9][0-9]{0,7}", index_text):
+            raise CaptureError("invalid_capture", "Invalid chunk index.")
+        if request.headers.get("Content-Encoding") or request.content_type not in ("application/gzip", "application/octet-stream"):
+            raise CaptureError("invalid_capture", "Send raw gzip bytes without Content-Encoding.")
+        if request.content_length is not None and request.content_length > MAX_COMPRESSED:
+            raise CaptureError("capture_too_large", "Compressed capture exceeds the request limit.", 413)
+        async with self.capture.slots:
+            try:
+                async with asyncio.timeout(15):
+                    body = bytearray()
+                    async for block in request.content.iter_chunked(16384):
+                        if len(body) + len(block) > MAX_COMPRESSED:
+                            raise CaptureError("capture_too_large", "Compressed capture exceeds the request limit.", 413)
+                        body.extend(block)
+            except asyncio.TimeoutError:
+                raise CaptureError("capture_timeout", "Capture upload timed out.", 408) from None
+            result = await asyncio.to_thread(self.capture.ingest, session, token, int(index_text), bytes(body))
+        return web.json_response(result)
+
+    def link_capture(self, player, message):
+        if "capture_session" not in message and "capture_token" not in message:
+            return False
+        try:
+            self.capture.authenticate(message.get("capture_session"), message.get("capture_token"))
+        except CaptureError:
+            return False
+        player.capture_session = message["capture_session"]
+        return True
+
+    def capture_gap(self, session, first, last):
+        previous = self.capture_gaps.pop(session, (first, last))
+        self.capture_gaps[session] = (min(first, previous[0]), max(last, previous[1]))
+        while len(self.capture_gaps) > 512:
+            self.capture_gaps.popitem(last=False)
+
+    async def capture_writer(self):
+        buffers = {}
+        buffered = 0
+        flushed_at = time.monotonic()
+        while True:
+            try:
+                session, sequence, raw = await asyncio.wait_for(self.capture_queue.get(), timeout=0.25)
+                buffers.setdefault(session, []).append((sequence, raw))
+                buffered += 1
+            except asyncio.TimeoutError:
+                pass
+            if not buffered or (buffered < 128 and time.monotonic() - flushed_at < 1):
+                continue
+            for session, entries in buffers.items():
+                first, last = entries[0][0], entries[-1][0]
+                try:
+                    stored = await asyncio.to_thread(self.capture.persist_authority, session, first, last, b"".join(raw for _, raw in entries))
+                except Exception:
+                    stored = False
+                if not stored:
+                    self.capture_gap(session, first, last)
+                for _ in entries:
+                    self.capture_queue.task_done()
+            buffers.clear()
+            buffered = 0
+            flushed_at = time.monotonic()
+
     async def send(self, player, message):
+        if player.capture_session:
+            try:
+                # pvp_tick contains a peers list, not top-level state. Capture
+                # only this recipient's authoritative state, never peer names.
+                source = {**message, "state": player.state, "state_revision": player.revision}
+                upgrades = player.state.get("current_upgrades", {})
+                source["upgrade_levels"] = {category: names.index(upgrades[category]) for category, names in UPGRADE_NAMES.items() if upgrades.get(category) in names}
+                if message.get("ore") in MINERALS:
+                    source["ore_code"] = MINERALS.index(message["ore"])
+                prepared = self.capture.prepare_authority(player.capture_session, source, player.capture_context)
+                if prepared:
+                    sequence, raw = prepared
+                    if raw is not None and not self.capture_queue.full():
+                        self.capture_queue.put_nowait((player.capture_session, sequence, raw))
+                    else:
+                        self.capture_gap(player.capture_session, sequence, sequence)
+                    message = {**message, "capture_server_sequence": sequence, "capture_session_id": player.capture_session}
+                gap = self.capture_gaps.pop(player.capture_session, None)
+                if gap:
+                    message = {**message, "capture_session_id": player.capture_session, "capture_gap_first": gap[0], "capture_gap_last": gap[1]}
+            except Exception:
+                pass
         try:
             await asyncio.wait_for(player.socket.send_str(encode(message)), timeout=5)
             player.sent += 1
@@ -762,6 +878,7 @@ class Service:
                         await world.prepare_player(player)
                     player.session_id = request["request_id"]
                     player.received = received
+                    self.link_capture(player, join)
                     request["player_id"] = player.player_id
                     contexts.enter_context(log_context(player_id=player.player_id))
                     world.members[player.player_id] = player
@@ -790,7 +907,11 @@ class Service:
                     if not isinstance(message, dict):
                         raise APIError("invalid_message", "Game messages must be JSON objects.")
                     async with world.world_lock:
-                        if message.get("type") == "state":
+                        player.capture_context = {key: message[key] for key in ("request_id", "motion_seq") if key in message}
+                        if message.get("type") == "capture_link":
+                            linked = self.link_capture(player, message)
+                            await self.send(player, {"type": "capture_linked", "accepted": linked})
+                        elif message.get("type") == "state":
                             await world.update_state(player, message)
                         elif message.get("type") == "mine":
                             await world.mine(player, message)
@@ -806,6 +927,7 @@ class Service:
                             break
                         else:
                             raise APIError("invalid_message", "Unknown game message type.")
+                        player.capture_context = {}
             except APIError as error:
                 request["error_code"] = error.code
                 log_event("session_error", level=logging.WARNING, error=error, error_code=error.code)
@@ -880,7 +1002,7 @@ def create_app(args):
                 else:
                     try:
                         response = await handler(request)
-                    except APIError as error:
+                    except (APIError, CaptureError) as error:
                         request["error_code"], request["log_error"] = error.code, error
                         response = web.json_response({"error": error.code, "message": error.message, "request_id": request["request_id"]}, status=error.status)
                     except web.HTTPException as error:
@@ -920,7 +1042,7 @@ def create_app(args):
                 if error_code or route not in ("/healthz", "/api/auth/discord/poll"):
                     log_event("http_request", level=level, error=request.get("log_error"), **fields)
 
-    app = web.Application(client_max_size=MAX_BODY, middlewares=[security])
+    app = web.Application(client_max_size=MAX_BODY, middlewares=[security], handler_args={"auto_decompress": False})
     app.router.add_post("/api/auth/{action:signup|login}", service.native_auth)
     app.router.add_get("/api/fuel-price", service.fuel_price)
     app.router.add_post("/api/auth/logout", service.logout)
@@ -928,6 +1050,8 @@ def create_app(args):
     app.router.add_post("/api/auth/discord/start", service.discord_start)
     app.router.add_post("/api/auth/discord/poll", service.discord_poll)
     app.router.add_get("/auth/discord/callback", service.discord_callback)
+    app.router.add_post("/api/captures/session", service.capture_session)
+    app.router.add_post("/api/captures/{session_id}/chunks/{chunk_index}", service.capture_chunk)
     app.router.add_get("/api/ws", service.websocket)
     app.router.add_get("/healthz", service.health)
     app.router.add_options("/{path:.*}", lambda request: web.Response(status=204))

@@ -357,6 +357,8 @@ func join_world() -> void:
 	status_changed.emit("Joining " + ("PvP sandbox" if mode == "pvp" else "Co-op") + " · " + world_id + "…")
 
 func leave_world() -> void:
+	if host.gameplay_capture != null and host.is_coop:
+		host.gameplay_capture.finish("disconnect")
 	if connected:
 		send_state()
 	if _socket != null:
@@ -469,11 +471,20 @@ func _reconcile_economic_state(authoritative: Dictionary) -> Dictionary:
 	return merged
 
 func _send(message: Dictionary) -> void:
+	if str(message.get("type", "")) == "join" and host.gameplay_capture != null:
+		message.merge(host.gameplay_capture.credentials())
 	if _socket != null and _socket.get_ready_state() == WebSocketPeer.STATE_OPEN:
 		var result := _socket.send_text(JSON.stringify(message))
 		if result != OK:
 			_socket.close(1011, "Unable to send progress")
 			status_changed.emit("The server connection could not send your progress.")
+
+func link_capture() -> void:
+	if connected and host.gameplay_capture != null:
+		var fields: Dictionary = host.gameplay_capture.credentials()
+		if not fields.is_empty():
+			fields.type = "capture_link"
+			_send(fields)
 
 func _process(delta: float) -> void:
 	var now := Time.get_ticks_usec()
@@ -533,6 +544,10 @@ func _process(delta: float) -> void:
 		send_state()
 
 func _receive(event: Dictionary) -> void:
+	if host.gameplay_capture != null and event.has("capture_server_sequence") and event.has("capture_session_id"):
+		host.gameplay_capture.server_event(int(event.capture_server_sequence), str(event.capture_session_id))
+	if host.gameplay_capture != null and event.has("capture_session_id") and event.has("capture_gap_first") and event.has("capture_gap_last"):
+		host.gameplay_capture.server_gap(str(event.capture_session_id), int(event.capture_gap_first), int(event.capture_gap_last))
 	match str(event.get("type", "")):
 		"building_result":
 			# state_sync already reconciled the financial snapshot. Results only
@@ -559,6 +574,7 @@ func _receive(event: Dictionary) -> void:
 		"joined":
 			connected = true
 			connecting = false
+			link_capture()
 			player_id = str(event.player_id)
 			world_id = str(event.world_id)
 			state_revision = int(event.get("state_revision", 0))

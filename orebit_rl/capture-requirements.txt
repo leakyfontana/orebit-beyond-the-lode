@@ -1,0 +1,7 @@
+# Optional offline capture export only; no game/training dependencies.
+# Python >=3.11; direct EpisodeBuffer creation does not require JAX.
+minari[hdf5]==0.5.4
+gymnasium==1.4.0
+numpy>=2.0,<3
+# Minari's HDF5 backend imports Pillow even when JPEG encoding is disabled.
+Pillow>=10,<13
