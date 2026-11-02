@@ -23,6 +23,7 @@ var isDigging: bool = false
 var is_digging_side: bool = false
 var is_digging_bottom: bool = false
 var is_in_shop: bool = false
+var _capture_shop_category := -1
 var can_use_mouse_control: bool = true
 var mouse_is_last_used_input: bool = false
 var has_bossfight_started: bool = false
@@ -333,6 +334,11 @@ func _can_move() -> bool:
 	return not is_digging_bottom and not is_digging_side and not is_in_shop and not _is_teleporting
 
 func _read_axes() -> void:
+	_resolve_axes()
+	if host.gameplay_capture != null:
+		host.gameplay_capture.resolved_axes()
+
+func _resolve_axes() -> void:
 	var horizontal: int = int(GameInput.axis_raw("Horizontal"))
 	var vertical: int = int(GameInput.axis_raw("Vertical"))
 	if host.agent_axes != null:
@@ -666,16 +672,22 @@ func updateFuel() -> void:
 	if data.player_fuel <= 0.0:
 		killPlayer()
 
-func enterShop() -> void:
+func enterShop(capture_category: int = -1) -> void:
 	cancelVelocity()
 	is_in_shop = true
 	host.paused = true
 	host.audio.PauseSounds()
+	_capture_shop_category = capture_category
+	if host.gameplay_capture != null:
+		host.gameplay_capture.command("shop_enter", -1, 0.0, _capture_shop_category)
 
 func exitShop() -> void:
 	is_in_shop = false
 	host.paused = false
 	host.audio.ResumeSounds()
+	if host.gameplay_capture != null:
+		host.gameplay_capture.command("shop_exit", -1, 0.0, _capture_shop_category)
+	_capture_shop_category = -1
 
 func set_pvp_building_hidden(hidden: bool) -> void:
 	if pvp_building_hidden == hidden:
@@ -763,6 +775,8 @@ func use_item(index: int) -> void:
 		host.coop.network.send_state()
 		host.coop.network.pvp_action("blast", {"item": item_name})
 	data.player_items[item_name] -= 1
+	if host.gameplay_capture != null:
+		host.gameplay_capture.command("use_item", index, 1.0)
 	match index:
 		0:
 			data.addFuel(25)
@@ -945,6 +959,8 @@ func apply_pvp_life(alive: bool, position: Vector2) -> void:
 	_alive = alive
 	set_pvp_building_hidden(false)
 	host.player_alive = alive
+	if host.gameplay_capture != null:
+		host.gameplay_capture.life(alive)
 	cancelDig()
 	_is_creating_explosions = false
 	_is_teleporting = false

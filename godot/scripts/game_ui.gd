@@ -439,7 +439,7 @@ func _panel_lifecycle(script: String, enabled: bool) -> void:
 		if not enabled or not bool(panel_active.get(script, false)):
 			return
 	if enabled:
-		host.enterShop()
+		host.enterShop(SHOP_SCRIPTS.find(script))
 		match script:
 			"UpgradeShopUI": _upgrade_open_display()
 			"FuelShopManager":
@@ -673,6 +673,8 @@ func _update_inventory() -> void:
 
 func dropMineral(mineral_name: String) -> void:
 	data.removeMineralInCargo(mineral_name)
+	if host.gameplay_capture != null:
+		host.gameplay_capture.command("drop_mineral", data.minerals_name_list.find(mineral_name), 1.0)
 	audio.PlaySoundOneShot("JettisonMineral")
 	_update_inventory()
 
@@ -730,6 +732,8 @@ func buyUpgrade() -> void:
 		audio.PlaySoundOneShot("Error2")
 	elif data.tryToBuy(int(upgrade.price)):
 		data.setUpgrade(current_category, current_potential_upgrade)
+		if host.gameplay_capture != null:
+			host.gameplay_capture.command("buy_upgrade", data.upgrades[current_category].keys().find(current_potential_upgrade), float(upgrade.price), GameplayCapture.CATEGORIES.find(current_category))
 		updateCategory()
 		updateAllUI()
 		audio.PlaySoundOneShot("Purchase")
@@ -765,6 +769,8 @@ func addFuel(dollar_amount: int) -> void:
 		var charge := mini(dollar_amount, full_cost)
 		if data.tryToBuy(charge):
 			data.addFuel(remaining if charge == full_cost else float(charge) / price)
+			if host.gameplay_capture != null:
+				host.gameplay_capture.command("buy_fuel", -1, float(charge))
 			audio.PlaySoundOneShot("Purchase")
 		else:
 			_shop_popup("FuelShopManager", "You need $" + str(charge) + " to purchase")
@@ -811,6 +817,8 @@ func buyItem() -> void:
 	var price: int = int(data.items[currently_selected_item].price)
 	if data.tryToBuy(price):
 		data.addItem(currently_selected_item)
+		if host.gameplay_capture != null:
+			host.gameplay_capture.command("buy_item", data.items.keys().find(currently_selected_item), 1.0)
 		audio.PlaySoundOneShot("Purchase")
 	else:
 		_shop_popup("ItemShopManager", "You need $" + str(price) + " to purchase")
@@ -826,6 +834,8 @@ func addHull(dollar_amount: int) -> void:
 		audio.PlaySoundOneShot("Error2")
 	elif data.tryToBuy(dollar_amount):
 		data.addHull(dollar_amount)
+		if host.gameplay_capture != null:
+			host.gameplay_capture.command("buy_hull", -1, float(dollar_amount))
 		audio.PlaySoundOneShot("Purchase")
 	else:
 		_shop_popup("ItemShopManager", "You need $" + str(dollar_amount) + " to purchase")
@@ -860,6 +870,8 @@ func sellAllMinerals() -> void:
 	if not _can_trade("MineralBuyerManager"):
 		return
 	var total: int = data.sellCargo()
+	if host.gameplay_capture != null:
+		host.gameplay_capture.command("sell_all", -1, float(total))
 	updateMoneyUI()
 	_update_mineral_buyer()
 	_shop_popup("MineralBuyerManager", "Sold all minerals for $" + str(total))

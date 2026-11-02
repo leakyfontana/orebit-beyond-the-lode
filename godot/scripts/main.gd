@@ -60,6 +60,7 @@ var agent_axes: Variant = null
 var touch_controls: TouchControls
 var coop: CoopSession
 var fuel_pricing: FuelPricing
+var gameplay_capture: GameplayCapture
 var is_coop: bool:
 	get:
 		return coop != null and coop.active
@@ -122,10 +123,15 @@ func _ready() -> void:
 		fuel_pricing = FuelPricing.new()
 		add_child(fuel_pricing)
 		fuel_pricing.configure(self)
+		gameplay_capture = GameplayCapture.new()
+		add_child(gameplay_capture)
+		gameplay_capture.configure(self)
 	change_scene("MainMenu")
 	print("MOTHERLOAD_READY scene=MainMenu godot=" + Engine.get_version_info().string)
 
 func _exit_tree() -> void:
+	if is_instance_valid(gameplay_capture):
+		gameplay_capture.finish("shutdown")
 	if _physics_clock != null:
 		_physics_clock.set_manual_clock(false)
 
@@ -138,6 +144,8 @@ func _sync_touch_controls() -> void:
 		touch_controls.sync_state()
 
 func _load_scene(which: String) -> void:
+	if gameplay_capture != null:
+		gameplay_capture.finish("scene_change")
 	paused = false
 	player_alive = false
 	animators.clear()
@@ -227,6 +235,8 @@ func _load_scene(which: String) -> void:
 	ui.updateAllUI()
 	if coop != null:
 		coop.scene_loaded()
+	if gameplay_capture != null and which == "Game":
+		gameplay_capture.begin_episode()
 
 func _install_fuel_station() -> void:
 	var building := Sprite2D.new()
@@ -509,6 +519,8 @@ func _process(delta: float) -> void:
 		player.sync_physics_pose()
 		_update_camera(0.0 if paused else delta)
 		terrain.follow(player_position)
+	if gameplay_capture != null:
+		gameplay_capture.sample(true)
 	frame_number += 1
 	if replay_runner != null:
 		if replay_runner.frame < 0:
@@ -536,6 +548,8 @@ func _advance_physics_clock(delta: float) -> void:
 		if player != null and player_alive:
 			player.refresh_ground_after_step()
 			_sample_player_triggers()
+		if gameplay_capture != null:
+			gameplay_capture.sample()
 	physics_render_delta = _physics_accumulator
 
 func _physics_process(delta: float) -> void:
@@ -555,9 +569,9 @@ func _fixed_update(delta: float) -> void:
 	if boss != null:
 		boss.physics_tick(delta)
 
-func enterShop() -> void:
+func enterShop(capture_category: int = -1) -> void:
 	if player != null:
-		player.enterShop()
+		player.enterShop(capture_category)
 
 func exitShop() -> void:
 	if player != null:

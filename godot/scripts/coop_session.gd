@@ -40,6 +40,8 @@ func configure(main_host: Node) -> void:
 		lobby.hide_lobby()
 
 func _joined(snapshot: Dictionary) -> void:
+	if host.gameplay_capture != null:
+		host.gameplay_capture.finish("scene_change")
 	if not active:
 		_private_data = host.data
 		_private_world = host.world
