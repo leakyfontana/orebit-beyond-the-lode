@@ -1,10 +1,10 @@
 class_name CoopLobby
 extends CanvasLayer
 
-const ACCENT := Color("e7b854")
-const INK := Color("101823")
-const TEXT := Color("edf2fa")
-const MUTED := Color("b3c1d2")
+const ACCENT := Color("4fd348")
+const INK := Color("091307")
+const TEXT := Color("dcedd4")
+const MUTED := Color("a4ba97")
 const TARGET_SIZE := 48.0
 
 var host: Node
@@ -27,6 +27,11 @@ var _auth_toggle: Button
 var _cancel_button: Button
 var _hud: VBoxContainer
 var _hud_label: Label
+var _menu_font: Font
+var _hud_scene := ""
+var _header_ink_rects: Dictionary = {}
+var _header_source_root: Control
+var _header_offsets: Dictionary = {}
 var _message := ""
 var _page := "mode"
 var _auth_kind := "login"
@@ -54,14 +59,16 @@ func configure(main_host: Node, network: CoopClient) -> void:
 	auth_font.multichannel_signed_distance_field = true
 	auth_theme.default_font = auth_font
 	_root.theme = auth_theme
+	# Reuse the native Arial Black atlas used by NEW GAME / CONTINUE GAME.
+	_menu_font = load(str(host.manifest.native_font_paths["cf2bfdd882792dd47b13907720f8ab17"])) as Font
 	add_child(_root)
 	_shade = ColorRect.new()
-	_shade.color = Color(0.015, 0.025, 0.045, 0.96)
+	_shade.color = Color(0.015, 0.025, 0.012, 0.96)
 	_shade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_root.add_child(_shade)
 	_panel = PanelContainer.new()
 	_panel.name = "AuthPanel"
-	var panel_style := _surface(Color("172231"), Color("35465b"), 16)
+	var panel_style := _surface(Color("101b0e"), Color("426539"), 4)
 	for side in ["left", "right", "top", "bottom"]:
 		panel_style.set("content_margin_" + side, 0.0)
 	_panel.add_theme_stylebox_override("panel", panel_style)
@@ -84,19 +91,48 @@ func configure(main_host: Node, network: CoopClient) -> void:
 	_body.minimum_size_changed.connect(_resize, CONNECT_DEFERRED)
 	_hud = VBoxContainer.new()
 	_hud.name = "CoopAccountHUD"
-	_hud.add_theme_constant_override("separation", 8)
+	_hud.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hud.add_theme_constant_override("separation", 4)
 	_root.add_child(_hud)
 	_hud_label = Label.new()
-	_hud_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_hud_label.add_theme_font_size_override("font_size", 16)
+	_hud_label.name = "CoopHeaderStatus"
+	_hud_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hud_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_hud_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	_hud_label.add_theme_font_size_override("font_size", 12)
 	_hud_label.add_theme_color_override("font_color", TEXT)
-	_hud.add_child(_hud_label)
+	_hud_label.add_theme_color_override("font_shadow_color", Color.BLACK)
+	_hud_label.add_theme_constant_override("shadow_offset_x", 1)
+	_hud_label.add_theme_constant_override("shadow_offset_y", 1)
+	_root.add_child(_hud_label)
+	_hud.visibility_changed.connect(func(): _hud_label.visible = _hud.visible)
+	_hud_label.minimum_size_changed.connect(_resize, CONNECT_DEFERRED)
 	var account := Button.new()
 	account.name = "GameModesAccount"
-	account.text = "Game modes / account"
+	account.text = "MODES\nACCOUNTS"
+	account.tooltip_text = "Choose game mode or manage your co-op account"
 	_style_button(account, false)
+	account.autowrap_mode = TextServer.AUTOWRAP_OFF
+	account.add_theme_font_size_override("font_size", 13)
+	account.add_theme_color_override("font_shadow_color", Color.BLACK)
+	account.add_theme_color_override("font_focus_color", Color.WHITE)
+	account.add_theme_constant_override("shadow_offset_x", 1)
+	account.add_theme_constant_override("shadow_offset_y", 2)
+	for state in ["normal", "hover", "pressed", "disabled", "focus"]:
+		account.add_theme_stylebox_override(state, StyleBoxEmpty.new())
+	var account_icon := TextureRect.new()
+	account_icon.name = "AccountIcon"
+	account_icon.texture = preload("res://assets/coop_account.svg")
+	account_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	account_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	account_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	account_icon.show_behind_parent = true
+	account_icon.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	account.add_child(account_icon)
+	account.mouse_filter = Control.MOUSE_FILTER_STOP
 	account.pressed.connect(_open_modes)
 	_hud.add_child(account)
+	_hud.minimum_size_changed.connect(_resize, CONNECT_DEFERRED)
 	client.status_changed.connect(_set_status)
 	client.identity_changed.connect(_refresh_identity)
 	client.auth_state_changed.connect(_auth_state_changed)
@@ -114,7 +150,7 @@ func configure(main_host: Node, network: CoopClient) -> void:
 			_web_viewport.addEventListener("scroll", _web_resize_callback)
 	show_mode()
 
-func _surface(background: Color, border: Color, radius: int = 10) -> StyleBoxFlat:
+func _surface(background: Color, border: Color, radius: int = 3) -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
 	style.bg_color = background
 	style.border_color = border
@@ -129,16 +165,18 @@ func _surface(background: Color, border: Color, radius: int = 10) -> StyleBoxFla
 func _style_button(button: Button, primary: bool) -> void:
 	button.custom_minimum_size = Vector2(TARGET_SIZE, TARGET_SIZE)
 	button.add_theme_font_size_override("font_size", 16)
+	button.add_theme_font_override("font", _menu_font)
 	button.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	button.add_theme_color_override("font_color", INK if primary else TEXT)
-	button.add_theme_color_override("font_hover_color", INK if primary else TEXT)
-	button.add_theme_color_override("font_pressed_color", INK if primary else TEXT)
-	button.add_theme_color_override("font_disabled_color", Color("8795a7"))
-	button.add_theme_stylebox_override("normal", _surface(ACCENT if primary else Color("243449"), ACCENT if primary else Color("50637b")))
-	button.add_theme_stylebox_override("hover", _surface(Color("f6cc73") if primary else Color("304660"), ACCENT))
-	button.add_theme_stylebox_override("pressed", _surface(Color("c28f32") if primary else Color("142335"), Color("ffdc91")))
-	button.add_theme_stylebox_override("disabled", _surface(Color("202b39"), Color("354154")))
-	var focus := _surface(Color(0, 0, 0, 0), Color("ffe1a0"))
+	button.add_theme_color_override("font_color", ACCENT)
+	button.add_theme_color_override("font_hover_color", TEXT)
+	button.add_theme_color_override("font_pressed_color", TEXT)
+	button.add_theme_color_override("font_disabled_color", Color("718168"))
+	# The landing buttons use green type with dark-green hover/pressed fills.
+	button.add_theme_stylebox_override("normal", _surface(Color("162c10") if primary else Color(0.03, 0.07, 0.02, 0.82), ACCENT if primary else Color("426539")))
+	button.add_theme_stylebox_override("hover", _surface(Color(0.1424814, 0.4528302, 0.1260235, 0.95), ACCENT))
+	button.add_theme_stylebox_override("pressed", _surface(Color("113f0f"), ACCENT))
+	button.add_theme_stylebox_override("disabled", _surface(Color("172014"), Color("35472e")))
+	var focus := _surface(Color(0, 0, 0, 0), ACCENT)
 	focus.set_border_width_all(3)
 	button.add_theme_stylebox_override("focus", focus)
 
@@ -184,8 +222,114 @@ func _resize() -> void:
 	panel_size = panel_size.max(Vector2.ONE)
 	_panel.position = available.position + (available.size - panel_size) * 0.5
 	_panel.size = panel_size
-	_hud.position = available.position + Vector2.ONE * gutter
-	_hud.size.x = minf(440, maxf(1, available.size.x - gutter * 2))
+	_layout_hud(available, gutter)
+
+func _header_rect(control: Control) -> Rect2:
+	var transform := _root.get_global_transform_with_canvas().affine_inverse() * control.get_global_transform_with_canvas()
+	return transform * Rect2(Vector2.ZERO, control.size)
+
+func _header_art_rect(control: Control) -> Rect2:
+	var bounds := _header_rect(control)
+	for child in control.get_children():
+		if child is TextureRect:
+			var texture: Texture2D = child.texture
+			if not _header_ink_rects.has(texture):
+				# Read the original icon's transparent padding only once per texture.
+				var image := texture.get_image()
+				var used := image.get_used_rect()
+				var pixels := Vector2(image.get_size())
+				_header_ink_rects[texture] = Rect2(Vector2(used.position) / pixels, Vector2(used.size) / pixels)
+			var ink: Rect2 = _header_ink_rects[texture]
+			return Rect2(bounds.position + ink.position * bounds.size, ink.size * bounds.size)
+	return bounds
+
+func _restore_header_controls(controls: Array[Control]) -> void:
+	if _header_source_root != host.ui_root:
+		_header_source_root = host.ui_root
+		_header_offsets.clear()
+	for control in controls:
+		if not _header_offsets.has(control):
+			# Anchor offsets survive viewport resizing; derived positions do not.
+			_header_offsets[control] = Vector2(control.offset_left, control.offset_right)
+		var offsets: Vector2 = _header_offsets[control]
+		control.offset_left = offsets.x
+		control.offset_right = offsets.y
+
+func _shift_header_controls(controls: Array[Control], horizontal: float) -> void:
+	for control in controls:
+		var nested := false
+		for other in controls:
+			if other != control and other.is_ancestor_of(control):
+				nested = true
+				break
+		if not nested:
+			var parent_from_header: Transform2D = control.get_parent().get_global_transform_with_canvas().affine_inverse() * _root.get_global_transform_with_canvas()
+			control.position += parent_from_header.basis_xform(Vector2(horizontal, 0))
+
+func _layout_hud(available: Rect2, gutter: float) -> void:
+	var artwork_size := Vector2(48, 48)
+	var minimum_target := Vector2(maxf(TARGET_SIZE, _menu_font.get_string_size("ACCOUNTS", HORIZONTAL_ALIGNMENT_LEFT, -1, 8).x + 2), TARGET_SIZE)
+	var target_size := artwork_size.max(minimum_target)
+	var center := Vector2(available.end.x - gutter - TARGET_SIZE * 0.5, available.position.y + gutter + TARGET_SIZE * 0.5)
+	var label_left := gutter
+	var label_right := label_left + 88
+	var label_center_y := center.y
+	if host.scene_name == "Game" and is_instance_valid(host.ui_root):
+		var icons: Array[Control] = []
+		for control_name in ["InventoryButton", "HelpButton", "OptionsButton"]:
+			var control := host.ui_root.find_child(control_name, true, false) as Control
+			if control != null:
+				icons.append(control)
+		var gauges: Array[Control] = []
+		var properties: Dictionary = host.ui._properties("UIManager")
+		for key in ["HullUI", "FuelUI", "DepthUI", "low_fuel_text", "very_low_fuel_text"]:
+			var control := host.bridge.node(properties.get(key, {})) as Control
+			if control != null and not gauges.has(control):
+				gauges.append(control)
+		_restore_header_controls(icons + gauges)
+		var inventory := host.ui_root.find_child("InventoryButton", true, false) as Control
+		var help := host.ui_root.find_child("HelpButton", true, false) as Control
+		if inventory != null and help != null:
+			var inventory_art := _header_art_rect(inventory)
+			var help_art := _header_art_rect(help)
+			artwork_size = inventory_art.size
+			target_size = artwork_size.max(minimum_target)
+			var spacing := help_art.get_center().x - inventory_art.get_center().x
+			center = Vector2(maxf(help_art.get_center().x + spacing, help_art.end.x + gutter * 0.5 + target_size.x * 0.5), inventory_art.get_center().y)
+			# Reserve the extra icon's slot instead of clamping it over Help.
+			var overflow := maxf(0, center.x + target_size.x * 0.5 - (available.end.x - gutter))
+			_shift_header_controls(icons, -overflow)
+			center.x -= overflow
+		var hull := host.ui_root.find_child("HullUI", true, false) as Control
+		if hull != null:
+			var hull_bounds := _header_rect(hull)
+			var label_width := _hud_label.get_theme_font("font").get_string_size(_hud_label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, _hud_label.get_theme_font_size("font_size")).x
+			# At 16:9 there is no authored left margin. Reserve one for the count
+			# and move the whole gauge/depth/warning group together.
+			var shift := maxf(0, label_left + label_width + gutter - hull_bounds.position.x)
+			_shift_header_controls(gauges, shift)
+			hull_bounds = _header_rect(hull)
+			label_right = hull_bounds.position.x - gutter
+			# Hull/Fuel captions are baked into their 147px-tall sprites, with
+			# the text centered at source row 37 (not the full meter's center).
+			label_center_y = hull_bounds.position.y + hull_bounds.size.y * (37.0 / 147.0)
+	target_size = artwork_size.max(minimum_target)
+	center.y = maxf(center.y, available.position.y + gutter + target_size.y * 0.5)
+	var account := _hud.get_node("GameModesAccount") as Button
+	var text_width := _menu_font.get_string_size("ACCOUNTS", HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
+	account.add_theme_font_size_override("font_size", maxi(8, floori(13 * (target_size.x - 2) / text_width)))
+	account.custom_minimum_size = target_size
+	_hud.position = center - target_size * 0.5
+	_hud.size = target_size
+	var icon := account.get_node("AccountIcon") as TextureRect
+	icon.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	icon.offset_left = -artwork_size.x * 0.5
+	icon.offset_right = artwork_size.x * 0.5
+	icon.offset_top = -artwork_size.y * 0.5
+	icon.offset_bottom = artwork_size.y * 0.5
+	_hud_label.size = Vector2(maxf(1, label_right - label_left), 0)
+	_hud_label.size.y = _hud_label.get_combined_minimum_size().y
+	_hud_label.position = Vector2(label_left, label_center_y - _hud_label.get_character_bounds(0).get_center().y)
 
 func _web_resized(_arguments: Array) -> void:
 	_resize.call_deferred()
@@ -218,9 +362,13 @@ func _clear() -> void:
 func _label(text: String, small: bool = false) -> Label:
 	var label := Label.new()
 	label.text = text
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	label.add_theme_font_size_override("font_size", 16 if small else 24)
 	label.add_theme_color_override("font_color", MUTED if small else TEXT)
+	if not small:
+		label.add_theme_font_override("font", _menu_font)
+		label.add_theme_color_override("font_color", ACCENT)
 	_body.add_child(label)
 	return label
 
@@ -252,8 +400,8 @@ func _field(label_text: String, value: String, control_name: String, secret: boo
 	field.add_theme_color_override("font_color", TEXT)
 	field.add_theme_color_override("font_uneditable_color", MUTED)
 	field.add_theme_color_override("caret_color", ACCENT)
-	field.add_theme_stylebox_override("normal", _surface(Color("0e1723"), Color("50637b")))
-	field.add_theme_stylebox_override("read_only", _surface(Color("202b39"), Color("354154")))
+	field.add_theme_stylebox_override("normal", _surface(INK, Color("426539")))
+	field.add_theme_stylebox_override("read_only", _surface(Color("172014"), Color("35472e")))
 	var focus := _surface(Color(0, 0, 0, 0), ACCENT)
 	focus.set_border_width_all(3)
 	field.add_theme_stylebox_override("focus", focus)
@@ -406,8 +554,14 @@ func hide_lobby(reset_pause: bool = false) -> void:
 func refresh_hud() -> void:
 	if not is_instance_valid(_hud_label):
 		return
+	var header_text := "Co-op · %d/5" % client.peers.size() if host.is_coop else "Private"
+	var needs_layout: bool = _hud_label.text != header_text or _hud_scene != host.scene_name or not _hud.visible
 	_hud.visible = not modal and (host.is_coop or host.scene_name == "MainMenu")
-	_hud_label.text = "Co-op · %d/5 · %s" % [client.peers.size(), "Account · server progress" if not client.token.is_empty() else "Anonymous · progress ends on leaving"] if host.is_coop else "Private · this device"
+	if _hud_label.text != header_text:
+		_hud_label.text = header_text
+	_hud_scene = host.scene_name
+	if needs_layout and _hud.visible:
+		_resize.call_deferred()
 
 func _choose_private() -> void:
 	if _busy() or not host.leave_coop():

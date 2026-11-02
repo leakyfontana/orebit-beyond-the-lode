@@ -421,6 +421,12 @@ def build(args):
             options["application/short_version"] = json.dumps(version)
         write_presets(presets, project / "export_presets.cfg")
         run([godot, "--headless", "--editor", "--path", project, "--import"], cwd=work, env=environment)
+        if target == "macos":
+            run([godot, "--headless", "--path", project,
+                 "--script", ROOT / "verification/coop_input_interop.gd", "--",
+                 "--touch-controls", "--mode=private",
+                 "--coop-url=http://127.0.0.1:1", "--coop-token="],
+                cwd=work, env=environment)
         export = work / "export"
         export.mkdir()
         filename = {"macos": "Orebit.app", "windows": "Orebit.exe", "android": "Orebit.apk", "web": "index.html"}[target]
