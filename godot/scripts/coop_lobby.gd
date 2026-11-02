@@ -436,7 +436,8 @@ func _finish_page() -> void:
 func show_mode() -> void:
 	_open_page("mode")
 	_label("OREBIT · Choose your game")
-	_label("Private play stays on this device. Co-op shares one server world with up to five miners.", true)
+	_label("Private saves stay on this device. Co-op shares one server world with up to five miners.", true)
+	_label("Gameplay recording is automatic in all modes. Recordings are uploaded to the game server for bot training; chat, credentials and account identifiers are excluded.", true)
 	_button("Private · this device", _choose_private, "ChoosePrivate", true)
 	_button("Co-op · shared server", func(): _choose_server("coop"), "ChooseCoop")
 	_button("PvP · mining sandbox [BETA]", func(): _choose_server("pvp"), "ChoosePvp")

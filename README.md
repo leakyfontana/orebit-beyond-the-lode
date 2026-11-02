@@ -428,6 +428,8 @@ anonymous play; there is no opt-in switch. Capture uses the configured co-op
 HTTP service even during private play. The isolated bot/training environment is
 not started by capture or export. This section describes the capture protocol
 and operating procedure, not a receipt for published clients or a VPS deployment.
+The mode chooser distinguishes device-local private saves from server-stored
+gameplay recordings and discloses automatic recording in every mode.
 Manifest `actor` distinguishes normal runtime controls (`human`) from a configured
 replay runner (`replay`). Replay archives are not human demonstrations; export
 rejects mixing actor types and labels Minari provenance accordingly. Automated
