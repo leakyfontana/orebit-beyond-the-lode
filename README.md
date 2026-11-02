@@ -638,6 +638,9 @@ semantic commands and a true terminal flag. The compiled Web export also uploade
 a valid gzip chunk with the matching embedded source fingerprint in Chromium.
 The filesystem admission guard rejected recording on a full host volume; smoke
 uploads used a separate empty test volume without weakening that guard.
+The native crash probe advances `Box2DClock` explicitly and verifies the body is
+still falling before exercising freeze/cancel. Awaiting render/physics signals
+does not guarantee an exact native step count when a render frame stalls.
 Operator commands above use illustrative paths and dataset IDs. Primary APIs:
 [Minari create_dataset_from_buffers](https://minari.farama.org/main/api/minari_functions/)
 and [EpisodeBuffer](https://minari.farama.org/main/api/data_collector/episode_buffer/).

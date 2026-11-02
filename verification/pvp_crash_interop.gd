@@ -30,7 +30,7 @@ class CrashFixture extends Node2D:
 	func StopSound(sound: String) -> void:
 		stopped_sounds.append(sound)
 
-	func _physics_process(_delta: float) -> void:
+	func sample_native_state() -> void:
 		physics_step += 1
 		frame_number += 1
 		player.sync_physics_pose(false)
@@ -45,8 +45,16 @@ class CrashFixture extends Node2D:
 		player.manageCrashVerification()
 
 var failures := 0
+const STEP := 5368709.0 / 268435456.0
+var _clock: Object
+var _active_fixture: CrashFixture
 
 func _initialize() -> void:
+	_clock = Engine.get_singleton("Box2DClock")
+	if _clock == null or not _clock.set_manual_clock(true):
+		push_error("Crash regression requires the main-thread native Box2D clock")
+		quit(2)
+		return
 	_run.call_deferred()
 
 func check(condition: bool, message: String) -> void:
@@ -64,7 +72,6 @@ func fixture(support_group: String = "") -> CrashFixture:
 	world.ui = world
 	world.audio = world
 	viewport.add_child(world)
-	world.set_physics_process(false)
 	var body := RigidBody2D.new()
 	body.position = Vector2(0.0, -2.0)
 	body.gravity_scale = 0.0
@@ -135,15 +142,22 @@ func fixture(support_group: String = "") -> CrashFixture:
 		floor_shape.position.y = 0.5
 		support.add_child(floor_shape)
 		world.support = support
-	world.set_physics_process(true)
+	_active_fixture = world
 	return world
 
 func steps(count: int) -> void:
 	for step in count:
-		await physics_frame
+		# A render stall may deliver several physics_frame signals before one
+		# process_frame. Only this explicit native barrier advances the bodies.
+		if not _clock.step_manual(STEP):
+			check(false, "Native Box2D clock failed to complete a crash fixture step")
+			quit(2)
+			return
+		_active_fixture.sample_native_state()
 		await process_frame
 
 func dispose(world: CrashFixture) -> void:
+	_active_fixture = null
 	world.get_parent().queue_free()
 	await process_frame
 
@@ -182,6 +196,7 @@ func _run() -> void:
 	# Establish a fall, then invoke the actual drill freeze/cancel lifecycle.
 	world.player.velocity_unity = Vector2(0.0, -18.0)
 	await steps(2)
+	check(world.player.velocity_unity.y < -7.0 and world.terrain_contact_steps == 0 and world.player.damage.is_empty(), "Drill fixture landed before its freeze operation")
 	world.player.is_digging_bottom = true
 	world.player._block_target = Vector2i(0, 1)
 	world.player._block_target_data = {"name": "Dirt"}
@@ -230,4 +245,5 @@ func _run() -> void:
 	check(world.player.damage.is_empty(), "Motion correction injected crash damage")
 	await dispose(world)
 	print("PVP_CRASH_INTEROP failures=", failures)
+	_clock.set_manual_clock(false)
 	quit(0 if failures == 0 else 1)
