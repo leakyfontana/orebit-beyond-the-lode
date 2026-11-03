@@ -196,7 +196,7 @@ verification/tools/Godot.app/Contents/MacOS/Godot --headless --path godot --scri
 
 ## Mode menu correction
 
-The **0.7.1 candidate** fixes paused touch scrolling and slightly moving taps in
+**0.7.1** fixes paused touch scrolling and slightly moving taps in
 the mode/account menus. SceneTree pause still freezes gameplay; the engine UI
 clock keeps running, and paused frames do not accumulate simulation catch-up.
 Menu scrolling uses a 12-unit drag threshold instead of cancelling a tap on the
@@ -210,9 +210,20 @@ Android Back has one owner: the window Back request routes through the current
 modal/game UI. Its duplicate physical-key Pause binding is removed only on Android,
 so one press cannot skip two pages; desktop Back bindings remain unchanged.
 
-The focused `verification/lobby_controller_interop.gd` regression covers single-step
-Android Back, Escape navigation, and a single Private selection during pending
-session validation.
+Mode choices share a row; account and server actions share compact footers.
+Repeated explanations are removed, while automatic-recording disclosure, the
+unsaved-guest warning and the server-switch sign-out warning remain. Menu controls
+keep 44-point touch targets, field accessibility names and inline password
+visibility. Normal portrait and short-landscape views fit without scrolling;
+the scroll container remains available for reduced/keyboard-constrained viewports.
+Button presses propagate to that container so a drag over a button scrolls rather
+than swallowing input or activating the button. Entering a mode clears its completed
+connection message instead of retaining a stale “Joining” label.
+
+The focused `verification/lobby_controller_interop.gd` regression covers drag/tap
+boundaries, compact views and error/cancellation states at 320×568 and 712×311,
+single-step Android Back, Escape, controller navigation, and a single Private
+selection during pending session validation.
 
 The Web worker activates routing updates without forcing a running game to reload.
 On the next online navigation, a retired `game-<hash>/index.html` launch resolves
@@ -232,7 +243,7 @@ board; local verification is not a publication receipt.
 
 ## Million-dollar PvP rounds · 0.7.0
 
-Choose **PvP · race to $1,000,000**, launch with `--mode=pvp`, or use
+Choose **PvP**, launch with `--mode=pvp`, or use
 `?mode=pvp` on Web. The first server-accepted **held cash** balance reaching
 **$1,000,000 or more** wins; unsold cargo and lifetime earnings do not count.
 The winner is announced in-game and a fresh round starts automatically.
@@ -436,7 +447,7 @@ receipt or a physical-iPhone acceptance claim.
 
 ### Account interaction and session lifetime
 
-Co-op offers one primary **Continue with Discord** action, with password and
+Co-op offers a primary **Discord sign-in** action, with password and
 anonymous entry as alternatives. Web/PWA uses same-tab authorization: a validated,
 state-bound callback returns to the initiating game and its private pending poll.
 Neither the Orebit session nor the poll credential travels in the return URL.
