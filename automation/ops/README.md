@@ -15,7 +15,7 @@ This independent Python 3 standard-library monitor checks the filesystem holding
 
 The source capture directory and parent are currently `0700 orebit-coop:orebit-coop`. The bot cannot traverse that parent. The unit therefore binds the **exact capture directory read-only** at `/run/orebit-ops-recordings` inside its private mount namespace. `statvfs` of the mount root requires traversal of `/run`, not traversal of the inaccessible original parent. Source permissions remain `0700`; the bot cannot enumerate/read archives. If recording storage moves or gains a dedicated mount, update `BindReadOnlyPaths` to that actual directory and review the filesystem identity before restarting. Do not replace this with monitoring `/`, and do not loosen archive permissions.
 
-## Discord access: blocked until owner action
+## Discord channel setup and minimum permissions
 
 Read-only VPS evidence collected 2026-11-02 using the existing credential:
 
@@ -56,7 +56,7 @@ From the checkout root, the integration owner runs:
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s automation/ops -p 'test_*.py' -v
 ```
 
-The deterministic suite covers exact thresholds, jump coalescing, persistent restart dedup, strict recovery hysteresis, explicit rejection/cooldown across restarts, accepted-but-lost responses, uncertain non-delivery without replay, stale cancellation, filesystem/destination identity changes, reserved blocks, privacy overwrite failures, process exclusion, and bounded rate limits/no POST 5xx replay. Temporary SQLite stores and a deterministic remote-message model are isolated from production. No tests or formatters were run during implementation; integrated execution is the parent's responsibility.
+The deterministic suite covers exact thresholds, jump coalescing, persistent restart dedup, strict recovery hysteresis, explicit rejection/cooldown across restarts, accepted-but-lost responses, uncertain non-delivery without replay, stale cancellation, filesystem/destination identity changes, reserved blocks, privacy overwrite failures, process exclusion, and bounded rate limits/no POST 5xx replay. Temporary SQLite stores and a deterministic remote-message model are isolated from production.
 
 ## Approved deployment plan and exact commands
 
