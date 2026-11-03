@@ -27,6 +27,15 @@ func press(button: int) -> void:
 func focus_name() -> String:
 	var control := root.gui_get_focus_owner()
 	return str(control.name) if control != null else "none"
+func escape() -> void:
+	for pressed in [true, false]:
+		var event := InputEventKey.new()
+		event.keycode = KEY_ESCAPE
+		event.pressed = pressed
+		Input.parse_input_event(event)
+		Input.flush_buffered_events()
+		await process_frame
+	await process_frame
 func _run() -> void:
 	root.size = Vector2i(1280, 720)
 	game = Game.new()
@@ -58,6 +67,18 @@ func _run() -> void:
 	check(game.coop.lobby._page == "server", "controller opens server options")
 	await press(JOY_BUTTON_B)
 	check(game.coop.lobby._page == "lobby", "B leaves server options")
+	await escape()
+	check(game.coop.lobby._page == "mode", "Escape returns from server lobby to modes")
+	await escape()
+	check(not game.coop.lobby.modal and not game.paused, "Escape dismisses modes to prior private menu")
+	game.coop.lobby.show_mode()
+	game.coop.network.token = "synthetic-pending-session"
+	game.coop.network.session_checking = true
+	game.coop.lobby._auth_state_changed()
+	game.coop.lobby._body.get_node("ChoosePrivate").grab_focus()
+	await press(JOY_BUTTON_A)
+	check(not game.coop.lobby.modal and not game.paused, "one Private selection works during saved-session validation")
+	check(not game.coop.network.session_checking and game.coop.network.token == "synthetic-pending-session", "Private cancels validation without discarding saved sign-in")
 	print("LOBBY_CONTROLLER_INTEROP failures=", failures)
 	game.queue_free()
 	await process_frame

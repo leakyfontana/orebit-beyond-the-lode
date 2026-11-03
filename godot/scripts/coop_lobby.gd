@@ -82,6 +82,7 @@ func configure(main_host: Node, network: CoopClient) -> void:
 	_scroll.name = "AuthScroll"
 	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	_scroll.follow_focus = true
+	_scroll.scroll_deadzone = 12
 	_scroll.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
 	margin.add_child(_scroll)
 	_body = VBoxContainer.new()
@@ -458,7 +459,7 @@ func show_mode() -> void:
 	_finish_page()
 
 func _choose_server(mode: String) -> void:
-	if _busy():
+	if _busy() and not client.session_checking:
 		return
 	if client.connected and client.mode != mode:
 		if not host.leave_coop():
@@ -593,17 +594,21 @@ func refresh_hud() -> void:
 		_resize.call_deferred()
 
 func _choose_private() -> void:
-	if _busy() or not host.leave_coop():
+	if (_busy() and not client.session_checking) or not host.leave_coop():
 		return
+	if client.session_checking:
+		client.cancel_auth(false)
 	hide_lobby(true)
 	host.change_scene("MainMenu")
 
 func _back() -> void:
-	if _busy():
+	if client.session_checking:
+		client.cancel_auth(false)
+	elif _busy():
 		return
 	if _page == "password" or _page == "server":
 		show_lobby()
-	elif client.connected:
+	elif _page == "mode" or client.connected:
 		hide_lobby()
 	else:
 		show_mode()
@@ -688,7 +693,7 @@ func _auth_state_changed() -> void:
 		else:
 			_identity.text = "Playing anonymously" if client.connected else "Not signed in"
 	for button in _actions:
-		button.disabled = _busy()
+		button.disabled = _busy() and not (_page == "mode" and client.session_checking)
 	for field in _fields:
 		field.editable = not _busy()
 	if is_instance_valid(_cancel_button):
@@ -771,6 +776,17 @@ func _focus_step(step: int) -> void:
 	var control := eligible[posmod(index + step, eligible.size())]
 	control.grab_focus()
 	_scroll.ensure_control_visible(control)
+
+func _input(event: InputEvent) -> void:
+	if event is InputEventJoypadButton or event is InputEventJoypadMotion:
+		return
+	if modal and (event.is_action_pressed(&"pause") or event.is_action_pressed(&"ui_cancel")) and not event.is_echo():
+		_back()
+		get_viewport().set_input_as_handled()
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_GO_BACK_REQUEST and modal:
+		_back()
 
 func _controller_event(event: InputEvent) -> void:
 	if not modal or not (event is InputEventJoypadButton) or not event.pressed:

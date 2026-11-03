@@ -38,7 +38,6 @@ var paused := false:
 	set(value):
 		paused = value
 		if is_inside_tree():
-			Engine.time_scale = 0.0 if value else 1.0
 			get_tree().paused = value
 		_sync_touch_controls()
 var scene_name := ""
@@ -467,6 +466,10 @@ func _process(delta: float) -> void:
 	if agent_axes != null:
 		ui_delta = 1.0 / float(Engine.physics_ticks_per_second)
 		delta = ui_delta * Engine.time_scale
+	# Pause simulation, not the clock used by always-processing modal controls.
+	# ScrollContainer needs a nonzero UI delta to calculate touch inertia.
+	if paused:
+		delta = 0.0
 	if _physics_clock != null:
 		# Scene changes requested during Update take effect before the next
 		# fixed phase, including frames on which no fixed update is due.

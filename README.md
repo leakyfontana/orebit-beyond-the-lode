@@ -194,6 +194,24 @@ python -m unittest discover -s automation/coop -p 'test_*.py' -v
 verification/tools/Godot.app/Contents/MacOS/Godot --headless --path godot --script ../verification/fuel_pricing_interop.gd
 ```
 
+## Mode menu correction
+
+The **0.7.1 candidate** fixes paused touch scrolling and slightly moving taps in
+the mode/account menus. SceneTree pause still freezes gameplay; the engine UI
+clock keeps running, and paused frames do not accumulate simulation catch-up.
+Menu scrolling uses a 12-unit drag threshold instead of cancelling a tap on the
+first pixel of finger movement.
+
+Private and online mode choices remain available while a saved sign-in is being
+checked. Choosing Private cancels that check without deleting the saved sign-in.
+Escape, Android Back, and controller Back return from account/server pages and
+dismiss the mode chooser to the prior game/menu pause state.
+
+The focused `verification/lobby_controller_interop.gd` regression covers Escape
+navigation and a single Private selection during pending session validation.
+Release status and remaining acceptance checks are tracked on the release board;
+local verification is not a publication receipt.
+
 ## Million-dollar PvP rounds · 0.7.0
 
 Choose **PvP · race to $1,000,000**, launch with `--mode=pvp`, or use
