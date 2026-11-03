@@ -1,0 +1,12 @@
+[Unit]
+Description=Check Orebit recordings filesystem every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=5min
+AccuracySec=30s
+RandomizedDelaySec=15s
+Unit=orebit-ops.service
+
+[Install]
+WantedBy=timers.target

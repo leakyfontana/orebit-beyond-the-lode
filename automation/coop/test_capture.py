@@ -114,6 +114,15 @@ class CaptureStorageTest(unittest.TestCase):
             self.assert_status(400, self.store.ingest, self.session, self.token, 0, gzip.compress(raw))
         self.assertEqual(list(self.store.root.iterdir()), [])
 
+    def test_round_end_requires_terminal_pvp_boundary(self):
+        for mode, terminated, truncated in (("private", True, False), ("coop", True, False),
+                                             ("pvp", False, True), ("pvp", False, False)):
+            with self.subTest(mode=mode, terminated=terminated, truncated=truncated):
+                value = records(self.session)
+                value[0]["mode"] = mode
+                value[1].update(reason="round_end", terminated=terminated, truncated=truncated)
+                self.assert_status(400, decode_chunk, gzip.compress(canonical(value)), self.session, 0)
+
     def test_gzip_bombs_truncation_members_and_duplicate_keys(self):
         self.assert_status(413, decode_chunk, gzip.compress(b"x" * (capture.MAX_RAW + 1)), self.session, 0)
         self.assert_status(413, decode_chunk, b"x" * (capture.MAX_COMPRESSED + 1), self.session, 0)

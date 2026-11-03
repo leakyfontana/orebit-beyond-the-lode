@@ -46,6 +46,7 @@ var _web_window: JavaScriptObject
 var _web_viewport: JavaScriptObject
 var _web_resize_callback: JavaScriptObject
 
+var leaderboard: PvpLeaderboard
 func configure(main_host: Node, network: CoopClient) -> void:
 	host = main_host
 	client = network
@@ -133,6 +134,9 @@ func configure(main_host: Node, network: CoopClient) -> void:
 	account.pressed.connect(_open_modes)
 	_hud.add_child(account)
 	_hud.minimum_size_changed.connect(_resize, CONNECT_DEFERRED)
+	leaderboard = PvpLeaderboard.new()
+	_root.add_child(leaderboard)
+	leaderboard.configure(self)
 	client.status_changed.connect(_set_status)
 	client.identity_changed.connect(_refresh_identity)
 	client.auth_state_changed.connect(_auth_state_changed)
@@ -223,6 +227,7 @@ func _resize() -> void:
 	_panel.position = available.position + (available.size - panel_size) * 0.5
 	_panel.size = panel_size
 	_layout_hud(available, gutter)
+	leaderboard.layout(available, _leaderboard_center, _leaderboard_size)
 
 func _header_rect(control: Control) -> Rect2:
 	var transform := _root.get_global_transform_with_canvas().affine_inverse() * control.get_global_transform_with_canvas()
@@ -266,6 +271,9 @@ func _shift_header_controls(controls: Array[Control], horizontal: float) -> void
 			var parent_from_header: Transform2D = control.get_parent().get_global_transform_with_canvas().affine_inverse() * _root.get_global_transform_with_canvas()
 			control.position += parent_from_header.basis_xform(Vector2(horizontal, 0))
 
+var _leaderboard_center := Vector2.ZERO
+var _leaderboard_size := Vector2(48, 48)
+
 func _layout_hud(available: Rect2, gutter: float) -> void:
 	var artwork_size := Vector2(48, 48)
 	var minimum_target := Vector2(maxf(TARGET_SIZE, _menu_font.get_string_size("ACCOUNTS", HORIZONTAL_ALIGNMENT_LEFT, -1, 8).x + 2), TARGET_SIZE)
@@ -296,10 +304,12 @@ func _layout_hud(available: Rect2, gutter: float) -> void:
 			target_size = artwork_size.max(minimum_target)
 			var spacing := help_art.get_center().x - inventory_art.get_center().x
 			center = Vector2(maxf(help_art.get_center().x + spacing, help_art.end.x + gutter * 0.5 + target_size.x * 0.5), inventory_art.get_center().y)
+			_leaderboard_center = inventory_art.get_center() - Vector2(maxf(spacing, target_size.x + gutter * 0.5), 0)
 			# Reserve the extra icon's slot instead of clamping it over Help.
 			var overflow := maxf(0, center.x + target_size.x * 0.5 - (available.end.x - gutter))
 			_shift_header_controls(icons, -overflow)
 			center.x -= overflow
+			_leaderboard_center.x -= overflow
 		var hull := host.ui_root.find_child("HullUI", true, false) as Control
 		if hull != null:
 			var hull_bounds := _header_rect(hull)
@@ -314,6 +324,7 @@ func _layout_hud(available: Rect2, gutter: float) -> void:
 			# the text centered at source row 37 (not the full meter's center).
 			label_center_y = hull_bounds.position.y + hull_bounds.size.y * (37.0 / 147.0)
 	target_size = artwork_size.max(minimum_target)
+	_leaderboard_size = target_size
 	center.y = maxf(center.y, available.position.y + gutter + target_size.y * 0.5)
 	var account := _hud.get_node("GameModesAccount") as Button
 	var text_width := _menu_font.get_string_size("ACCOUNTS", HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
@@ -412,6 +423,7 @@ func _field(label_text: String, value: String, control_name: String, secret: boo
 	return field
 
 func _open_page(page: String) -> void:
+	leaderboard.close()
 	if not modal:
 		_paused_before_lobby = host.paused
 	_page = page
@@ -440,9 +452,9 @@ func show_mode() -> void:
 	_label("Gameplay recording is automatic in all modes. Recordings are uploaded to the game server for bot training; chat, credentials and account identifiers are excluded.", true)
 	_button("Private · this device", _choose_private, "ChoosePrivate", true)
 	_button("Co-op · shared server", func(): _choose_server("coop"), "ChooseCoop")
-	_button("PvP · mining sandbox [BETA]", func(): _choose_server("pvp"), "ChoosePvp")
-	_label("PvP is in beta — this mode is still a work in progress.", true)
-	_label("Server accounts keep separate Co-op and PvP progress. You can also play without an account.", true)
+	_button("PvP · race to $1,000,000", func(): _choose_server("pvp"), "ChoosePvp")
+	_label("First to $1,000,000 held cash wins; every win starts a fresh PvP world.", true)
+	_label("Accounts keep Co-op progress and the current PvP round. Private saves are separate. No account is required.", true)
 	_finish_page()
 
 func _choose_server(mode: String) -> void:
@@ -459,21 +471,21 @@ func _choose_server(mode: String) -> void:
 func show_lobby() -> void:
 	_open_page("lobby")
 	_lobby_state = _state_key()
-	_label("PvP · mining sandbox [BETA]" if client.mode == "pvp" else "Co-op · shared world")
+	_label("PvP · race to $1,000,000" if client.mode == "pvp" else "Co-op · shared world")
 	_identity = _label("", true)
 	_identity.name = "AccountIdentity"
 	if client.mode == "pvp":
-		_label("Hull is health. Death drops your cash; respawn in 10 seconds with a stock vehicle. Explosives cannot hurt their owner. Drill into opponents or drop isolated rock/lava onto them.", true)
+		_label("First to $1,000,000 held cash wins and resets the PvP world and every miner's equipment. Death drops cash, minerals and items; respawn in 10 seconds with a stock vehicle. Loot that cannot fit stays in the bag. Explosives cannot hurt their owner.", true)
 	if client.connected:
-		_label("Your sandbox is ready. Return to play, or leave before changing accounts." if client.mode == "pvp" else "Your shared world is ready. Return to play, or leave before changing accounts.", true)
-		_button("Return to sandbox" if client.mode == "pvp" else "Return to shared world", hide_lobby, "ReturnToWorld", true)
+		_label("Your PvP round is ready. Return to play, or leave before changing accounts." if client.mode == "pvp" else "Your shared world is ready. Return to play, or leave before changing accounts.", true)
+		_button("Return to PvP" if client.mode == "pvp" else "Return to shared world", hide_lobby, "ReturnToWorld", true)
 		_button("Leave server", _leave, "LeaveServer")
 	elif not client.token.is_empty():
-		_label("Your account keeps money, cargo, upgrades, items and position separately for " + ("PvP" if client.mode == "pvp" else "Co-op") + " on this server.", true)
+		_label("Your account keeps money, cargo, upgrades, items and position " + ("until the current PvP round ends." if client.mode == "pvp" else "in this Co-op world."), true)
 		_button("Join server", _join, "JoinServer", true)
 		_button("Sign out", _sign_out, "SignOut")
 	else:
-		_label("Keep your " + ("PvP" if client.mode == "pvp" else "Co-op") + " progress with an account. Private saves stay separate.", true)
+		_label(("Keep progress in this PvP round" if client.mode == "pvp" else "Keep your Co-op progress") + " with an account. Private saves stay separate.", true)
 		_button("Continue with Discord", _discord_auth, "ContinueDiscord", true)
 		_button("Use username / password", _show_password, "UsePassword")
 		_label("Just exploring? Anonymous progress ends when you leave the server.", true)
@@ -536,7 +548,7 @@ func _show_server() -> void:
 	_url = _field("Server HTTPS address", client.base_url, "ServerAddress")
 	_url.virtual_keyboard_type = LineEdit.KEYBOARD_TYPE_URL
 	_url.text_submitted.connect(func(_text: String): _save_server())
-	_label(("PvP sandbox" if client.mode == "pvp" else "Shared world") + ": " + client.world_id, true)
+	_label(("PvP world" if client.mode == "pvp" else "Shared world") + ": " + client.world_id, true)
 	_button("Save server address", _save_server, "SaveServer", true)
 	_button("Use default server", _default_server, "DefaultServer")
 	_button("Back without changes", show_lobby, "ServerBack")
@@ -570,6 +582,7 @@ func hide_lobby(reset_pause: bool = false) -> void:
 func refresh_hud() -> void:
 	if not is_instance_valid(_hud_label):
 		return
+	leaderboard.refresh()
 	var header_text := "%s · %d/5" % ["PvP" if client.mode == "pvp" else "Co-op", client.peers.size()] if host.is_coop else "Private"
 	var needs_layout: bool = _hud_label.text != header_text or _hud_scene != host.scene_name or not _hud.visible
 	_hud.visible = not modal and (host.is_coop or host.scene_name == "MainMenu")
@@ -607,7 +620,7 @@ func _join() -> void:
 	if not client.endpoint_is_secure():
 		_set_status("Use an HTTPS server address in Advanced before joining.")
 		return
-	_message = "Connecting to the PvP sandbox…" if client.mode == "pvp" else "Connecting to the shared world…"
+	_message = "Connecting to the PvP round…" if client.mode == "pvp" else "Connecting to the shared world…"
 	client.join_world()
 	_auth_state_changed()
 
@@ -692,7 +705,7 @@ func _update_status() -> void:
 	elif client.auth_busy:
 		_status.text = _message if not _message.is_empty() else "Signing in…"
 	elif client.connecting:
-		_status.text = "Connecting to the PvP sandbox…" if client.mode == "pvp" else "Connecting to the shared world…"
+		_status.text = "Connecting to the PvP round…" if client.mode == "pvp" else "Connecting to the shared world…"
 	else:
 		_status.text = _message
 	_status.visible = not _status.text.is_empty()

@@ -194,17 +194,25 @@ python -m unittest discover -s automation/coop -p 'test_*.py' -v
 verification/tools/Godot.app/Contents/MacOS/Godot --headless --path godot --script ../verification/fuel_pricing_interop.gd
 ```
 
-## PvP mining sandbox · 0.6.0
+## Million-dollar PvP rounds · 0.7.0
 
-Choose **PvP · mining sandbox [BETA]**, launch with `--mode=pvp`, or use
-`?mode=pvp` on Web. This ongoing sandbox has no match timer, winner or campaign
-ending. The existing service hosts separate persistent co-op and PvP worlds,
-each with five human-player slots. **Practice bots are not included in this release.**
-Private saves and existing co-op progress remain unchanged.
+Choose **PvP · race to $1,000,000**, launch with `--mode=pvp`, or use
+`?mode=pvp` on Web. The first server-accepted **held cash** balance reaching
+**$1,000,000 or more** wins; unsold cargo and lifetime earnings do not count.
+The winner is announced in-game and a fresh round starts automatically.
+Transactions are serialized by the authority; simultaneous contenders cannot
+produce two winners. Co-op and PvP retain separate five-player worlds.
+**Practice bots are not included in this release.**
+Private saves, co-op progress, accounts and archived recordings are unchanged.
 
 PvP uses the original 36-column mine and Sinclair, without Ria or the western
-extension. The mode reuses co-op's responsive green header, compact player count
-and MODES / ACCOUNTS icon. Its chooser explicitly identifies the mode as unfinished.
+extension. A green podium icon joins the existing top-right header controls.
+Its live leaderboard ranks all connected PvP players by authoritative held cash,
+including yourself, with updates after joins, departures, economic changes and
+round resets. Equal balances use player ID for stable display ordering, not
+victory ordering. The modal follows the green menu palette, supports short
+viewports and closes with Close/Escape/controller back. Viewing it pauses only
+the local player and grants no server-side protection.
 
 - Stock hull is 10 HP. Directional drill contact works on the ground and in flight;
   damage integrates elapsed time rather than packet count. Passive player contact
@@ -216,13 +224,17 @@ and MODES / ACCOUNTS icon. Its chooser explicitly identifies the mode as unfinis
   earth borders. Impact plays the break/splash animation, then keeps its final
   broken/puddle frame while blinking faster until removal at 2.5 seconds. Late
   snapshots cannot restore intact sprites or resurrect expired residue.
-- Death drops all cash. Bags fall in their column onto solid earth, fall again
-  when support is removed, and credit their full amount once when touched or
-  hovered over within 0.1 tile of hull clearance. Earth blocks collection.
+- Death transfers all cash, mineral cargo and consumable items to the money bag.
+  Bags fall onto solid earth, fall again when support is removed, and can be
+  collected by touching or hovering within 0.1 tile of hull clearance. Earth
+  blocks collection. Cash and consumables transfer independently of bay space.
+  Mineral units are randomly selected from those that fit the collector's
+  remaining weighted bay capacity; uncollected minerals stay in the bag.
+  Serialized pickup prevents duplicate loot, including competing collectors.
 - After ten seconds, respawn restores stock upgrades, full stock hull and fuel,
-  retaining remaining cargo, items and transmissions but granting no cash.
-  Fuel exhaustion preserves the original two-part wreck animation and sounds,
-  and triggers the same cash-drop/respawn sequence.
+  with no cash, cargo or consumables; transmissions remain for that round.
+  Fuel exhaustion preserves the original wreck animation and sounds and uses
+  the same loot-drop/respawn sequence.
 - The translucent respawn overlay keeps the live mine visible and reuses the
   original metal frame, green CRT glass and Arial Black menu motif. It waits for
   authoritative respawn rather than leaving a zero-second countdown onscreen.
@@ -231,12 +243,22 @@ and MODES / ACCOUNTS icon. Its chooser explicitly identifies the mode as unfinis
   attacks, mining, outside pickups and obstruction. Entry requires proximity to
   the real door. A blocked exit remains protected until a safe position is found.
   Inventory, help and options do not grant safety.
-- PvP account state persists separately from co-op; anonymous progress ends on
-  departure. Transmission rewards cannot be farmed through death or stale state.
+- PvP account state persists for the current round; anonymous progress ends on
+  departure. A win atomically changes the seed and round ID, clears terrain
+  edits, bags and hazards, and resets **all** PvP saves, including offline users,
+  to the stock $20 start. Transmission rewards cannot be farmed through death
+  or stale state. Co-op/private saves and account identities are not reset.
 
-Deploy `pvp.py` together with the updated `server.py` and `terrain.py` before
-publishing clients. Startup adds separate PvP tables/world state without resetting
-the existing SQLite database. Keep the service's existing OAuth configuration.
+Deploy `pvp.py`, `server.py` and `capture.py` together before publishing 0.7.0
+clients. PvP join now advertises `pvp_rounds: 1`; older PvP clients receive an
+explicit update-required error rather than entering an incompatible world.
+Every PvP mutation carries the current `round_id`. A stale prior-round request
+cannot alter the new world. The per-recipient `round_started` snapshot includes
+that player's completed state and the fresh state; clients retire pending
+transactions and rebuild the world without carrying old local purchases over.
+Keep existing OAuth configuration and the SQLite database. See
+[authority/storage details](automation/coop/README.md) and
+[private disk alerts and storage recommendations](automation/ops/README.md).
 
 Initial damage values remain playtest tunables:
 
@@ -472,6 +494,10 @@ provenance available when export strips script text. Release staging and
 Physics ticks are at 50 Hz and may repeat while paused. Chunk rotation does not
 end an episode. Private death is terminal; scene changes, disconnect and deliberate
 shutdown are truncations. PvP death/respawn is a life event, not match termination.
+A normal PvP round end is terminal (`round_end`) for winners and losers; the
+recipient's authoritative completed state is captured before the fresh world is
+loaded. New rounds begin new episodes. Existing archives remain readable; use
+the updated exporter/validator for recordings containing the new boundary.
 Separate authoritative records retain allowlisted outcomes and safe correlation
 sequences (and hashed request correlation where available), not account identities.
 An absent authoritative record is missing evidence, not an inferred success.

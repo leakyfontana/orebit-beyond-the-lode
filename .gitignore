@@ -3,6 +3,11 @@
 !/automation/release/
 !/automation/announcements/
 !/automation/coop/
+!/automation/ops/
+!/automation/vps/
+/automation/vps/*
+!/automation/vps/orebit-ops.service
+!/automation/vps/orebit-ops.timer
 
 # Verification toolchains, captures and source-reference downloads stay local.
 /verification/*

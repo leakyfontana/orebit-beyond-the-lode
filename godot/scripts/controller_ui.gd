@@ -79,7 +79,7 @@ func _install_hint() -> void:
 func sync_state(delta: float = 0.0) -> void:
 	var gameplay: bool = ui.host.scene_name == "Game" and ui.host.player_alive and not ui.host.paused and ui.host.pending_scene.is_empty() and not get_tree().paused
 	GameInput.set_gameplay_available(gameplay)
-	if ui.host.coop != null and ui.host.coop.lobby != null and ui.host.coop.lobby.modal:
+	if ui.host.coop != null and ui.host.coop.lobby != null and (ui.host.coop.lobby.modal or ui.host.coop.lobby.leaderboard.modal):
 		_menu_open = true
 		_scope = null
 		_candidates.clear()
@@ -151,6 +151,10 @@ func _focus_first() -> void:
 		_candidates[0].grab_focus()
 
 func _controller_event(event: InputEvent) -> void:
+	if ui.host.coop != null and ui.host.coop.lobby.leaderboard.modal:
+		if event.is_action_pressed(&"controller_back") or event.is_action_pressed(&"controller_pause") or event.is_action_pressed(&"controller_accept"):
+			ui.host.coop.lobby.leaderboard.close()
+		return
 	if ui.host.coop != null and ui.host.coop.lobby != null and ui.host.coop.lobby.modal:
 		return
 	sync_state()

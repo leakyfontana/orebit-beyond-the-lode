@@ -1,8 +1,11 @@
 """Deterministic PvP mechanics plus real WebSocket isolation/lifecycle regressions."""
 import asyncio
 import copy
+import json
 import os
 import tempfile
+from pathlib import Path
+import sqlite3
 import time
 import types
 import unittest
@@ -72,12 +75,12 @@ class PvpMechanicsTest(unittest.IsolatedAsyncioTestCase):
     async def snapshot(self, player, state, revision=None, motion_seq=None):
         if motion_seq is None:
             motion_seq = getattr(player, "motion_seq", 0) + 1
-        await self.world.update_state(player, {"type": "state", "state": state, "motion_seq": motion_seq,
+        await self.world.update_state(player, {"type": "state", "round_id": self.world.round_id, "state": state, "motion_seq": motion_seq,
                                              "state_revision": player.revision if revision is None else revision})
 
     async def building(self, player, script, enter=True, request_id=None):
         self.messages.clear()
-        await self.world.building(player, {"type": "building", "building": script, "enter": enter,
+        await self.world.building(player, {"type": "building", "round_id": self.world.round_id, "building": script, "enter": enter,
                                           "request_id": request_id or f"building-{len(player.requests)}"})
         owner = [message for player_id, message in self.messages if player_id == player.player_id]
         self.assertEqual([message["type"] for message in owner], ["state_sync", "building_result", "pvp_tick"])
@@ -709,8 +712,10 @@ class PvpMechanicsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(victim.state["player_hp"], 10)
         self.assertEqual(victim.state["player_fuel"], 10)
         self.assertEqual(victim.state["current_upgrades"], STOCK_UPGRADES)
-        self.assertEqual(victim.state["player_items"]["Dynamite"], 7)
-        self.assertEqual(victim.state["player_cargo"]["Ironium"], 3)
+        self.assertEqual(victim.state["player_items"]["Dynamite"], 0)
+        self.assertEqual(victim.state["player_cargo"]["Ironium"], 0)
+        self.assertEqual(picker.state["player_items"]["Dynamite"], 7)
+        self.assertEqual(picker.state["player_cargo"]["Ironium"], 3)
         self.assertEqual(victim.state["player_money"] + picker.state["player_money"], 1254)
 
     def test_falling_hazards_damage_once_then_leave_nonsolid_timed_impacts(self):
@@ -880,6 +885,164 @@ class PvpMechanicsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state["respawn_at"], 110)
         self.assertEqual(state["player_money"], 0)
 
+    async def test_each_authoritative_credit_path_wins_and_resets_once(self):
+        for credit in ("sale", "transmission", "treasure", "transfer"):
+            with self.subTest(credit=credit):
+                self.world.members.clear()
+                player = self.player("winner")
+                player.state["player_money"] = 999_990
+                old_round, old_seed = self.world.round_id, self.world.seed
+                self.messages.clear()
+                if credit == "sale":
+                    player.state["player_cargo"]["Ironium"] = 1
+                    requested = copy.deepcopy(player.state)
+                    requested["player_cargo"]["Ironium"] = 0
+                    requested["player_money"] += 30
+                    await self.snapshot(player, requested)
+                elif credit == "transmission":
+                    player.state["deepest_y"] = -44
+                    await self.world.action(player, {"type": "claim_transmission", "index": 1,
+                                                     "round_id": old_round})
+                elif credit == "treasure":
+                    player.state.update(x=5.5, y=-3.5)
+                    self.world.terrain[5][4] = 16  # Dinosaur Bones pay cash directly.
+                    await self.world.mine(player, {"type": "mine", "x": 5, "y": 4,
+                                                   "request_id": "treasure", "round_id": old_round})
+                else:
+                    sender = self.player("sender", x=10.5)
+                    await self.world.transfer(sender, {"type": "transfer", "recipient_id": player.player_id,
+                                                       "amount": 10, "round_id": old_round})
+                self.assertNotEqual(self.world.round_id, old_round)
+                self.assertNotEqual(self.world.seed, old_seed)
+                self.assertEqual(self.world.winner["player_id"], player.player_id)
+                self.assertEqual(self.world.winner["round_id"], old_round)
+                self.assertGreaterEqual(self.world.winner["amount"], 1_000_000)
+                self.assertEqual(player.state, stock_state())
+                events = [m for identity, m in self.messages if identity == player.player_id]
+                self.assertEqual([m["type"] for m in events], ["round_started"])
+                self.assertEqual(events[0]["round_id"], self.world.round_id)
+                self.assertFalse(await self.world.finish_round())
+                # The next subtest starts with a simple traversable unit world.
+                self.world.terrain = {x: [0] * HEIGHT for x in range(WIDTH)}
+
+    async def test_tick_first_winner_freezes_before_later_larger_pickup(self):
+        first = self.player("a-first", 5.5, -7.6)
+        later = self.player("z-later", 15.5, -7.6)
+        first.state["player_money"] = later.state["player_money"] = 999_990
+        self.world.bags = [
+            {"id": "first", "x": 5.5, "y": -8.5, "vy": 0, "amount": 10},
+            {"id": "later", "x": 15.5, "y": -8.5, "vy": 0, "amount": 500_000},
+        ]
+        self.world.step(0.1, 100, 0)
+        self.assertEqual(self.world.pending_winner["player_id"], first.player_id)
+        self.assertEqual(later.state["player_money"], 999_990)
+        self.world.step(0.1, 101, 0)
+        self.assertEqual(later.state["player_money"], 999_990)
+        await self.world.finish_round()
+        self.assertEqual(self.world.winner["amount"], 1_000_000)
+        self.assertFalse(self.world.bags)
+        self.assertEqual(len([m for _, m in self.messages if m["type"] == "round_started"]), 2)
+
+    async def test_death_loot_partial_weighted_full_bay_and_reloaded_remainder(self):
+        victim = self.player("victim", 5.5, -7.6)
+        victim.state["player_money"] = 0
+        victim.state["player_items"]["Dynamite"] = 7
+        victim.state["player_cargo"].update(Ironium=4, Goldium=3, Diamond=2)
+        self.world.damage(victim, 100, 100)
+        self.world.damage(victim, 100, 100)
+        bag, = self.world.bags
+        self.assertEqual(bag["items"]["Dynamite"], 7)
+        self.assertFalse(any(victim.state["player_cargo"].values()))
+        self.assertFalse(any(victim.state["player_items"].values()))
+        picker = self.player("picker", 5.5, -7.6)
+        picker.state["player_cargo"]["Ironium"] = 7
+        self.world.step(0.1, 100, 0)
+        self.assertEqual(picker.state["player_items"]["Dynamite"], 7)
+        self.assertEqual(bag["cargo"]["Diamond"], 2)
+        self.assertEqual(len(self.world.bags), 1)
+        # With five free weight units, four Ironium fit but the last free unit
+        # cannot hold Goldium or Diamond; neither mineral may be destroyed.
+        picker.state["player_cargo"]["Ironium"] = 2
+        with patch("pvp.secrets.randbelow", return_value=0):
+            self.world.step(0.1, 100.1, 0)
+        self.assertEqual(picker.state["player_cargo"]["Ironium"], 6)
+        self.assertEqual(picker.state["player_cargo"]["Goldium"], 0)
+        self.assertEqual(bag["cargo"]["Goldium"], 3)
+        self.assertEqual(bag["cargo"]["Diamond"], 2)
+        # One free unit cannot fit either remaining mineral; another collector
+        # may still take the remainder later, including after restart.
+        await self.world.persist()
+        await self.restart_world(101)
+        bag, = self.world.bags
+        self.assertEqual(bag["cargo"]["Goldium"], 3)
+        self.assertEqual(bag["cargo"]["Diamond"], 2)
+        self.assertEqual(bag["items"]["Dynamite"], 0)
+        self.world.members.clear()
+        collector = self.player("collector", 5.5, -7.6)
+        collector.state["current_upgrades"]["Cargo"] = "Leviathan Bay"
+        self.world.step(0.1, 101, 0)
+        self.assertFalse(self.world.bags)
+        self.assertEqual(collector.state["player_cargo"]["Goldium"], 3)
+        self.assertEqual(collector.state["player_cargo"]["Diamond"], 2)
+
+    def test_random_unit_draw_respects_weight_and_counter_limits(self):
+        picker = self.player("picker")
+        bag = {"id": "loot", "x": 5.5, "y": -3.5, "vy": 0, "amount": 12,
+               "cargo": {"Ironium": 2, "Goldium": 3, "Diamond": 1},
+               "items": {"Dynamite": 1_000_000_000, "Plastic Explosives": float("inf"),
+                         "Quantum Teleporter": 1.5, "Matter Transmitter": True}}
+        picker.state["player_items"]["Dynamite"] = 999_999_999
+        self.world.bags = [bag]
+        with patch("pvp.secrets.randbelow", side_effect=lambda total: total - 1):
+            self.assertTrue(self.world.collect_bag(picker, bag))
+        self.assertEqual(picker.state["player_money"], 32)
+        self.assertEqual(picker.state["player_items"]["Dynamite"], 1_000_000_000)
+        self.assertEqual(bag["items"]["Dynamite"], 999_999_999)
+        self.assertEqual(picker.state["player_cargo"]["Goldium"], 3)
+        self.assertEqual(picker.state["player_cargo"]["Ironium"], 1)
+        self.assertEqual(bag["cargo"]["Ironium"], 1)
+        self.assertEqual(bag["cargo"]["Diamond"], 1)
+        self.assertFalse(self.world.collect_bag(picker, bag))
+
+    async def test_failed_round_transaction_rolls_back_and_cannot_save_dirty_winner(self):
+        player = self.player("winner")
+        player.user_id = await self.store.run(lambda db: db.execute(
+            "INSERT INTO users(username,display_name,created_at) VALUES('winner','Winner',0)").lastrowid)
+        player.state["player_money"] = 999_990
+        player.state["player_cargo"]["Ironium"] = 1
+        self.world.dirty_players.add(player)
+        self.world.set_cell(2, 4, 0)
+        await self.world.persist()
+        old_round, old_seed = self.world.round_id, self.world.seed
+        old_cells = await self.store.run(lambda db: db.execute(
+            "SELECT count(*) FROM pvp_cells WHERE world_id=?", (self.world.world_id,)).fetchone()[0])
+        await self.store.run(lambda db: db.execute(
+            "CREATE TEMP TRIGGER reject_round BEFORE UPDATE ON pvp_rounds "
+            "BEGIN SELECT RAISE(ABORT,'simulated disk save failure'); END"))
+        requested = copy.deepcopy(player.state)
+        requested["player_cargo"]["Ironium"] = 0
+        requested["player_money"] += 30
+        with self.assertRaises(sqlite3.Error):
+            await self.snapshot(player, requested)
+        self.assertTrue(self.world.failed)
+        self.assertFalse(any(m["type"] == "round_started" for _, m in self.messages))
+        with self.assertRaises(APIError):
+            await self.world.persist()
+        await self.world.stop()
+        def load(db):
+            return (db.execute("SELECT seed FROM worlds WHERE id=?", (self.world.world_id,)).fetchone()[0],
+                    db.execute("SELECT round_id,winner FROM pvp_rounds WHERE world_id=?", (self.world.world_id,)).fetchone(),
+                    db.execute("SELECT state FROM player_states WHERE world_id=? AND user_id=?",
+                               (self.world.world_id, player.user_id)).fetchone()[0],
+                    db.execute("SELECT count(*) FROM pvp_cells WHERE world_id=?", (self.world.world_id,)).fetchone()[0])
+        seed, round_row, saved, cells = await self.store.run(load)
+        self.assertEqual(seed, old_seed)
+        self.assertEqual(round_row["round_id"], old_round)
+        self.assertIsNone(round_row["winner"])
+        self.assertEqual(json.loads(saved)["player_money"], 999_990)
+        self.assertEqual(json.loads(saved)["player_cargo"]["Ironium"], 1)
+        self.assertEqual(cells, old_cells)
+
     def test_damage_tunables_reject_nonfinite_and_negative(self):
         for value in ("nan", "inf", "-1"):
             with patch.dict(os.environ, {"OREBIT_PVP_DRILL_DPS": value}):
@@ -901,8 +1064,19 @@ class PvpNetworkTest(unittest.IsolatedAsyncioTestCase):
     async def join(self, mode="pvp", token=""):
         connection = await self.http.ws_connect(self.base + "/api/ws")
         self.sockets.append(connection)
-        await connection.send_json({"type": "join", "mode": mode, "token": token})
+        await connection.send_json({"type": "join", "mode": mode, "token": token, "pvp_rounds": 1})
         return connection, await connection.receive_json(timeout=5)
+
+    async def test_old_pvp_clients_require_update_without_using_a_slot(self):
+        connection = await self.http.ws_connect(self.base + "/api/ws")
+        self.sockets.append(connection)
+        await connection.send_json({"type": "join", "mode": "pvp"})
+        rejection = await connection.receive_json(timeout=5)
+        self.assertEqual(rejection["code"], "client_update_required")
+        coop, joined = await self.join(mode="coop")
+        self.assertEqual(joined["type"], "joined")
+        players = [await self.join() for _ in range(5)]
+        self.assertTrue(all(event["type"] == "joined" for _, event in players))
 
     async def test_real_building_protocol_four_shops_finances_and_persistent_reconnect(self):
         account = await self.signup("building_shopper")
@@ -914,7 +1088,7 @@ class PvpNetworkTest(unittest.IsolatedAsyncioTestCase):
             nonlocal state, revision, request_number
             request_number += 1
             request_id = f"building-ws-{request_number}"
-            await connection.send_json({"type": "building", "building": script, "enter": enter, "request_id": request_id})
+            await connection.send_json({"type": "building", "round_id": joined["round_id"], "building": script, "enter": enter, "request_id": request_id})
             # Tick broadcasts may already be buffered, but no building_result may
             # arrive before its authoritative full state_sync.
             async with asyncio.timeout(5):
@@ -935,7 +1109,7 @@ class PvpNetworkTest(unittest.IsolatedAsyncioTestCase):
         async def snapshot(requested):
             nonlocal state, revision, motion_seq
             motion_seq += 1
-            await connection.send_json({"type": "state", "state": requested,
+            await connection.send_json({"type": "state", "round_id": joined["round_id"], "state": requested,
                                        "state_revision": revision, "motion_seq": motion_seq})
             ack = await self.event(connection, "state_ack")
             state, revision = ack["state"], ack["state_revision"]
@@ -970,7 +1144,7 @@ class PvpNetworkTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(state["building"], script)
                 self.assertEqual(state["player_fuel"], 12)
                 self.assertEqual(state["player_money"], 15)
-                await connection.send_json({"type": "damage", "source": "fuel", "amount": 10})
+                await connection.send_json({"type": "damage", "round_id": joined["round_id"], "source": "fuel", "amount": 10})
                 immune = await self.event(connection, "state_sync")
                 self.assertTrue(immune["state"]["alive"])
                 self.assertEqual(immune["state"]["player_hp"], 10)
@@ -982,6 +1156,7 @@ class PvpNetworkTest(unittest.IsolatedAsyncioTestCase):
         await self.stop()
         await self.start()
         connection, restored = await self.join(token=account["token"])
+        joined = restored
         state, revision, motion_seq = restored["state"], restored["state_revision"], 0
         self.assertEqual(state, saved)
         self.assertEqual(state["building"], "ItemShopManager")
@@ -1009,13 +1184,13 @@ class PvpNetworkTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(health["modes"]["coop"]["players"], 1)
         self.assertEqual(health["modes"]["pvp"]["players"], 5)
         first, joined = pvp[0]
-        await first.send_json({"type": "transfer", "recipient_id": coop_joined["player_id"], "amount": 1})
+        await first.send_json({"type": "transfer", "round_id": joined["round_id"], "recipient_id": coop_joined["player_id"], "amount": 1})
         self.assertFalse((await self.event(first, "transfer_result"))["accepted"])
         await coop.send_json({"type": "state", "state": {"player_money": 999}, "state_revision": 0})
         self.assertEqual((await self.event(coop, "state_ack"))["state"]["player_money"], 999)
-        await first.send_json({"type": "state", "state": joined["state"], "state_revision": -1, "motion_seq": 1})
+        await first.send_json({"type": "state", "round_id": joined["round_id"], "state": joined["state"], "state_revision": -1, "motion_seq": 1})
         self.assertEqual((await self.event(first, "state_sync"))["state"]["player_money"], 20)
-        await first.send_json({"type": "state", "state": joined["state"],
+        await first.send_json({"type": "state", "round_id": joined["round_id"], "state": joined["state"],
                                "state_revision": joined["state_revision"], "motion_seq": 2})
         ack = await self.event(first, "state_ack")
         self.assertEqual(ack["motion_seq"], 2)
@@ -1023,7 +1198,7 @@ class PvpNetworkTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ack["state"]["x"], joined["state"]["x"])
         replay = copy.deepcopy(ack["state"])
         replay["x"] += 0.25
-        await first.send_json({"type": "state", "state": replay,
+        await first.send_json({"type": "state", "round_id": joined["round_id"], "state": replay,
                                "state_revision": ack["state_revision"], "motion_seq": 2})
         self.assertEqual((await self.event(first, "state_sync"))["state"]["x"], ack["state"]["x"])
         await pvp[-1][0].close()
@@ -1034,12 +1209,12 @@ class PvpNetworkTest(unittest.IsolatedAsyncioTestCase):
     async def test_real_ten_second_respawn_and_stale_snapshot_cannot_restore_cash(self):
         connection, joined = await self.join()
         before = time.monotonic()
-        await connection.send_json({"type": "damage", "source": "fuel", "amount": 10})
+        await connection.send_json({"type": "damage", "round_id": joined["round_id"], "source": "fuel", "amount": 10})
         dead = await self.event(connection, "state_sync")
         self.assertFalse(dead["state"]["alive"])
         self.assertEqual(dead["state"]["player_money"], 0)
         self.assertAlmostEqual(dead["state"]["respawn_at"] - time.time(), 10, delta=1)
-        await connection.send_json({"type": "state", "state": joined["state"], "state_revision": joined["state_revision"], "motion_seq": 1})
+        await connection.send_json({"type": "state", "round_id": joined["round_id"], "state": joined["state"], "state_revision": joined["state_revision"], "motion_seq": 1})
         rejected = await self.event(connection, "state_sync")
         self.assertFalse(rejected["state"]["alive"])
         self.assertEqual(rejected["state"]["player_money"], 0)
@@ -1057,6 +1232,120 @@ class PvpNetworkTest(unittest.IsolatedAsyncioTestCase):
         snapshot = await self.event(connection, "pvp_tick")
         cash = next(p["state"]["player_money"] for p in snapshot["players"] if p["player_id"] == joined["player_id"])
         self.assertEqual(cash + sum(bag["amount"] for bag in snapshot["bags"]), joined["state"]["player_money"])
+
+    async def test_real_competing_sales_durable_round_offline_reset_and_stale_routes(self):
+        accounts = [await self.signup(name) for name in ("round_first", "round_second", "round_offline")]
+        await self.stop()
+        database = Path(self.directory.name) / "state.sqlite3"
+        coop_state = {"player_money": 4567, "player_items": {"Dynamite": 9}}
+        with sqlite3.connect(database) as db:
+            for index, account in enumerate(accounts):
+                state = stock_state()
+                state["player_money"] = 999_990 if index < 2 else 999_999
+                state["player_cargo"]["Ironium"] = 1
+                state["player_items"]["Dynamite"] = 4
+                db.execute("INSERT INTO player_states(world_id,user_id,state,revision,updated_at) VALUES(?,?,?,?,0)",
+                           ("public:pvp", account["user"]["id"], json.dumps(state), 7))
+            db.execute("INSERT INTO player_states(world_id,user_id,state,revision,updated_at) VALUES(?,?,?,?,0)",
+                       ("public", accounts[2]["user"]["id"], json.dumps(coop_state), 3))
+            db.execute("INSERT INTO excavations(world_id,x,y,created_at) VALUES('public',5,5,0)")
+            db.execute("INSERT INTO pvp_cells(world_id,x,y,tile) VALUES('public:pvp',0,100,0) "
+                       "ON CONFLICT(world_id,x,y) DO UPDATE SET tile=excluded.tile")
+            runtime = {"bags": [{"id": "old-round-bag", "x": 35.5, "y": -10,
+                                  "amount": 123, "vy": 0, "cargo": {"Ironium": 4},
+                                  "items": {"Dynamite": 8}}], "falling": [], "impacts": []}
+            db.execute("INSERT INTO pvp_runtime(world_id,state) VALUES('public:pvp',?) "
+                       "ON CONFLICT(world_id) DO UPDATE SET state=excluded.state", (json.dumps(runtime),))
+        await self.start()
+        coop, coop_joined = await self.join("coop", accounts[2]["token"])
+        connections = [await self.join(token=account["token"]) for account in accounts[:2]]
+        old_round, old_seed = connections[0][1]["round_id"], connections[0][1]["seed"]
+        requests = []
+        for connection, joined in connections:
+            state = copy.deepcopy(joined["state"])
+            state["player_cargo"]["Ironium"] = 0
+            state["player_money"] += 30
+            requests.append(connection.send_json({"type": "state", "round_id": old_round,
+                                                  "state": state, "state_revision": joined["state_revision"],
+                                                  "motion_seq": 99}))
+        await asyncio.gather(*requests)
+        started = [await self.event(connection, "round_started") for connection, _ in connections]
+        current = started[0]
+        self.assertNotEqual(current["round_id"], old_round)
+        self.assertNotEqual(current["seed"], old_seed)
+        self.assertEqual(current["winner"]["round_id"], old_round)
+        self.assertEqual(current["winner"]["amount"], 1_000_020)
+        self.assertEqual(current["winner"], started[1]["winner"])
+        self.assertEqual(current["round_id"], started[1]["round_id"])
+        for (connection, joined), reset in zip(connections, started):
+            self.assertEqual(reset["player_id"], joined["player_id"])
+            self.assertEqual(reset["state"]["player_money"], 20)
+            self.assertEqual(reset["state"]["current_upgrades"], STOCK_UPGRADES)
+            self.assertFalse(any(reset["state"]["player_cargo"].values()))
+            self.assertFalse(any(reset["state"]["player_items"].values()))
+            self.assertEqual(reset["bags"], [])
+            self.assertEqual(reset["falling"], [])
+            self.assertEqual(reset["impacts"], [])
+            await connection.send_json({"type": "ping"})
+            async with asyncio.timeout(5):
+                while True:
+                    message = await connection.receive_json()
+                    self.assertNotIn(message["type"], ("round_started", "state_ack"))
+                    if message["type"] == "pong":
+                        break
+        connection = connections[0][0]
+        # Every mutation route is rejected before request/motion/cooldown state
+        # can change, for both missing IDs and a known prior-round ID.
+        stale_mutations = [
+            {"type": "state", "state": connections[0][1]["state"], "state_revision": current["state_revision"], "motion_seq": 999},
+            {"type": "mine", "x": 5, "y": 4},
+            {"type": "transfer", "recipient_id": connections[1][1]["player_id"], "amount": 20},
+            {"type": "blast", "item": "Dynamite"},
+            {"type": "damage", "source": "fuel"},
+            {"type": "claim_transmission", "index": 1},
+            {"type": "building", "building": "FuelShopManager", "enter": True},
+        ]
+        for round_id in (None, old_round):
+            for index, mutation in enumerate(stale_mutations):
+                request_id = f"stale-{round_id}-{index}"
+                message = {**mutation, "request_id": request_id}
+                if round_id is not None:
+                    message["round_id"] = round_id
+                await connection.send_json(message)
+                rejected = await self.event(connection, "round_rejected")
+                self.assertEqual(rejected["request_id"], request_id)
+                self.assertEqual(rejected["round_id"], current["round_id"])
+                synchronized = await self.event(connection, "state_sync")
+                self.assertEqual(synchronized["state"], current["state"])
+        await connection.send_json({"type": "state", "round_id": current["round_id"],
+                                    "state": current["state"], "state_revision": current["state_revision"],
+                                    "motion_seq": 1})
+        self.assertEqual((await self.event(connection, "state_ack"))["motion_seq"], 1)
+        # Co-op has neither a new round nor reset balances, including when the
+        # same account's offline PvP state was reset.
+        await coop.send_json({"type": "state", "state": {}, "state_revision": -1})
+        self.assertEqual((await self.event(coop, "state_sync"))["state"], coop_state)
+        self.assertNotIn("round_id", coop_joined)
+        with sqlite3.connect(database) as db:
+            saved = db.execute("SELECT state,revision FROM player_states WHERE world_id='public:pvp' AND user_id=?",
+                               (accounts[2]["user"]["id"],)).fetchone()
+            self.assertEqual(json.loads(saved[0]), stock_state())
+            self.assertEqual(saved[1], 8)
+            self.assertEqual(db.execute("SELECT count(*) FROM excavations WHERE world_id='public'").fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT count(*) FROM pvp_cells WHERE world_id='public:pvp'").fetchone()[0], 0)
+            durable = db.execute("SELECT round_id,winner FROM pvp_rounds WHERE world_id='public:pvp'").fetchone()
+            self.assertEqual(durable[0], current["round_id"])
+            self.assertEqual(json.loads(durable[1]), current["winner"])
+        await self.stop()
+        await self.start()
+        _, restored = await self.join(token=accounts[2]["token"])
+        self.assertEqual(restored["type"], "joined")  # No winner replay on restart.
+        self.assertEqual(restored["seed"], current["seed"])
+        self.assertEqual(restored["round_id"], current["round_id"])
+        self.assertEqual(restored["state"]["player_money"], 20)
+        self.assertEqual(restored["bags"], [])
+        _, coop_restored = await self.join("coop", accounts[2]["token"])
+        self.assertEqual(coop_restored["state"], coop_state)
 
 
 if __name__ == "__main__":

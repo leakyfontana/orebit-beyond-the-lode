@@ -36,7 +36,7 @@ from argon2.exceptions import InvalidHashError, VerificationError
 
 from capture import CaptureError, CaptureStore, MAX_COMPRESSED
 from fuel_prices import FuelPrices, PriceUnavailable
-from pvp import PvpWorld, UPGRADE_NAMES
+from pvp import MUTATIONS, PvpWorld, UPGRADE_NAMES
 from terrain import HEIGHT, MIN_X, MINERALS, WIDTH, WEIGHTS, award, generate, tile_name
 from telemetry import configure_logging, event as log_event, log_context
 
@@ -861,6 +861,8 @@ class Service:
                 mode = join.get("mode", "coop")
                 if mode not in ("coop", "pvp"):
                     raise APIError("invalid_mode", "Choose coop or pvp.")
+                if mode == "pvp" and (type(join.get("pvp_rounds")) is not int or join["pvp_rounds"] != 1):
+                    raise APIError("client_update_required", "Update Orebit to 0.7.0 or newer to join million-dollar PvP rounds.")
                 world = self.pvp if mode == "pvp" else self
                 token = join.get("token", "")
                 user = await self.lookup_token(token) if token else None
@@ -885,6 +887,8 @@ class Service:
                     log_event("session_join", members=len(world.members), joining=self.joining)
                     await self.send(player, {"type": "joined", "player_id": player.player_id, "world_id": self.world_id, "seed": world.seed, "excavated": sorted(world.excavated), "players": [p.public() for p in world.members.values()], "state": player.state, "state_revision": player.revision, **(world.join_details() if world is self.pvp else {})})
                     await world.broadcast({"type": "player_joined", "player": world.public(player) if world is self.pvp else player.public()}, exclude=player)
+                    if world is self.pvp:
+                        await world.finish_if_winner(player)
                 async for incoming in socket:
                     if incoming.type != WSMsgType.TEXT:
                         if incoming.type == WSMsgType.ERROR:
@@ -907,6 +911,15 @@ class Service:
                     if not isinstance(message, dict):
                         raise APIError("invalid_message", "Game messages must be JSON objects.")
                     async with world.world_lock:
+                        if world is self.pvp and message.get("type") in MUTATIONS:
+                            if world.failed:
+                                raise APIError("pvp_unavailable", "PvP simulation is unavailable. Co-op remains available.", 503)
+                            if not world.accepts_round(message):
+                                await world.send(player, {"type": "round_rejected", "code": "stale_round",
+                                                          "request_id": message.get("request_id"),
+                                                          "message": "This request belongs to another PvP round."})
+                                await world.sync(player)
+                                continue
                         player.capture_context = {key: message[key] for key in ("request_id", "motion_seq") if key in message}
                         if message.get("type") == "capture_link":
                             linked = self.link_capture(player, message)

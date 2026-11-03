@@ -25,12 +25,15 @@ class Client:
         self.events = asyncio.Queue()
         self.reader = asyncio.create_task(self.read())
         self.motion_sequence = 0
+        self.round_id = ""
 
     async def read(self):
         async for message in self.socket:
             if message.type == WSMsgType.TEXT:
                 import json
-                self.events.put_nowait(json.loads(message.data))
+                event = json.loads(message.data)
+                self.round_id = event.get("round_id", self.round_id)
+                self.events.put_nowait(event)
 
     async def event(self, kind, predicate=lambda event: True, timeout=5):
         async with asyncio.timeout(timeout):
@@ -40,6 +43,10 @@ class Client:
                     return event
 
     async def send(self, kind, **fields):
+        if kind == "join" and fields.get("mode") == "pvp":
+            fields["pvp_rounds"] = 1
+        if kind in ("state", "mine", "transfer", "blast", "damage", "claim_transmission", "building"):
+            fields["round_id"] = self.round_id
         if kind == "state":
             self.motion_sequence += 1
             fields["motion_seq"] = self.motion_sequence
@@ -107,8 +114,9 @@ async def run():
                     player = players[index]
                     snapshot = copy.deepcopy(player.state)
                     snapshot.update(values)
+                    motion_seq = clients[index].motion_sequence + 1
                     await clients[index].send("state", state=snapshot, state_revision=player.revision)
-                    return await clients[index].event("state_ack", lambda event: event["state"] == player.state)
+                    return await clients[index].event("state_ack", lambda event: event.get("motion_seq") == motion_seq)
 
                 async def blast(item):
                     nonlocal sequence
@@ -196,22 +204,64 @@ async def run():
                 dead = await clients[1].event("state_sync", lambda event: not event["state"]["alive"])
                 assert dead["state"]["player_money"] == 0
                 bag = copy.deepcopy(world.bags[0])
+                assert bag["cargo"]["Ironium"] == 1 and bag["items"]["Dynamite"] == 2
                 await clients[0].event("pvp_tick", lambda event: bool(event["bags"]) and event["bags"][0]["y"] < bag["y"] - 0.1)
                 landed = await clients[0].event("pvp_tick", lambda event: bool(event["bags"]) and abs(event["bags"][0]["y"] + 3.5) < 1e-6)
                 assert landed["bags"][0]["x"] == bag["x"]
                 # A one-tile bag rests on row5's top (-4), and a real hull can
                 # hover .05 above its visible top without making physical contact.
                 await state(2, x=12, y=-2.5)
-                await clients[2].event("state_sync", lambda event: event["state"]["player_money"] == 75)
+                pickup = await clients[2].event("state_sync", lambda event: event["state"]["player_money"] == 75)
+                assert pickup["state"]["player_cargo"]["Ironium"] == 1
+                assert pickup["state"]["player_items"]["Dynamite"] == 2
                 assert not world.bags
                 respawn = await clients[1].event("state_sync", lambda event: event["state"]["alive"], timeout=12)
                 assert 10 <= time.monotonic() - death_started < 12
                 assert respawn["state"]["player_hp"] == 10
                 assert respawn["state"]["current_upgrades"] == STOCK_UPGRADES
                 assert respawn["state"]["player_money"] == 0
-                assert respawn["state"]["player_items"]["Dynamite"] == 2
-                assert respawn["state"]["player_cargo"]["Ironium"] == 1
-                print("PASS cash drop, bag gravity/pickup conservation, actual 10s stock respawn, retained cargo/items")
+                assert respawn["state"]["player_items"]["Dynamite"] == 0
+                assert respawn["state"]["player_cargo"]["Ironium"] == 0
+                print("PASS cash/cargo/item death loot, bag gravity/pickup conservation, actual 10s stock respawn")
+
+                await fixture([(8, -3.55), (12, -1), (14, -2.5), (10, -3.55), (14, -3.55)])
+                b.state["player_money"] = 55
+                b.state["player_items"]["Dynamite"] = 2
+                b.state["player_cargo"].update(Ironium=1, Goldium=2)
+                c.state["player_cargo"]["Ironium"] = 7
+                d.state["player_cargo"]["Ironium"] = 6
+                await clients[1].send("damage", source="fuel", amount=10)
+                await clients[0].event("pvp_tick", lambda event: bool(event["bags"]) and abs(event["bags"][0]["y"] + 3.5) < 1e-6)
+                await state(2, x=12, y=-2.5)
+                full = await clients[2].event("state_sync", lambda event: event["state"]["player_money"] == 75)
+                assert full["state"]["player_cargo"]["Ironium"] == 7
+                assert full["state"]["player_items"]["Dynamite"] == 2
+                assert len(world.bags) == 1 and world.bags[0]["cargo"]["Goldium"] == 2
+                await state(3, x=11, y=-3.55)
+                partial = await clients[3].event("state_sync", lambda event: event["state"]["player_cargo"]["Ironium"] == 7)
+                assert partial["state"]["player_cargo"]["Goldium"] == 0
+                assert world.bags[0]["cargo"]["Ironium"] == 0 and world.bags[0]["cargo"]["Goldium"] == 2
+                await state(4, x=13, y=-3.55)
+                await clients[4].event("state_sync", lambda event: event["state"]["player_cargo"]["Goldium"] == 2)
+                assert not world.bags
+                assert sum(p.state["player_cargo"]["Ironium"] for p in players) == 14
+                assert sum(p.state["player_items"]["Dynamite"] for p in players) == 2
+                print("PASS full bay still collects cash/items, weighted partial pickup leaves heavy ore, later pickup conserves loot")
+
+                await fixture([(10, -2.5), (12, -1), (14, -2.5), (22, -3.55), (30, -3.55)])
+                b.state["player_money"] = 55
+                b.state["player_items"]["Dynamite"] = 2
+                b.state["player_cargo"].update(Ironium=2, Goldium=1)
+                await clients[1].send("damage", source="fuel", amount=10)
+                await clients[0].event("pvp_tick", lambda event: bool(event["bags"]) and abs(event["bags"][0]["y"] + 3.5) < 1e-6)
+                await asyncio.gather(state(0, x=11.1, y=-2.5), state(2, x=12.9, y=-2.5))
+                await clients[0].event("pvp_tick", lambda event: not event["bags"])
+                assert sum(p.state["player_money"] for p in players) == 135
+                assert sum(p.state["player_cargo"]["Ironium"] for p in players) == 2
+                assert sum(p.state["player_cargo"]["Goldium"] for p in players) == 1
+                assert sum(p.state["player_items"]["Dynamite"] for p in players) == 2
+                assert sum(p.state["player_money"] == 75 for p in players) == 1
+                print("PASS concurrent real-client pickups cannot duplicate cash, minerals or consumables")
                 assert len(service.members) == 1 and len(world.members) == 5
                 print("OREBIT_PVP_FIVE_CLIENT_SCENARIO PASS")
         finally:
