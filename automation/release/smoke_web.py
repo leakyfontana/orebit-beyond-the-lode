@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Launch the exact Web export to MainMenu in Chromium, retaining visual evidence."""
+"""Launch the exact Web export to MainMenu in Chromium or WebKit, retaining visual evidence."""
 import argparse
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -150,6 +150,7 @@ def main():
                         help='Also exercise a retired Web release updating on the next navigation (requires --zip)')
     parser.add_argument('--sha', required=True)
     parser.add_argument('--screenshot', type=Path, default=Path('dist/web-menu.png'))
+    parser.add_argument('--browser', choices=('chromium', 'webkit'), default='chromium')
     args = parser.parse_args()
     if args.previous_zip and not args.zip:
         parser.error('--previous-zip requires --zip')
@@ -234,7 +235,7 @@ def main():
             errors = []
             ready = []
             with sync_playwright() as playwright:
-                browser = playwright.chromium.launch()
+                browser = getattr(playwright, args.browser).launch()
                 migration = None
                 if args.zip and args.previous_zip:
                     def serve(directory):
@@ -291,7 +292,7 @@ def main():
                 args.screenshot.parent.mkdir(parents=True, exist_ok=True)
                 page.screenshot(path=str(args.screenshot))
                 browser.close()
-            print(json.dumps({'commit': args.sha, 'url': url, 'menu_ready': True, 'pwa_callback_redirect': callback_redirect, 'migration': migration, 'readiness': ready[-1], 'screenshot': str(args.screenshot)}))
+            print(json.dumps({'commit': args.sha, 'browser': args.browser, 'url': url, 'menu_ready': True, 'pwa_callback_redirect': callback_redirect, 'migration': migration, 'readiness': ready[-1], 'screenshot': str(args.screenshot)}))
         finally:
             if server:
                 server.shutdown()
