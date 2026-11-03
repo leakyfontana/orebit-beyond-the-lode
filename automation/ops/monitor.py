@@ -223,7 +223,8 @@ def main():
         if not math.isfinite(args.test_delivery) or not 70 <= args.test_delivery <= 100:
             raise OpsError("Test delivery percentage must be between 70 and 100")
         total = 1024 ** 4
-        used = round(total * args.test_delivery / 100)
+        # Whole simulated bytes must reach, not undershoot, the requested band.
+        used = math.ceil(total * args.test_delivery / 100)
         reading = Reading(total, used, total - used, total - used, 0, "SIMULATED (no filesystem read)")
         # Deliberately ignore --state-dir for testing: live state cannot be reset/touched.
         with tempfile.TemporaryDirectory(prefix="orebit-ops-test-") as directory:

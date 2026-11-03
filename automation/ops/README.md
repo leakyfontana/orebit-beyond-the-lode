@@ -104,6 +104,8 @@ sudo -u orebit-bot env PYTHONDONTWRITEBYTECODE=1 OREBIT_DISCORD_TOKEN_FILE=/var/
 
 This sends **one clearly labelled TEST ONLY / SIMULATED** message naming 70/80/90/95, using temporary state. It does not measure/fill the filesystem or touch `/var/lib/orebit-bot/ops`, even if `--state-dir` is supplied. Repeating this explicit test sends another labelled test by design. Production dedup remains untouched. Failure is nonzero, never a fake delivery success. Do not use a public test channel: the same private-channel verification always applies.
 
+Simulated usage rounds upward to whole bytes so a requested threshold is reached, never missed by fractional-byte rounding.
+
 6. Run one real sample using the installed unit (its command is the actual `--once` CLI, with the private filesystem mount). This can send a **real** warning if thresholds are already reached, so authorize it as a live send:
 
 ```sh
