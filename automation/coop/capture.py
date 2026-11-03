@@ -27,10 +27,10 @@ DISK_RESERVE = 16 * 1024 * 1024
 STATE_FIELDS = ["x", "y", "vx", "vy", "fuel", "hp", "max_fuel", "max_hp", "money", "cargo_capacity", "alive", "paused", "facing", "in_shop", "digging", "grounded"] + [f"item_{i}" for i in range(6)] + [f"cargo_{i}" for i in range(10)] + [f"upgrade_{i}" for i in range(6)] + ["cargo_weight"] + [f"peer_{i}_{name}" for i in range(4) for name in ("present", "x", "y", "facing", "alive")] + ["ui_panel_mask", "selected_shop_item", "selected_upgrade_category", "selected_upgrade_tier"]
 COMMAND_KINDS = {"use_item", "buy_item", "buy_upgrade", "buy_fuel", "buy_hull", "sell_all", "drop_mineral", "shop_enter", "shop_exit"}
 EVENT_KINDS = {"server", "server_gap", "life", "gap", "timing"}
-REASONS = {"running", "death", "scene_change", "disconnect", "shutdown"}
+REASONS = {"running", "death", "round_end", "scene_change", "disconnect", "shutdown"}
 HEX32 = re.compile(r"[0-9a-f]{32}\Z")
 HEX64 = re.compile(r"[0-9a-f]{64}\Z")
-PACKETS = {"joined", "state_ack", "state_sync", "state", "mined", "transfer_result", "building_result", "blast_result", "pvp_tick", "player_joined", "player_left", "pong", "capture_linked"}
+PACKETS = {"joined", "round_started", "round_rejected", "state_ack", "state_sync", "state", "mined", "transfer_result", "building_result", "blast_result", "pvp_tick", "player_joined", "player_left", "pong", "capture_linked"}
 
 
 class CaptureError(ValueError):
@@ -143,7 +143,9 @@ def _records(raw, session_id, chunk_index):
             number(component)
         if type(record["terminated"]) is not bool or type(record["truncated"]) is not bool or not isinstance(record["reason"], str) or record["reason"] not in REASONS or (record["terminated"] and record["truncated"]):
             invalid()
-        if record["terminated"] and (manifest["mode"] != "private" or record["reason"] != "death"):
+        terminal = ((manifest["mode"] == "private" and record["reason"] == "death")
+                    or (manifest["mode"] == "pvp" and record["reason"] == "round_end"))
+        if (record["terminated"] and not terminal) or (record["reason"] == "round_end" and not record["terminated"]):
             invalid()
         if (record["terminated"] or record["truncated"]) == (record["reason"] == "running"):
             invalid()

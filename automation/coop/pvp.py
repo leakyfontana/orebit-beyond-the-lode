@@ -8,7 +8,7 @@ import os
 import secrets
 import time
 
-from terrain import HEIGHT, WIDTH, WEIGHTS, award, generate, tile_name, unsupported_hazards
+from terrain import CARGO_CAPACITY, HEIGHT, WIDTH, WEIGHTS, award, generate, tile_name, unsupported_hazards
 
 STOCK_UPGRADES = {"Drill": "Stock Drill", "Hull": "Stock Hull", "Engine": "Stock Engine", "Fuel": "Micro Tank", "Radiator": "Stock Fan", "Cargo": "Micro Bay"}
 HULL_HP = dict(zip(("Stock Hull", "Ironium Hull", "Bronzium Hull", "Steel Hull", "Platinium Hull", "Einsteinium Hull", "Energy-Shielded Hull"), (10, 17, 30, 50, 80, 120, 180)))
@@ -45,6 +45,18 @@ TRANSMISSION_BONUSES = {1: (-44.0, 1000), 2: (-84.0, 3000), 7: (-284.0, 25000)}
 BUILDING_DOORS = {"FuelShopManager": (3.2404, -3.637), "MineralBuyerManager": (10.92, -3.6023),
                   "UpgradeShopUI": (24.4346, -3.6228), "ItemShopManager": (30.9, -3.6228)}
 BUILDING_ENTRY_RADIUS = 1.5
+VICTORY_CASH = 1_000_000
+MAX_COUNTER = 1_000_000_000
+MAX_CASH = 1e15
+MUTATIONS = frozenset(("state", "mine", "transfer", "blast", "damage", "claim_transmission", "building"))
+
+
+def inventory(value, names):
+    """Normalize historical bags without accepting unbounded/noninteger counters."""
+    value = value if isinstance(value, dict) else {}
+    return {name: int(count) if type(count) in (int, float) and 0 <= count <= MAX_COUNTER
+            and math.isfinite(count) and count == int(count) else 0
+            for name in names for count in (value.get(name, 0),)}
 
 
 def stock_state(x=5.5):
@@ -75,6 +87,9 @@ class PvpWorld:
         self.members = {}
         self.world_lock = asyncio.Lock()
         self.seed = 0
+        self.round_id = ""
+        self.winner = None
+        self.pending_winner = None
         self.terrain = {}
         self.excavated = set()
         self.overrides = {}
@@ -86,7 +101,8 @@ class PvpWorld:
         self.runtime_dirty = False
         self.task = None
         self.failed = False
-        self.send = service.send
+        # Tag even direct state/results messages, not only snapshots.
+        self.send = self.send_round
         self.damage_values = {}
         for source, suffix in (("Dynamite", "DYNAMITE_DAMAGE"), ("Plastic Explosives", "PLASTIC_DAMAGE"), ("Rock", "ROCK_DAMAGE"), ("Lava", "LAVA_DAMAGE"), ("drill", "DRILL_DPS")):
             value = float(os.environ.get("OREBIT_PVP_" + suffix, DAMAGE[source]))
@@ -104,13 +120,19 @@ class PvpWorld:
                 CREATE TABLE IF NOT EXISTS pvp_runtime (
                     world_id TEXT PRIMARY KEY REFERENCES worlds(id), state TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS pvp_rounds (
+                    world_id TEXT PRIMARY KEY REFERENCES worlds(id),
+                    round_id TEXT NOT NULL, winner TEXT
+                );
             """)
             db.execute("INSERT OR IGNORE INTO worlds(id,seed,created_at) VALUES(?,?,?)", (self.world_id, secrets.randbelow(2147483646) + 1, int(time.time())))
             seed = db.execute("SELECT seed FROM worlds WHERE id=?", (self.world_id,)).fetchone()[0]
+            db.execute("INSERT OR IGNORE INTO pvp_rounds(world_id,round_id) VALUES(?,?)", (self.world_id, secrets.token_hex(16)))
+            round_row = db.execute("SELECT round_id,winner FROM pvp_rounds WHERE world_id=?", (self.world_id,)).fetchone()
             cells = [tuple(row) for row in db.execute("SELECT x,y,tile FROM pvp_cells WHERE world_id=?", (self.world_id,))]
             row = db.execute("SELECT state FROM pvp_runtime WHERE world_id=?", (self.world_id,)).fetchone()
-            return seed, cells, self.decode(row[0]) if row else {"bags": [], "falling": [], "impacts": []}
-        self.seed, cells, runtime = await self.store.run(load)
+            return seed, cells, self.decode(row[0]) if row else {"bags": [], "falling": [], "impacts": []}, round_row["round_id"], self.decode(round_row["winner"]) if round_row["winner"] else None
+        self.seed, cells, runtime, self.round_id, self.winner = await self.store.run(load)
         self.terrain = await asyncio.to_thread(generate, self.seed, pvp=True)
         for x, y, tile in cells:
             self.terrain[x][y] = tile
@@ -118,6 +140,9 @@ class PvpWorld:
             if tile == 0:
                 self.excavated.add((x, y))
         self.bags, self.falling = runtime["bags"], runtime["falling"]
+        for bag in self.bags:
+            bag["cargo"] = inventory(bag.get("cargo"), WEIGHTS)
+            bag["items"] = inventory(bag.get("items"), ITEM_NAMES)
         now = time.time()
         self.impacts = [impact for impact in runtime.get("impacts", []) if impact["expires_at"] > now]
         self.runtime_dirty = len(self.impacts) != len(runtime.get("impacts", []))
@@ -144,7 +169,8 @@ class PvpWorld:
                 pass
             self.task = None
         async with self.world_lock:
-            await self.persist()
+            if not self.failed:
+                await self.persist()
 
     async def run(self):
         previous = time.monotonic()
@@ -155,11 +181,16 @@ class PvpWorld:
                 elapsed = min(current - previous, 0.5)
                 previous = current
                 async with self.world_lock:
+                    if self.failed:
+                        raise RuntimeError("PvP authority requires restart after a failed round reset")
                     # Substeps keep gravity collision and drill integration independent
                     # of a moderately delayed network/database tick.
                     while elapsed > 1e-8:
                         step = min(elapsed, TICK_SECONDS)
                         self.step(step, time.time(), current)
+                        if self.pending_winner:
+                            await self.finish_round()
+                            break
                         elapsed -= step
                     changes = [[x, y, tile] for (x, y), tile in sorted(self.dirty_cells.items())]
                     changed_players = list(self.dirty_players)
@@ -179,12 +210,101 @@ class PvpWorld:
     async def broadcast(self, message, exclude=None):
         await asyncio.gather(*(self.send(p, message) for p in list(self.members.values()) if p is not exclude))
 
+    async def send_round(self, player, message):
+        await self.service.send(player, {**message, "round_id": self.round_id})
+
+    def accepts_round(self, message):
+        return message.get("round_id") == self.round_id
+
+    def recognize_winner(self, player):
+        if self.pending_winner is None and player.state.get("player_money", 0) >= VICTORY_CASH:
+            self.pending_winner = {"player_id": player.player_id, "name": player.name,
+                                   "amount": player.state["player_money"], "round_id": self.round_id}
+        return self.pending_winner is not None
+
+    async def finish_round(self):
+        """Commit winner, new world and every PvP save together before publication.
+
+        The caller holds world_lock through generation, commit and notifications.
+        Never save a winning balance separately: a restart sees either the old
+        transaction or the completely reset round, not an unannounced winner.
+        """
+        if self.pending_winner is None:
+            return False
+        winner = self.pending_winner
+        self.failed = True
+        seed = secrets.randbelow(2147483645) + 1
+        if seed >= self.seed:
+            seed += 1
+        terrain = await asyncio.to_thread(generate, seed, pvp=True)
+        round_id = secrets.token_hex(16)
+        states = [(p, stock_state(x), p.revision + 1)
+                  for p, x in zip(self.members.values(), (5.5, 10.5, 14.5, 22.5, 30.5))]
+        completed_states = {p.player_id: p.state for p, _, _ in states}
+
+        def commit(db):
+            db.execute("UPDATE worlds SET seed=?,created_at=? WHERE id=?", (seed, int(time.time()), self.world_id))
+            db.execute("UPDATE pvp_rounds SET round_id=?,winner=? WHERE world_id=?", (round_id, self.encode(winner), self.world_id))
+            db.execute("DELETE FROM pvp_cells WHERE world_id=?", (self.world_id,))
+            db.execute("DELETE FROM excavations WHERE world_id=?", (self.world_id,))
+            # Include offline users; retaining only connected states revives old
+            # balances and equipment on the next account reconnect.
+            db.execute("UPDATE player_states SET state=?,revision=revision+1,updated_at=? WHERE world_id=?",
+                       (self.encode(stock_state()), int(time.time()), self.world_id))
+            for player, state, revision in states:
+                self.save_state(db, player, state, revision)
+            db.execute("INSERT INTO pvp_runtime(world_id,state) VALUES(?,?) ON CONFLICT(world_id) DO UPDATE SET state=excluded.state",
+                       (self.world_id, self.encode({"bags": [], "falling": [], "impacts": []})))
+        try:
+            await self.store.run(commit)
+        except BaseException:
+            # No further mutations may publish the uncommitted in-memory winner.
+            self.failed = True
+            raise
+        self.seed, self.terrain, self.round_id, self.winner = seed, terrain, round_id, winner
+        self.excavated.clear()
+        self.overrides.clear()
+        self.bags.clear()
+        self.falling.clear()
+        self.impacts.clear()
+        self.dirty_players.clear()
+        self.dirty_cells.clear()
+        self.runtime_dirty = False
+        self.pending_winner = None
+        self.failed = False
+        now = time.monotonic()
+        for player, state, revision in states:
+            player.state, player.revision = state, revision
+            player.requests.clear()
+            player.damage_times.clear()
+            player.capture_context.clear()
+            player.motion_seq = 0
+            player.teleport_until = 0
+            player.moved_at = player.contact_at = now
+            player.movement_credit = 0.5
+        # A single event is both the announcement and replacement snapshot.
+        for player, _, _ in states:
+            await self.send(player, {"type": "round_started", "player_id": player.player_id,
+                                    "world_id": self.service.world_id, "seed": self.seed,
+                                    "excavated": [], "state": player.state,
+                                    "state_revision": player.revision, "winner": winner,
+                                    "completed_state": completed_states[player.player_id],
+                                    **self.join_details()})
+        return True
+
+    async def finish_if_winner(self, player):
+        if self.recognize_winner(player):
+            return await self.finish_round()
+        return False
+
+
     def public(self, player):
         return {**player.public(), "state_revision": player.revision}
 
     def snapshot(self, changes=None):
-        return {"players": [self.public(p) for p in self.members.values()],
-                "bags": [{k: b[k] for k in ("id", "x", "y", "amount")} for b in self.bags],
+        return {"round_id": self.round_id, "players": [self.public(p) for p in self.members.values()],
+                "bags": [{**{k: b[k] for k in ("id", "x", "y", "amount")},
+                          "cargo": b.get("cargo", {}), "items": b.get("items", {})} for b in self.bags],
                 "falling": [{k: b[k] for k in ("id", "x", "y", "tile")} for b in self.falling],
                 "impacts": [{k: impact[k] for k in ("id", "x", "y", "tile", "started_at", "expires_at")} for impact in self.impacts],
                 "terrain_changes": changes if changes is not None else [[x, y, tile] for (x, y), tile in sorted(self.overrides.items())],
@@ -234,6 +354,8 @@ class PvpWorld:
             db.execute("INSERT INTO player_states(world_id,user_id,state,revision,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(world_id,user_id) DO UPDATE SET state=excluded.state,revision=excluded.revision,updated_at=excluded.updated_at", (self.world_id, player.user_id, self.encode(state), revision, int(time.time())))
 
     async def persist(self):
+        if self.failed:
+            raise self.error("pvp_unavailable", "PvP simulation is unavailable. Co-op remains available.", 503)
         if not self.dirty_players and not self.dirty_cells and not self.runtime_dirty:
             return
         def commit(db):
@@ -422,6 +544,8 @@ class PvpWorld:
         player.contact_at = time.monotonic()
         player.state_updates += 1
         self.dirty_players.add(player)
+        if await self.finish_if_winner(player):
+            return
         await self.persist()
         await self.send(player, {"type": "state_ack", "state": state, "state_revision": player.revision,
                                  "motion_seq": motion_seq, "requested_position": requested_position})
@@ -435,7 +559,33 @@ class PvpWorld:
         if recipient and not recipient.state.get("alive", True):
             await self.send(player, {"type": "transfer_result", "accepted": False, "message": "That player is waiting to respawn."})
             return
-        await type(self.service).transfer(self, player, message)
+        recipient_id, amount = message.get("recipient_id"), message.get("amount")
+        reason = ""
+        if type(amount) is not int or amount <= 0:
+            reason = "Enter a positive whole-dollar amount."
+        elif recipient is player:
+            reason = "Choose another player to receive the money."
+        elif recipient is None or recipient.socket.closed:
+            reason = "That player is no longer connected to this world."
+        elif amount > player.state["player_money"]:
+            reason = "You do not have enough money for this transfer."
+        elif recipient.state["player_money"] + amount > MAX_CASH:
+            reason = "That transfer would exceed the recipient's balance limit."
+        if reason:
+            await self.send(player, {"type": "transfer_result", "accepted": False, "message": reason})
+            return
+        player.state["player_money"] -= amount
+        recipient.state["player_money"] += amount
+        self.changed(player)
+        self.changed(recipient)
+        if await self.finish_if_winner(recipient):
+            return
+        await self.persist()
+        await self.send(player, {"type": "transfer_result", "accepted": True,
+                                "message": f"Sent ${amount:,} to {recipient.name}.",
+                                "state": player.state, "state_revision": player.revision})
+        await self.sync(recipient)
+        await self.broadcast({"type": "pvp_tick", **self.snapshot([])})
 
     def damage(self, player, amount, now):
         if not self.in_world(player) or amount <= 0:
@@ -445,10 +595,15 @@ class PvpWorld:
         if player.state["player_hp"] <= 1e-8:
             player.state.update(player_hp=0, alive=False, respawn_at=now + RESPAWN_SECONDS, drill_x=0, drill_y=0, vx=0, vy=0, building="")
             cash = player.state.get("player_money", 0)
-            if cash > 0:
-                self.bags.append({"id": secrets.token_hex(8), "x": player.state["x"], "y": player.state["y"], "amount": cash, "vy": 0.0})
+            cargo = inventory(player.state.get("player_cargo"), WEIGHTS)
+            items = inventory(player.state.get("player_items"), ITEM_NAMES)
+            if cash > 0 or any(cargo.values()) or any(items.values()):
+                self.bags.append({"id": secrets.token_hex(8), "x": player.state["x"], "y": player.state["y"],
+                                  "amount": cash, "cargo": cargo, "items": items, "vy": 0.0})
                 self.runtime_dirty = True
             player.state["player_money"] = 0
+            player.state["player_cargo"] = dict.fromkeys(WEIGHTS, 0)
+            player.state["player_items"] = dict.fromkeys(ITEM_NAMES, 0)
 
     def respawn(self, player):
         previous = player.state
@@ -561,6 +716,8 @@ class PvpWorld:
                 player.state["player_money"] += bonus
                 player.state["claimed_transmissions"] = [*claimed, index]
                 self.changed(player)
+                if await self.finish_if_winner(player):
+                    return
         else:
             item = message.get("item")
             if item not in BLAST_RADIUS:
@@ -617,6 +774,8 @@ class PvpWorld:
                 self.damage(player, self.damage_values["Lava"], time.time())
             self.detach_hazards()
             event.update(state=player.state, state_revision=player.revision)
+            if await self.finish_if_winner(player):
+                return
             changes = [[cx, cy, tile] for (cx, cy), tile in sorted(self.dirty_cells.items())]
             await self.persist()
             player.mine_accepted += 1
@@ -688,7 +847,55 @@ class PvpWorld:
                     return False
         return True
 
+    def collect_bag(self, player, bag):
+        """Cash/items ignore the bay; each randomly drawn mineral unit must fit."""
+        changed = False
+        cash = bag["amount"]
+        if cash and player.state["player_money"] + cash <= MAX_CASH:
+            player.state["player_money"] += cash
+            bag["amount"] = 0
+            changed = True
+        bag["items"] = inventory(bag.get("items"), ITEM_NAMES)
+        bag["cargo"] = inventory(bag.get("cargo"), WEIGHTS)
+        for name, count in bag["items"].items():
+            held = int(player.state["player_items"].get(name, 0))
+            taken = min(count, MAX_COUNTER - held)
+            if taken > 0:
+                player.state["player_items"][name] = held + taken
+                bag["items"][name] -= taken
+                changed = True
+        cargo = player.state["player_cargo"]
+        free = CARGO_CAPACITY.get(player.state["current_upgrades"].get("Cargo"), 7) - sum(
+            cargo.get(name, 0) * weight for name, weight in WEIGHTS.items())
+        # Capacity is at most 120; even billion-unit historical stacks cannot
+        # turn a pickup into unbounded work. Choose uniformly among fitting units.
+        while free > 0:
+            fitting = [(name, count) for name, count in bag["cargo"].items()
+                       if count and WEIGHTS[name] <= free and cargo.get(name, 0) < MAX_COUNTER]
+            total = sum(count for _, count in fitting)
+            if not total:
+                break
+            draw = secrets.randbelow(total)
+            for name, count in fitting:
+                if draw < count:
+                    cargo[name] = int(cargo.get(name, 0)) + 1
+                    bag["cargo"][name] -= 1
+                    free -= WEIGHTS[name]
+                    changed = True
+                    break
+                draw -= count
+        if changed:
+            self.changed(player)
+            self.runtime_dirty = True
+        empty = not bag["amount"] and not any(bag["items"].values()) and not any(bag["cargo"].values())
+        if empty:
+            self.bags.remove(bag)
+            self.runtime_dirty = True
+        return changed
+
     def step(self, dt, now, monotonic_now):
+        if self.pending_winner:
+            return
         active_impacts = [impact for impact in self.impacts if impact["expires_at"] > now]
         if len(active_impacts) != len(self.impacts):
             self.impacts = active_impacts
@@ -733,10 +940,12 @@ class PvpWorld:
             old_y, old_vy = bag["y"], bag["vy"]
             self.gravity(bag, dt, BAG_HALF_SIZE, resolve_embedded=True)
             for player in sorted(self.members.values(), key=lambda p: p.player_id):
-                if self.in_world(player) and self.bag_reaches_player(bag, old_y, player) and player.state["player_money"] + bag["amount"] <= 1e15:
-                    player.state["player_money"] += bag["amount"]
-                    self.changed(player)
-                    self.bags.remove(bag)
-                    break
+                if self.bag_reaches_player(bag, old_y, player):
+                    collected = self.collect_bag(player, bag)
+                    if collected and self.recognize_winner(player):
+                        # Stop before another bag or recipient can win/overtake.
+                        return
+                    if bag not in self.bags:
+                        break
             if bag not in self.bags or abs(old_y - bag["y"]) > 1e-8 or old_vy != bag["vy"]:
                 self.runtime_dirty = True

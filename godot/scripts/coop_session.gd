@@ -40,6 +40,7 @@ func configure(main_host: Node) -> void:
 		lobby.hide_lobby()
 
 func _joined(snapshot: Dictionary) -> void:
+	lobby.leaderboard.close()
 	if host.gameplay_capture != null:
 		host.gameplay_capture.finish("scene_change")
 	if not active:
@@ -89,8 +90,11 @@ func scene_loaded() -> void:
 	transfer.scene_loaded()
 	if host.data.pvp_mode and host.scene_name == "Game":
 		pvp.scene_loaded(_snapshot)
+		lobby.leaderboard.announce(_snapshot.get("winner", {}))
 	else:
 		pvp.hide_respawn()
+	lobby._resize.call_deferred()
+	network.finish_round_load()
 
 func leave() -> bool:
 	if network.has_pending_actions():

@@ -1,0 +1,37 @@
+[Unit]
+Description=Orebit private recordings-filesystem disk alerts
+Wants=network-online.target
+After=network-online.target orebit-coop.service
+
+[Service]
+Type=oneshot
+User=orebit-bot
+Group=orebit-queue
+WorkingDirectory=/opt/orebit-bot/automation/ops
+Environment=HOME=/var/lib/orebit-bot
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=OREBIT_DISCORD_TOKEN_FILE=/var/lib/orebit-bot/credentials/discord-token
+Environment=OREBIT_OPS_STATE_DIR=/var/lib/orebit-bot/ops
+Environment=OREBIT_OPS_RECORDINGS_PATH=/run/orebit-ops-recordings
+EnvironmentFile=/etc/orebit-ops.env
+# Bind only the filesystem root, preserving its 0700 permissions. The bot can
+# statvfs the mount root without traversing /var/lib/orebit-coop or reading files.
+BindReadOnlyPaths=/var/lib/orebit-coop/captures:/run/orebit-ops-recordings
+ExecStart=/usr/bin/python3 /opt/orebit-bot/automation/ops/monitor.py --once
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateMounts=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/orebit-bot/ops
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+CPUWeight=20
+MemoryMax=128M
+TasksMax=16
+TimeoutStartSec=300

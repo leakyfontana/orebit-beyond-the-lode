@@ -67,6 +67,7 @@ func apply_state(state: Dictionary, full: bool = true) -> void:
 			host.player.position_unity = position
 		building = next_building
 	if not alive:
+		host.coop.lobby.leaderboard.close()
 		_clear_building_request()
 		if was_alive:
 			host.ui.sync_building_panel("")
@@ -294,7 +295,7 @@ func _build_respawn_overlay() -> void:
 	fill.bg_color = Color("24b817")
 	_respawn_progress.add_theme_stylebox_override("fill", fill)
 	_respawn_body.add_child(_respawn_progress)
-	_respawn_detail = _respawn_label("Full hull · Stock upgrades\nYour dropped cash stays in the mine.", 18, Color("dedac6"))
+	_respawn_detail = _respawn_label("Full hull · Stock upgrades\nDropped cash, cargo and items stay in the mine.", 18, Color("dedac6"))
 	_respawn_footer = _respawn_label("The world keeps moving while you rebuild.", 14, Color("b8b8a3"))
 	get_viewport().size_changed.connect(_resize_respawn_overlay)
 	_resize_respawn_overlay()

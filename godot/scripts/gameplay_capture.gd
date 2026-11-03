@@ -153,7 +153,8 @@ func finish(reason: String = "scene_change") -> void:
 		return
 	if is_instance_valid(host.player):
 		var dead: bool = not host.player._alive and not host.data.pvp_mode
-		_record(_observe(), dead, not dead, "death" if dead else reason)
+		var terminal: bool = dead or (reason == "round_end" and host.data.pvp_mode)
+		_record(_observe(), terminal, not terminal, "death" if dead else reason)
 	_flush()
 	episode_id = ""
 
