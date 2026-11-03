@@ -230,7 +230,7 @@ func post_tick() -> void:
 		return
 	_reap_captures()
 	var data: GameData = host.data
-	var state := {"frame": frame, "scene": host.scene_name, "time_scale": Engine.time_scale, "fixed_delta": 1.0 / Engine.physics_ticks_per_second}
+	var state := {"frame": frame, "scene": host.scene_name, "time_scale": 0.0 if host.paused else Engine.time_scale, "fixed_delta": 1.0 / Engine.physics_ticks_per_second}
 	state.music_volume = data.music_volume
 	state.sound_volume = data.sound_volume
 	state.boss_phase = host.boss.phase + 1 if host.boss != null and host.boss.active else 0

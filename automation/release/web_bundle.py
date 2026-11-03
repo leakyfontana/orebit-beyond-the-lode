@@ -72,10 +72,56 @@ def stage_web_bundle(directory):
     # preload consumes them even when the fetch handler leaves navigation alone.
     worker = _replace_once(worker, r'self\.registration\.navigationPreload\.enable\(\)',
                            'self.registration.navigationPreload.disable()', 'disable root navigation preload')
+    # Activate routing without reloading clients. Keep active runtimes and one
+    # previous offline bundle, rather than accumulating every release forever.
+    worker = _replace_once(worker,
+                           r'cache\.addAll\(CACHED_FILES\)\)\);',
+                           'cache.addAll(CACHED_FILES)).then(() => self.skipWaiting()));',
+                           'activate next-navigation update')
+    worker = _replace_once(worker,
+                           r"event\.waitUntil\(caches\.keys\(\)\.then\(\n\t\tfunction \(keys\) \{.*?\n\t\t\}\n\t\)",
+                           'event.waitUntil((async () => {\n'
+                           '\t\tconst keys = await caches.keys();\n'
+                           '\t\tconst previous = keys.filter(key => key.startsWith(CACHE_PREFIX)\n'
+                           '\t\t\t&& /^game-[0-9a-f]{64}$/.test(key.slice(CACHE_PREFIX.length)) && key !== CACHE_NAME);\n'
+                           '\t\tconst keep = new Set([CACHE_NAME]);\n'
+                           '\t\tif (previous.length) keep.add(previous[previous.length - 1]);\n'
+                           '\t\tfor (const client of await self.clients.matchAll({ type: "window", includeUncontrolled: true })) {\n'
+                           '\t\t\tconst match = new URL(client.url).pathname.match(/\\/(game-[0-9a-f]{64})\\//);\n'
+                           '\t\t\tif (match) keep.add(CACHE_PREFIX + match[1]);\n'
+                           '\t\t}\n'
+                           '\t\tawait Promise.all(previous.filter(key => !keep.has(key)).map(key => caches.delete(key)));\n'
+                           '\t})()', 'retain active and previous runtime caches')
     worker = _replace_once(worker,
                            r"\t\tconst referrer = event\.request\.referrer \|\| '';.*?\n\t\tconst isCacheable = [^\n]*;",
                            "\t\tconst base = self.registration.scope;\n"
                            "\t\tconst local = url.startsWith(base) ? url.slice(base.length).split('?')[0] : '';\n"
+                           "\t\tconst legacy = /^(game-[0-9a-f]{64})\\/(.+)$/.exec(local);\n"
+                           "\t\tif (legacy && legacy[1] !== CACHE_VERSION) {\n"
+                           "\t\t\tif (isNavigate && legacy[2] === 'index.html') {\n"
+                           "\t\t\t\tconst launch = new URL('index.html', base);\n"
+                           "\t\t\t\tlaunch.search = new URL(url).search;\n"
+                           "\t\t\t\tevent.respondWith((async () => {\n"
+                           "\t\t\t\t\ttry {\n"
+                           "\t\t\t\t\t\tconst response = await fetch(launch.href);\n"
+                           "\t\t\t\t\t\tif (response.ok) return ensureCrossOriginIsolationHeaders(response);\n"
+                           "\t\t\t\t\t} catch (_) { /* Keep the previous bundle usable offline. */ }\n"
+                           "\t\t\t\t\tconst cached = await caches.match(event.request, {\n"
+                           "\t\t\t\t\t\tcacheName: CACHE_PREFIX + legacy[1], ignoreSearch: true,\n"
+                           "\t\t\t\t\t});\n"
+                           "\t\t\t\t\tconst offline = cached || await caches.match(OFFLINE_URL, { cacheName: CACHE_NAME });\n"
+                           "\t\t\t\t\treturn offline ? ensureCrossOriginIsolationHeaders(offline) : Response.error();\n"
+                           "\t\t\t\t})());\n"
+                           "\t\t\t\treturn;\n"
+                           "\t\t\t}\n"
+                           "\t\t\tif (!isNavigate) {\n"
+                           "\t\t\t\tevent.respondWith((async () => {\n"
+                           "\t\t\t\t\tconst cached = await caches.match(event.request, { cacheName: CACHE_PREFIX + legacy[1] });\n"
+                           "\t\t\t\t\treturn cached || fetch(event.request);\n"
+                           "\t\t\t\t})());\n"
+                           "\t\t\t\treturn;\n"
+                           "\t\t\t}\n"
+                           "\t\t}\n"
                            "\t\tconst isCacheable = FULL_CACHE.includes(local);\n"
                            "\t\t// Leave backend navigation and its redirects to the browser.\n"
                            "\t\tif (isNavigate && !isCacheable && !(url === base || url.startsWith(base + '?'))) return;",

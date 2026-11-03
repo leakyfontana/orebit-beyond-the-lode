@@ -38,7 +38,6 @@ var paused := false:
 	set(value):
 		paused = value
 		if is_inside_tree():
-			Engine.time_scale = 0.0 if value else 1.0
 			get_tree().paused = value
 		_sync_touch_controls()
 var scene_name := ""
@@ -128,6 +127,17 @@ func _ready() -> void:
 		gameplay_capture.configure(self)
 	change_scene("MainMenu")
 	print("MOTHERLOAD_READY scene=MainMenu godot=" + Engine.get_version_info().string)
+
+func _notification(what: int) -> void:
+	if what != NOTIFICATION_WM_GO_BACK_REQUEST:
+		return
+	if coop != null and coop.lobby.modal:
+		coop.lobby._back()
+	elif ui != null:
+		var event := InputEventAction.new()
+		event.action = &"pause"
+		event.pressed = true
+		ui._input(event)
 
 func _exit_tree() -> void:
 	if is_instance_valid(gameplay_capture):
@@ -467,6 +477,10 @@ func _process(delta: float) -> void:
 	if agent_axes != null:
 		ui_delta = 1.0 / float(Engine.physics_ticks_per_second)
 		delta = ui_delta * Engine.time_scale
+	# Pause simulation, not the clock used by always-processing modal controls.
+	# ScrollContainer needs a nonzero UI delta to calculate touch inertia.
+	if paused:
+		delta = 0.0
 	if _physics_clock != null:
 		# Scene changes requested during Update take effect before the next
 		# fixed phase, including frames on which no fixed update is due.

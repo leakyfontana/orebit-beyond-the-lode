@@ -6,6 +6,7 @@ const INK := Color("091307")
 const TEXT := Color("dcedd4")
 const MUTED := Color("a4ba97")
 const TARGET_SIZE := 48.0
+const MENU_ROW_HEIGHT := 44.0
 
 var host: Node
 var client: CoopClient
@@ -21,10 +22,12 @@ var _identity: Label
 var _url: LineEdit
 var _username: LineEdit
 var _password: LineEdit
+var _password_reveal: Button
 var _auth_heading: Label
 var _auth_submit: Button
 var _auth_toggle: Button
 var _cancel_button: Button
+var _page_navigation: HBoxContainer
 var _hud: VBoxContainer
 var _hud_label: Label
 var _menu_font: Font
@@ -76,18 +79,19 @@ func configure(main_host: Node, network: CoopClient) -> void:
 	_root.add_child(_panel)
 	var margin := MarginContainer.new()
 	for side in ["left", "right", "top", "bottom"]:
-		margin.add_theme_constant_override("margin_" + side, 16)
+		margin.add_theme_constant_override("margin_" + side, 12)
 	_panel.add_child(margin)
 	_scroll = ScrollContainer.new()
 	_scroll.name = "AuthScroll"
 	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	_scroll.follow_focus = true
+	_scroll.scroll_deadzone = 12
 	_scroll.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
 	margin.add_child(_scroll)
 	_body = VBoxContainer.new()
 	_body.name = "AuthPage"
 	_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_body.add_theme_constant_override("separation", 12)
+	_body.add_theme_constant_override("separation", 6)
 	_scroll.add_child(_body)
 	_body.minimum_size_changed.connect(_resize, CONNECT_DEFERRED)
 	_hud = VBoxContainer.new()
@@ -160,15 +164,15 @@ func _surface(background: Color, border: Color, radius: int = 3) -> StyleBoxFlat
 	style.border_color = border
 	style.set_border_width_all(1)
 	style.set_corner_radius_all(radius)
-	style.content_margin_left = 14
-	style.content_margin_right = 14
-	style.content_margin_top = 10
-	style.content_margin_bottom = 10
+	style.content_margin_left = 10
+	style.content_margin_right = 10
+	style.content_margin_top = 8
+	style.content_margin_bottom = 8
 	return style
 
 func _style_button(button: Button, primary: bool) -> void:
 	button.custom_minimum_size = Vector2(TARGET_SIZE, TARGET_SIZE)
-	button.add_theme_font_size_override("font_size", 16)
+	button.add_theme_font_size_override("font_size", 15)
 	button.add_theme_font_override("font", _menu_font)
 	button.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	button.add_theme_color_override("font_color", ACCENT)
@@ -222,7 +226,7 @@ func _resize() -> void:
 	_root.size = pixels
 	var gutter := 12.0
 	var panel_size := Vector2(minf(480, available.size.x - gutter * 2), minf(740, available.size.y - gutter * 2))
-	panel_size.y = minf(panel_size.y, maxf(180, _body.get_combined_minimum_size().y + 32))
+	panel_size.y = minf(panel_size.y, maxf(128, _body.get_combined_minimum_size().y + 24))
 	panel_size = panel_size.max(Vector2.ONE)
 	_panel.position = available.position + (available.size - panel_size) * 0.5
 	_panel.size = panel_size
@@ -361,10 +365,12 @@ func _clear() -> void:
 	_url = null
 	_username = null
 	_password = null
+	_password_reveal = null
 	_auth_heading = null
 	_auth_submit = null
 	_auth_toggle = null
 	_cancel_button = null
+	_page_navigation = null
 	_actions.clear()
 	_fields.clear()
 	_focus_controls.clear()
@@ -375,7 +381,7 @@ func _label(text: String, small: bool = false) -> Label:
 	label.text = text
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	label.add_theme_font_size_override("font_size", 16 if small else 24)
+	label.add_theme_font_size_override("font_size", 13 if small else 20)
 	label.add_theme_color_override("font_color", MUTED if small else TEXT)
 	if not small:
 		label.add_theme_font_override("font", _menu_font)
@@ -387,7 +393,10 @@ func _button(text: String, action: Callable, control_name: String, primary: bool
 	var button := Button.new()
 	button.name = control_name
 	button.text = text
+	# A press on a button may become a drag in the enclosing ScrollContainer.
+	button.mouse_filter = Control.MOUSE_FILTER_PASS
 	_style_button(button, primary)
+	button.custom_minimum_size = Vector2(MENU_ROW_HEIGHT, MENU_ROW_HEIGHT)
 	button.pressed.connect(action)
 	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	if container == null:
@@ -398,16 +407,24 @@ func _button(text: String, action: Callable, control_name: String, primary: bool
 	_focus_controls.append(button)
 	return button
 
-func _field(label_text: String, value: String, control_name: String, secret: bool = false) -> LineEdit:
-	var label := _label(label_text, true)
-	label.add_theme_color_override("font_color", TEXT)
+func _row() -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	_body.add_child(row)
+	return row
+
+func _field(label_text: String, value: String, control_name: String, secret: bool = false, container: Container = null) -> LineEdit:
 	var field := LineEdit.new()
 	field.name = control_name
 	field.text = value
 	field.secret = secret
-	field.custom_minimum_size = Vector2(TARGET_SIZE, TARGET_SIZE)
+	field.placeholder_text = label_text
+	field.accessibility_name = label_text
+	field.tooltip_text = label_text
+	field.custom_minimum_size = Vector2(MENU_ROW_HEIGHT, MENU_ROW_HEIGHT)
+	field.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	field.expand_to_text_length = false
-	field.add_theme_font_size_override("font_size", 16)
+	field.add_theme_font_size_override("font_size", 15)
 	field.add_theme_color_override("font_color", TEXT)
 	field.add_theme_color_override("font_uneditable_color", MUTED)
 	field.add_theme_color_override("caret_color", ACCENT)
@@ -417,7 +434,10 @@ func _field(label_text: String, value: String, control_name: String, secret: boo
 	focus.set_border_width_all(3)
 	field.add_theme_stylebox_override("focus", focus)
 	# Keep native editing, paste/context menu and virtual keyboard behavior.
-	_body.add_child(field)
+	if container == null:
+		_body.add_child(field)
+	else:
+		container.add_child(field)
 	_fields.append(field)
 	_focus_controls.append(field)
 	return field
@@ -435,10 +455,12 @@ func _open_page(page: String) -> void:
 	_clear()
 
 func _finish_page() -> void:
+	if _page_navigation == null:
+		_page_navigation = _row()
+	_cancel_button = _button("Cancel", _cancel_auth, "CancelAuth", false, _page_navigation)
+	_actions.erase(_cancel_button)
 	_status = _label("", true)
 	_status.name = "AuthStatus"
-	_cancel_button = _button("Cancel sign-in", _cancel_auth, "CancelAuth")
-	_actions.erase(_cancel_button)
 	_auth_state_changed()
 	_resize()
 	_resize.call_deferred()
@@ -447,18 +469,17 @@ func _finish_page() -> void:
 
 func show_mode() -> void:
 	_open_page("mode")
-	_label("OREBIT · Choose your game")
-	_label("Private saves stay on this device. Co-op shares one server world with up to five miners.", true)
-	_label("Gameplay recording is automatic in all modes. Recordings are uploaded to the game server for bot training; chat, credentials and account identifiers are excluded.", true)
-	_button("Private · this device", _choose_private, "ChoosePrivate", true)
-	_button("Co-op · shared server", func(): _choose_server("coop"), "ChooseCoop")
-	_button("PvP · race to $1,000,000", func(): _choose_server("pvp"), "ChoosePvp")
-	_label("First to $1,000,000 held cash wins; every win starts a fresh PvP world.", true)
-	_label("Accounts keep Co-op progress and the current PvP round. Private saves are separate. No account is required.", true)
+	_label("Choose mode")
+	_label("Gameplay is recorded and uploaded for bot training. No chat, credentials or account IDs.", true)
+	var choices := _row()
+	_button("Private", _choose_private, "ChoosePrivate", true, choices)
+	_button("Co-op", func(): _choose_server("coop"), "ChooseCoop", false, choices)
+	_button("PvP", func(): _choose_server("pvp"), "ChoosePvp", false, choices)
+	_label("PvP: first to $1M held cash wins; each win starts a new round.", true)
 	_finish_page()
 
 func _choose_server(mode: String) -> void:
-	if _busy():
+	if _busy() and not client.session_checking:
 		return
 	if client.connected and client.mode != mode:
 		if not host.leave_coop():
@@ -471,31 +492,23 @@ func _choose_server(mode: String) -> void:
 func show_lobby() -> void:
 	_open_page("lobby")
 	_lobby_state = _state_key()
-	_label("PvP · race to $1,000,000" if client.mode == "pvp" else "Co-op · shared world")
+	_label("PvP ($1M)" if client.mode == "pvp" else "Co-op")
 	_identity = _label("", true)
 	_identity.name = "AccountIdentity"
-	if client.mode == "pvp":
-		_label("First to $1,000,000 held cash wins and resets the PvP world and every miner's equipment. Death drops cash, minerals and items; respawn in 10 seconds with a stock vehicle. Loot that cannot fit stays in the bag. Explosives cannot hurt their owner.", true)
 	if client.connected:
-		_label("Your PvP round is ready. Return to play, or leave before changing accounts." if client.mode == "pvp" else "Your shared world is ready. Return to play, or leave before changing accounts.", true)
-		_button("Return to PvP" if client.mode == "pvp" else "Return to shared world", hide_lobby, "ReturnToWorld", true)
-		_button("Leave server", _leave, "LeaveServer")
+		_button("Resume", hide_lobby, "ReturnToWorld", true)
+		_button("Leave", _leave, "LeaveServer")
 	elif not client.token.is_empty():
-		_label("Your account keeps money, cargo, upgrades, items and position " + ("until the current PvP round ends." if client.mode == "pvp" else "in this Co-op world."), true)
-		_button("Join server", _join, "JoinServer", true)
+		_button("Join", _join, "JoinServer", true)
 		_button("Sign out", _sign_out, "SignOut")
 	else:
-		_label(("Keep progress in this PvP round" if client.mode == "pvp" else "Keep your Co-op progress") + " with an account. Private saves stay separate.", true)
-		_button("Continue with Discord", _discord_auth, "ContinueDiscord", true)
-		_button("Use username / password", _show_password, "UsePassword")
-		_label("Just exploring? Anonymous progress ends when you leave the server.", true)
-		_button("Play anonymously", _join, "JoinAnonymous")
-	var navigation := HBoxContainer.new()
-	navigation.add_theme_constant_override("separation", 12)
-	_body.add_child(navigation)
+		_button("Discord sign-in", _discord_auth, "ContinueDiscord", true)
+		_button("Username / password", _show_password, "UsePassword")
+		_button("Guest (unsaved)", _join, "JoinAnonymous")
+	_page_navigation = _row()
 	if not client.connected:
-		_button("Server options", _show_server, "AdvancedServer", false, navigation)
-	_button("Back to modes" if not client.connected else "Game modes", show_mode, "BackToModes", false, navigation)
+		_button("Server", _show_server, "AdvancedServer", false, _page_navigation)
+	_button("Modes", show_mode, "BackToModes", false, _page_navigation)
 	_finish_page()
 
 func _show_password() -> void:
@@ -503,26 +516,30 @@ func _show_password() -> void:
 		return
 	_open_page("password")
 	_auth_heading = _label("")
-	_label("This account keeps separate Co-op and PvP progress on this server only.", true)
 	_username = _field("Username", _username_draft, "AuthUsername")
-	_username.placeholder_text = "Your username"
 	_username.text_submitted.connect(func(_text: String): _password.grab_focus())
-	_password = _field("Password", "", "AuthPassword", true)
-	_password.placeholder_text = "At least 8 characters"
+	var password_row := _row()
+	_password = _field("Password", "", "AuthPassword", true, password_row)
+	_password.placeholder_text = "Password (8+ characters)"
 	_password.virtual_keyboard_type = LineEdit.KEYBOARD_TYPE_PASSWORD
 	_password.text_submitted.connect(func(_text: String): _native_auth(_auth_kind))
-	var reveal := _button("Show password", _toggle_password, "RevealPassword")
-	reveal.toggle_mode = true
+	_password_reveal = _button("Show", _toggle_password, "RevealPassword", false, password_row)
+	_password_reveal.toggle_mode = true
+	_password_reveal.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	_password_reveal.autowrap_mode = TextServer.AUTOWRAP_OFF
+	_password_reveal.accessibility_name = "Show password"
+	_password_reveal.tooltip_text = "Show password"
 	_auth_submit = _button("", func(): _native_auth(_auth_kind), "SubmitPassword", true)
-	_auth_toggle = _button("", _toggle_auth_kind, "SwitchPasswordMode")
-	_button("Back to PvP" if client.mode == "pvp" else "Back to co-op", show_lobby, "PasswordBack")
+	_page_navigation = _row()
+	_auth_toggle = _button("", _toggle_auth_kind, "SwitchPasswordMode", false, _page_navigation)
+	_button("Back", show_lobby, "PasswordBack", false, _page_navigation)
 	_update_password_mode()
 	_finish_page()
 
 func _update_password_mode() -> void:
 	_auth_heading.text = "Sign in" if _auth_kind == "login" else "Create account"
 	_auth_submit.text = "Sign in" if _auth_kind == "login" else "Create account"
-	_auth_toggle.text = "Create an account instead" if _auth_kind == "login" else "I already have an account"
+	_auth_toggle.text = "Sign up" if _auth_kind == "login" else "Sign in"
 
 func _toggle_auth_kind() -> void:
 	if _busy():
@@ -535,23 +552,24 @@ func _toggle_auth_kind() -> void:
 func _toggle_password() -> void:
 	if is_instance_valid(_password):
 		_password.secret = not _password.secret
-		var reveal := _body.get_node("RevealPassword") as Button
-		reveal.set_pressed_no_signal(not _password.secret)
-		reveal.text = "Show password" if _password.secret else "Hide password"
+		_password_reveal.set_pressed_no_signal(not _password.secret)
+		_password_reveal.text = "Show" if _password.secret else "Hide"
+		_password_reveal.accessibility_name = "Show password" if _password.secret else "Hide password"
+		_password_reveal.tooltip_text = _password_reveal.accessibility_name
 
 func _show_server() -> void:
 	if _busy() or client.connected:
 		return
 	_open_page("server")
-	_label("Advanced · " + ("PvP" if client.mode == "pvp" else "Co-op") + " server")
-	_label("Use the default Orebit server unless you run your own. Changing servers signs out this account; progress stays on its original server.", true)
+	_label("PvP server" if client.mode == "pvp" else "Co-op server")
+	_label("Switching servers signs you out; progress stays on the old server.", true)
 	_url = _field("Server HTTPS address", client.base_url, "ServerAddress")
 	_url.virtual_keyboard_type = LineEdit.KEYBOARD_TYPE_URL
 	_url.text_submitted.connect(func(_text: String): _save_server())
-	_label(("PvP world" if client.mode == "pvp" else "Shared world") + ": " + client.world_id, true)
-	_button("Save server address", _save_server, "SaveServer", true)
-	_button("Use default server", _default_server, "DefaultServer")
-	_button("Back without changes", show_lobby, "ServerBack")
+	_page_navigation = _row()
+	_button("Save", _save_server, "SaveServer", true, _page_navigation)
+	_button("Default", _default_server, "DefaultServer", false, _page_navigation)
+	_button("Back", show_lobby, "ServerBack", false, _page_navigation)
 	_finish_page()
 
 func _default_server() -> void:
@@ -573,6 +591,8 @@ func _save_server() -> void:
 	show_lobby()
 
 func hide_lobby(reset_pause: bool = false) -> void:
+	if reset_pause:
+		_message = ""
 	modal = false
 	_shade.hide()
 	_panel.hide()
@@ -593,17 +613,21 @@ func refresh_hud() -> void:
 		_resize.call_deferred()
 
 func _choose_private() -> void:
-	if _busy() or not host.leave_coop():
+	if (_busy() and not client.session_checking) or not host.leave_coop():
 		return
+	if client.session_checking:
+		client.cancel_auth(false)
 	hide_lobby(true)
 	host.change_scene("MainMenu")
 
 func _back() -> void:
-	if _busy():
+	if client.session_checking:
+		client.cancel_auth(false)
+	elif _busy():
 		return
 	if _page == "password" or _page == "server":
 		show_lobby()
-	elif client.connected:
+	elif _page == "mode" or client.connected:
 		hide_lobby()
 	else:
 		show_mode()
@@ -618,7 +642,7 @@ func _join() -> void:
 	if _busy() or client.connected:
 		return
 	if not client.endpoint_is_secure():
-		_set_status("Use an HTTPS server address in Advanced before joining.")
+		_set_status("Use HTTPS in Server settings before joining.")
 		return
 	_message = "Connecting to the PvP round…" if client.mode == "pvp" else "Connecting to the shared world…"
 	client.join_world()
@@ -628,7 +652,7 @@ func _prepare_auth() -> bool:
 	if _busy() or client.connected:
 		return false
 	if not client.endpoint_is_secure():
-		_set_status("Use an HTTPS server address in Advanced to protect your sign-in.")
+		_set_status("Use HTTPS in Server settings to protect your sign-in.")
 		return false
 	_message = ""
 	return true
@@ -681,19 +705,16 @@ func _auth_state_changed() -> void:
 		show_lobby()
 		return
 	if is_instance_valid(_identity):
-		if client.session_checking:
-			_identity.text = "Checking saved sign-in…"
-		elif not client.token.is_empty():
-			_identity.text = "Signed in as " + client.username
-		else:
-			_identity.text = "Playing anonymously" if client.connected else "Not signed in"
+		_identity.text = client.username if not client.token.is_empty() else ("Guest" if client.connected else "")
+		_identity.visible = not _identity.text.is_empty()
 	for button in _actions:
-		button.disabled = _busy()
+		button.disabled = _busy() and not (_page == "mode" and client.session_checking)
 	for field in _fields:
 		field.editable = not _busy()
 	if is_instance_valid(_cancel_button):
 		_cancel_button.visible = client.auth_busy or client.session_checking
-		_cancel_button.text = "Cancel session check" if client.session_checking else "Cancel sign-in"
+		_cancel_button.accessibility_name = "Cancel session check" if client.session_checking else "Cancel sign-in"
+		_cancel_button.tooltip_text = _cancel_button.accessibility_name
 	_update_status()
 	_link_focus()
 
@@ -771,6 +792,13 @@ func _focus_step(step: int) -> void:
 	var control := eligible[posmod(index + step, eligible.size())]
 	control.grab_focus()
 	_scroll.ensure_control_visible(control)
+
+func _input(event: InputEvent) -> void:
+	if event is InputEventJoypadButton or event is InputEventJoypadMotion:
+		return
+	if modal and (event.is_action_pressed(&"pause") or event.is_action_pressed(&"ui_cancel")) and not event.is_echo():
+		_back()
+		get_viewport().set_input_as_handled()
 
 func _controller_event(event: InputEvent) -> void:
 	if not modal or not (event is InputEventJoypadButton) or not event.pressed:

@@ -115,6 +115,11 @@ func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	add_to_group("game_input")
 	get_tree().quit_on_go_back = false
+	if OS.get_name() == "Android":
+		# Android also emits a window Back request; route that once in Main.
+		for event in InputMap.action_get_events(&"pause"):
+			if event is InputEventKey and event.physical_keycode == KEY_BACK:
+				InputMap.action_erase_event(&"pause", event)
 	Input.joy_connection_changed.connect(_joy_connection_changed)
 
 func _process(_delta: float) -> void:
