@@ -784,10 +784,6 @@ func _input(event: InputEvent) -> void:
 		_back()
 		get_viewport().set_input_as_handled()
 
-func _notification(what: int) -> void:
-	if what == NOTIFICATION_WM_GO_BACK_REQUEST and modal:
-		_back()
-
 func _controller_event(event: InputEvent) -> void:
 	if not modal or not (event is InputEventJoypadButton) or not event.pressed:
 		return

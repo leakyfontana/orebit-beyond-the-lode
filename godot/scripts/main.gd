@@ -128,6 +128,17 @@ func _ready() -> void:
 	change_scene("MainMenu")
 	print("MOTHERLOAD_READY scene=MainMenu godot=" + Engine.get_version_info().string)
 
+func _notification(what: int) -> void:
+	if what != NOTIFICATION_WM_GO_BACK_REQUEST:
+		return
+	if coop != null and coop.lobby.modal:
+		coop.lobby._back()
+	elif ui != null:
+		var event := InputEventAction.new()
+		event.action = &"pause"
+		event.pressed = true
+		ui._input(event)
+
 func _exit_tree() -> void:
 	if is_instance_valid(gameplay_capture):
 		gameplay_capture.finish("shutdown")

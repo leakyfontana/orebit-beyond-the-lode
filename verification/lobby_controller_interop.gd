@@ -67,6 +67,18 @@ func _run() -> void:
 	check(game.coop.lobby._page == "server", "controller opens server options")
 	await press(JOY_BUTTON_B)
 	check(game.coop.lobby._page == "lobby", "B leaves server options")
+	game.coop.lobby._show_server()
+	await process_frame
+	game.notification(Node.NOTIFICATION_WM_GO_BACK_REQUEST)
+	await process_frame
+	check(game.coop.lobby._page == "lobby", "native Back returns exactly one level from server options")
+	game.notification(Node.NOTIFICATION_WM_GO_BACK_REQUEST)
+	await process_frame
+	check(game.coop.lobby.modal and game.coop.lobby._page == "mode", "next native Back returns exactly one level to modes")
+	game.notification(Node.NOTIFICATION_WM_GO_BACK_REQUEST)
+	await process_frame
+	check(not game.coop.lobby.modal and not game.paused, "native Back dismisses modes without opening another UI")
+	game.coop.lobby.show_lobby()
 	await escape()
 	check(game.coop.lobby._page == "mode", "Escape returns from server lobby to modes")
 	await escape()

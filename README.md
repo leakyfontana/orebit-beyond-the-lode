@@ -206,11 +206,29 @@ Private and online mode choices remain available while a saved sign-in is being
 checked. Choosing Private cancels that check without deleting the saved sign-in.
 Escape, Android Back, and controller Back return from account/server pages and
 dismiss the mode chooser to the prior game/menu pause state.
+Android Back has one owner: the window Back request routes through the current
+modal/game UI. Its duplicate physical-key Pause binding is removed only on Android,
+so one press cannot skip two pages; desktop Back bindings remain unchanged.
 
-The focused `verification/lobby_controller_interop.gd` regression covers Escape
-navigation and a single Private selection during pending session validation.
-Release status and remaining acceptance checks are tracked on the release board;
-local verification is not a publication receipt.
+The focused `verification/lobby_controller_interop.gd` regression covers single-step
+Android Back, Escape navigation, and a single Private selection during pending
+session validation.
+
+The Web worker activates routing updates without forcing a running game to reload.
+On the next online navigation, a retired `game-<hash>/index.html` launch resolves
+through the stable root bootstrap instead of repeatedly serving its deprecated
+cached menu. Launch query parameters and fragments are preserved. Open older games
+retain their cached runtime assets, including during an origin outage; cache
+cleanup retains the current bundle, one previous bundle, and any active older
+bundles rather than accumulating every release. Saves, accounts and recordings in
+origin storage are not cleared.
+
+For a stale Web menu, open <https://play.arcmonkeyswelding.com/index.html> online;
+do not clear site data. `automation/release/smoke_web.py --previous-zip` exercises
+the retired-release update path alongside `--zip`, including an untouched running
+document, offline fallback, next-navigation migration and persistent-data survival.
+Release status and remaining device acceptance checks are tracked on the release
+board; local verification is not a publication receipt.
 
 ## Million-dollar PvP rounds · 0.7.0
 
