@@ -11,6 +11,7 @@ var _private_world: WorldData
 var _snapshot: Dictionary = {}
 var _remote_visuals: Dictionary = {}
 var pvp: PvpView
+var _recovery_join := false
 
 func configure(main_host: Node) -> void:
 	host = main_host
@@ -21,6 +22,7 @@ func configure(main_host: Node) -> void:
 	network.joined_world.connect(_joined)
 	network.world_event.connect(_event)
 	network.connection_lost.connect(_disconnected)
+	network.recovery_started.connect(_recovering)
 	lobby = CoopLobby.new()
 	add_child(lobby)
 	lobby.configure(host, network)
@@ -78,9 +80,13 @@ func scene_loaded() -> void:
 			if bool(state.get("facing", false)) != host.player.isFacingRight:
 				host.player.flipCharacter()
 			if not host.data.pvp_mode and (not bool(state.get("alive", true)) or host.data.player_hp <= 0):
-				# Rejoin is a new life, as in the private load flow; inventory remains.
-				host.data.initPlayer()
-				host.player.position_unity = Vector2(5.5, -3.5)
+				if _recovery_join:
+					# Recovery is not a new life. Keep the server-confirmed death.
+					host.player.killPlayer()
+				else:
+					# An explicit rejoin retains the existing private-load behavior.
+					host.data.initPlayer()
+					host.player.position_unity = Vector2(5.5, -3.5)
 		_sync_peers()
 		host.ui.updateAllUI()
 		network.send_state()
@@ -95,6 +101,9 @@ func scene_loaded() -> void:
 		pvp.hide_respawn()
 	lobby._resize.call_deferred()
 	network.finish_round_load()
+	_recovery_join = false
+	if network.recovering:
+		lobby.show_lobby()
 
 func leave() -> bool:
 	if network.has_pending_actions():
@@ -102,7 +111,8 @@ func leave() -> bool:
 		return false
 	transfer.close_visit()
 	pvp.hide_respawn()
-	network.leave_world()
+	if network.connected or network.connecting or network.recovering or not network.player_id.is_empty():
+		network.leave_world()
 	if active:
 		active = false
 		_private_data.music_volume = host.data.music_volume
@@ -114,6 +124,7 @@ func leave() -> bool:
 		_private_world = null
 	_snapshot.clear()
 	_remote_visuals.clear()
+	_recovery_join = false
 	return true
 
 func state() -> Dictionary:
@@ -134,6 +145,12 @@ func state() -> Dictionary:
 		result.vx = host.player.velocity_unity.x
 		result.vy = host.player.velocity_unity.y
 	return result
+
+func _recovering() -> void:
+	_recovery_join = true
+	# This only suspends local input/simulation. The authoritative server,
+	# including PvP damage, hazards and respawn timers, keeps running.
+	lobby.show_lobby()
 
 func _disconnected(message: String) -> void:
 	leave()
@@ -248,7 +265,7 @@ func _update_peer_presence(remote: Node2D, peer_state: Dictionary) -> void:
 				child.set_deferred("disabled", not present)
 
 func tick(delta: float) -> void:
-	if not active:
+	if not active or network.recovering:
 		return
 	transfer.tick()
 	if host.data.pvp_mode:

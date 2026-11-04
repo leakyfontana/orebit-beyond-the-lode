@@ -1,5 +1,26 @@
 # Co-op service
 
+## Signed-in connection recovery
+
+A recovery `join` may include the previous `resume_player_id`. Under the target
+world's lock, an existing logical player can be reused only with the same
+authenticated user and token digest. Check this before capacity: a valid resume
+uses its existing slot. Normal duplicate joins, other tokens and anonymous
+callers do not acquire that player's socket or state.
+
+Socket ownership is checked inside the world lock before mutations and removal.
+Handoff preserves authoritative state/revision, PvP motion/life/round state and
+capture sequencing. Retiring transport closure is service-owned, asynchronous
+and bounded; an old send failure or finalizer cannot close/remove the replacement.
+If the old player has already been removed, authenticated saved-state restoration
+uses the normal join path.
+
+Clients bound recovery to 35 seconds, hold local controls and rebuild from the
+joined snapshot without replaying unconfirmed actions. PvP authority continues
+during that interruption. Explicit leave, sign-out, expiry and server failures
+remain terminal; anonymous persistence is unchanged. Deploy this additive service
+change before the 0.7.2 clients, preserving the existing database and archives.
+
 ## PvP round authority and death loot
 
 PvP uses the isolated `<configured-world-id>:pvp` database world. The first server-accepted credit that makes a miner's **held cash at least $1,000,000** wins; cargo value, spending, and co-op balances do not count. Validated sale/state reconciliation, transmission bonuses, cash-paying mined treasures, money transfers, and death-bag pickups all check the threshold. A reconnecting historical saved balance already over the threshold also finishes its round.

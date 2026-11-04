@@ -193,7 +193,6 @@ func _load_scene(which: String) -> void:
 	add_child(camera)
 	_camera_orthographic_size = 5.0
 	camera.position = Vector2(8.886563, 0) * UNIT
-	camera.make_current()
 	for id in bridge.scene.game_objects:
 		for component in bridge.components(id):
 			if component.get("type", "") == "Camera":
@@ -247,6 +246,8 @@ func _load_scene(which: String) -> void:
 		coop.scene_loaded()
 	if gameplay_capture != null and which == "Game":
 		gameplay_capture.begin_episode()
+	# Retire the previous scene's viewport camera before selecting its replacement.
+	camera.make_current.call_deferred()
 
 func _install_fuel_station() -> void:
 	var building := Sprite2D.new()

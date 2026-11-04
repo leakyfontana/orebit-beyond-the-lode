@@ -195,6 +195,7 @@ class Player:
     motion_seq: int = 0
     capture_session: str = ""
     capture_context: dict = field(default_factory=dict)
+    transport: asyncio.Transport | None = None
 
     def public(self):
         return {"player_id": self.player_id, "name": self.name, "state": self.state}
@@ -234,6 +235,7 @@ class Service:
         self.capture_queue = asyncio.Queue(maxsize=256)
         self.capture_task = None
         self.capture_gaps = OrderedDict()
+        self.retiring_sockets = {}
 
     async def startup(self, app):
         asyncio.get_running_loop().set_exception_handler(
@@ -259,6 +261,10 @@ class Service:
 
     async def shutdown(self, app):
         await self.pvp.stop()
+        retiring = list(self.retiring_sockets)
+        for task in retiring:
+            task.cancel()
+        await asyncio.gather(*retiring, return_exceptions=True)
         players = [*self.members.values(), *self.pvp.members.values()]
         results = await asyncio.gather(*(p.socket.close(code=1001, message=b"Server shutting down; reconnect to resume") for p in players), return_exceptions=True)
         for player, result in zip(players, results):
@@ -643,7 +649,25 @@ class Service:
             buffered = 0
             flushed_at = time.monotonic()
 
+    async def retire_socket(self, socket):
+        try:
+            # A half-open peer must not hold the replacement join or a world lock.
+            async with asyncio.timeout(2):
+                await socket.close(code=1001, message=b"Session resumed on a new connection")
+        except (ConnectionError, RuntimeError, asyncio.TimeoutError):
+            pass
+
+    def retired_socket_done(self, task):
+        # The service owns the transport even if shutdown cancels the task
+        # before its coroutine starts, or close stalls partway through.
+        transport = self.retiring_sockets.pop(task)
+        if transport is not None:
+            transport.close()
+        if not task.cancelled() and (error := task.exception()):
+            log_event("session_error", level=logging.WARNING, error=error, error_code="connection_error")
+
     async def send(self, player, message):
+        socket = player.socket
         if player.capture_session:
             try:
                 # pvp_tick contains a peers list, not top-level state. Capture
@@ -667,12 +691,12 @@ class Service:
             except Exception:
                 pass
         try:
-            await asyncio.wait_for(player.socket.send_str(encode(message)), timeout=5)
+            await asyncio.wait_for(socket.send_str(encode(message)), timeout=5)
             player.sent += 1
         except (ConnectionError, RuntimeError, asyncio.TimeoutError) as error:
             with log_context(request_id=player.session_id, session_id=player.session_id, player_id=player.player_id, user_id=player.user_id):
                 log_event("session_error", level=logging.WARNING, error=error, error_code="connection_error")
-            await player.socket.close(code=1001, message=b"Connection too slow; reconnect to resume")
+            await socket.close(code=1001, message=b"Connection too slow; reconnect to resume")
 
     async def broadcast(self, message, exclude=None):
         await asyncio.gather(*(self.send(p, message) for p in list(self.members.values()) if p is not exclude))
@@ -870,40 +894,49 @@ class Service:
                     request["user_id"] = user["id"]
                     contexts.enter_context(log_context(user_id=user["id"]))
                 async with world.world_lock:
-                    if len(world.members) >= 5:
-                        raise APIError("server_full", "This server has five players. Please try again when a place opens.", 409)
-                    if user and any(p.user_id == user["id"] for p in world.members.values()):
-                        raise APIError("already_connected", "This account is already connected to this server.", 409)
-                    row = await self.store.run(lambda db: db.execute("SELECT state,revision FROM player_states WHERE world_id=? AND user_id=?", (world.world_id, user["id"])).fetchone()) if user else None
-                    player = Player(socket, secrets.token_hex(8), user["display_name"] if user else "Anonymous " + secrets.token_hex(2), user["id"] if user else None, digest(token) if user else None, user["expires_at"] if user else 0, json.loads(row["state"]) if row else {}, row["revision"] if row else 0)
-                    if world is self.pvp:
-                        await world.prepare_player(player)
+                    resume_id = join.get("resume_player_id")
+                    previous = world.members.get(resume_id) if isinstance(resume_id, str) else None
+                    resumed = bool(user and previous and previous.user_id == user["id"]
+                                   and previous.token_hash == digest(token))
+                    if resumed:
+                        if world is self.pvp and world.failed:
+                            raise APIError("pvp_unavailable", "PvP simulation is unavailable. Co-op remains available.", 503)
+                        player = previous
+                        retired_socket = player.socket
+                        retired_transport = player.transport
+                        player.socket = socket
+                        retiring = asyncio.create_task(self.retire_socket(retired_socket))
+                        self.retiring_sockets[retiring] = retired_transport
+                        retiring.add_done_callback(self.retired_socket_done)
+                        player.capture_context.clear()
+                    else:
+                        if len(world.members) >= 5:
+                            raise APIError("server_full", "This server has five players. Please try again when a place opens.", 409)
+                        if user and any(p.user_id == user["id"] for p in world.members.values()):
+                            raise APIError("already_connected", "This account is already connected to this server.", 409)
+                        row = await self.store.run(lambda db: db.execute("SELECT state,revision FROM player_states WHERE world_id=? AND user_id=?", (world.world_id, user["id"])).fetchone()) if user else None
+                        player = Player(socket, secrets.token_hex(8), user["display_name"] if user else "Anonymous " + secrets.token_hex(2), user["id"] if user else None, digest(token) if user else None, user["expires_at"] if user else 0, json.loads(row["state"]) if row else {}, row["revision"] if row else 0)
+                        if world is self.pvp:
+                            await world.prepare_player(player)
                     player.session_id = request["request_id"]
-                    player.received = received
+                    player.transport = request.transport
+                    player.received += received
                     self.link_capture(player, join)
                     request["player_id"] = player.player_id
                     contexts.enter_context(log_context(player_id=player.player_id))
                     world.members[player.player_id] = player
                     log_event("session_join", members=len(world.members), joining=self.joining)
                     await self.send(player, {"type": "joined", "player_id": player.player_id, "world_id": self.world_id, "seed": world.seed, "excavated": sorted(world.excavated), "players": [p.public() for p in world.members.values()], "state": player.state, "state_revision": player.revision, **(world.join_details() if world is self.pvp else {})})
-                    await world.broadcast({"type": "player_joined", "player": world.public(player) if world is self.pvp else player.public()}, exclude=player)
-                    if world is self.pvp:
-                        await world.finish_if_winner(player)
+                    if not resumed:
+                        await world.broadcast({"type": "player_joined", "player": world.public(player) if world is self.pvp else player.public()}, exclude=player)
+                        if world is self.pvp:
+                            await world.finish_if_winner(player)
                 async for incoming in socket:
                     if incoming.type != WSMsgType.TEXT:
                         if incoming.type == WSMsgType.ERROR:
                             request["error_code"] = "connection_error"
                             log_event("session_error", level=logging.WARNING, error=socket.exception(), error_code="connection_error")
                         break
-                    player.received += 1
-                    now = time.monotonic()
-                    player.messages = min(250.0, player.messages + (now - player.refilled_at) * 60)
-                    player.refilled_at = now
-                    player.messages -= 1
-                    if player.messages < 0:
-                        raise APIError("rate_limited", "Too many game messages. Reconnect to resume.", 429)
-                    if player.user_id is not None and player.token_expires <= int(time.time()):
-                        raise APIError("invalid_token", "Your sign-in expired. Sign in again.", 401)
                     try:
                         message = json.loads(incoming.data)
                     except (ValueError, RecursionError):
@@ -911,6 +944,19 @@ class Service:
                     if not isinstance(message, dict):
                         raise APIError("invalid_message", "Game messages must be JSON objects.")
                     async with world.world_lock:
+                        # Both checks are required: the logical player survives a
+                        # handoff, but only its current socket may mutate it.
+                        if world.members.get(player.player_id) is not player or player.socket is not socket:
+                            break
+                        player.received += 1
+                        now = time.monotonic()
+                        player.messages = min(250.0, player.messages + (now - player.refilled_at) * 60)
+                        player.refilled_at = now
+                        player.messages -= 1
+                        if player.messages < 0:
+                            raise APIError("rate_limited", "Too many game messages. Reconnect to resume.", 429)
+                        if player.user_id is not None and player.token_expires <= int(time.time()):
+                            raise APIError("invalid_token", "Your sign-in expired. Sign in again.", 401)
                         if world is self.pvp and message.get("type") in MUTATIONS:
                             if world.failed:
                                 raise APIError("pvp_unavailable", "PvP simulation is unavailable. Co-op remains available.", 503)
@@ -946,7 +992,7 @@ class Service:
                 log_event("session_error", level=logging.WARNING, error=error, error_code=error.code)
                 if not socket.closed:
                     await socket.send_str(encode({"type": "error", "code": error.code, "message": error.message, "request_id": request["request_id"]}))
-                    if player:
+                    if player and player.socket is socket:
                         player.sent += 1
                     await socket.close(code=1008, message=error.code.encode()[:100])
             except (asyncio.TimeoutError, ConnectionError) as error:
@@ -962,7 +1008,7 @@ class Service:
                 log_event("session_error", level=logging.ERROR, error=error, error_code="server_error")
                 if not socket.closed:
                     await socket.send_str(encode({"type": "error", "code": "server_error", "message": "The server could not save this action. Reconnect to resume your last saved state.", "request_id": request["request_id"]}))
-                    if player:
+                    if player and player.socket is socket:
                         player.sent += 1
                     await socket.close(code=1011, message=b"Server failure")
             finally:
@@ -970,8 +1016,9 @@ class Service:
                 try:
                     if player:
                         async with world.world_lock:
-                            world.members.pop(player.player_id, None)
-                            await world.broadcast({"type": "player_left", "player_id": player.player_id})
+                            if world.members.get(player.player_id) is player and player.socket is socket:
+                                del world.members[player.player_id]
+                                await world.broadcast({"type": "player_left", "player_id": player.player_id})
                 finally:
                     log_event(
                         "session_leave", duration_ms=(time.monotonic() - started) * 1000,

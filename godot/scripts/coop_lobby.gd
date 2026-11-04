@@ -464,7 +464,10 @@ func _finish_page() -> void:
 	_auth_state_changed()
 	_resize()
 	_resize.call_deferred()
-	if GameInput.controller_active:
+	if client.recovering:
+		# Move keyboard focus off any underlying shop control as well.
+		_focus_initial()
+	elif GameInput.controller_active:
 		_focus_initial.call_deferred()
 
 func show_mode() -> void:
@@ -481,7 +484,7 @@ func show_mode() -> void:
 func _choose_server(mode: String) -> void:
 	if _busy() and not client.session_checking:
 		return
-	if client.connected and client.mode != mode:
+	if (client.connected or client.recovering) and client.mode != mode:
 		if not host.leave_coop():
 			return
 		host.change_scene("MainMenu")
@@ -495,7 +498,11 @@ func show_lobby() -> void:
 	_label("PvP ($1M)" if client.mode == "pvp" else "Co-op")
 	_identity = _label("", true)
 	_identity.name = "AccountIdentity"
-	if client.connected:
+	if client.recovering:
+		_label("Restoring server-confirmed progress. Unconfirmed actions are not retried." + (" PvP continues." if client.mode == "pvp" else ""), true)
+		_button("Leave", _leave, "LeaveServer", true)
+		_button("Sign out", _sign_out, "SignOut")
+	elif client.connected:
 		_button("Resume", hide_lobby, "ReturnToWorld", true)
 		_button("Leave", _leave, "LeaveServer")
 	elif not client.token.is_empty():
@@ -591,12 +598,15 @@ func _save_server() -> void:
 	show_lobby()
 
 func hide_lobby(reset_pause: bool = false) -> void:
+	if client.recovering and not reset_pause:
+		show_lobby()
+		return
 	if reset_pause:
 		_message = ""
 	modal = false
 	_shade.hide()
 	_panel.hide()
-	host.paused = false if reset_pause else _paused_before_lobby
+	host.paused = client.recovering or (false if reset_pause else _paused_before_lobby)
 	refresh_hud()
 
 func refresh_hud() -> void:
@@ -604,6 +614,8 @@ func refresh_hud() -> void:
 		return
 	leaderboard.refresh()
 	var header_text := "%s · %d/5" % ["PvP" if client.mode == "pvp" else "Co-op", client.peers.size()] if host.is_coop else "Private"
+	if client.recovering:
+		header_text = "Reconnecting…"
 	var needs_layout: bool = _hud_label.text != header_text or _hud_scene != host.scene_name or not _hud.visible
 	_hud.visible = not modal and (host.is_coop or host.scene_name == "MainMenu")
 	if _hud_label.text != header_text:
@@ -625,6 +637,9 @@ func _back() -> void:
 		client.cancel_auth(false)
 	elif _busy():
 		return
+	if client.recovering and _page == "mode":
+		show_lobby()
+		return
 	if _page == "password" or _page == "server":
 		show_lobby()
 	elif _page == "mode" or client.connected:
@@ -639,7 +654,7 @@ func _leave() -> void:
 	show_lobby()
 
 func _join() -> void:
-	if _busy() or client.connected:
+	if _busy() or client.connected or client.recovering:
 		return
 	if not client.endpoint_is_secure():
 		_set_status("Use HTTPS in Server settings before joining.")
@@ -649,7 +664,7 @@ func _join() -> void:
 	_auth_state_changed()
 
 func _prepare_auth() -> bool:
-	if _busy() or client.connected:
+	if _busy() or client.connected or client.recovering:
 		return false
 	if not client.endpoint_is_secure():
 		_set_status("Use HTTPS in Server settings to protect your sign-in.")
@@ -681,16 +696,20 @@ func _cancel_auth() -> void:
 func _sign_out() -> void:
 	if _busy() or client.connected:
 		return
+	if client.recovering:
+		if not host.leave_coop():
+			return
+		host.change_scene("MainMenu")
 	_message = ""
 	client.logout()
 	_message = "Signed out. You can sign in again or play anonymously."
 	show_lobby()
 
 func _busy() -> bool:
-	return client.auth_busy or client.session_checking or client.connecting
+	return client.auth_busy or client.session_checking or (client.connecting and not client.recovering)
 
 func _state_key() -> String:
-	return str(client.connected) + ":" + str(not client.token.is_empty())
+	return str(client.connected) + ":" + str(client.recovering) + ":" + str(not client.token.is_empty())
 
 func _refresh_identity() -> void:
 	_message = ""
@@ -725,6 +744,8 @@ func _update_status() -> void:
 		_status.text = "Checking your saved session…"
 	elif client.auth_busy:
 		_status.text = _message if not _message.is_empty() else "Signing in…"
+	elif client.recovering:
+		_status.text = "Reconnecting…"
 	elif client.connecting:
 		_status.text = "Connecting to the PvP round…" if client.mode == "pvp" else "Connecting to the shared world…"
 	else:

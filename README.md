@@ -490,6 +490,34 @@ Discord retains identify-only authorization, state and PKCE; its documented
 consent for already-approved scopes. Native browser/return handling follows
 [RFC 8252](https://www.rfc-editor.org/rfc/rfc8252).
 
+### Multiplayer connection recovery — 0.7.2
+
+Signed-in Co-op and PvP automatically recover an interrupted game connection for
+up to 35 seconds. The green **Reconnecting…** modal retains the current game and
+private-save context while disabling local controls. PvP simulation, damage and
+respawn timers continue on the server; reconnecting does not grant protection or
+a new life. Success rebuilds the visible game from the authoritative snapshot,
+including its active camera, rather than replaying uncertain local actions.
+
+Recovery joins include the previous server-issued `resume_player_id`. The service
+hands off an existing player only when the target world, authenticated account
+and token match. This uses the same player slot; the old socket cannot mutate or
+remove its replacement. A different login or anonymous caller cannot take it
+over. Deploy the updated service before these clients. No database migration,
+account reset, capture deletion, TLS downgrade or additional public port is needed.
+
+Unconfirmed purchases, transfers, mining and other actions are not retried.
+Explicit Leave, sign-out, account expiry, server/mode changes and server policy or
+save failures end recovery. Exhausting the deadline returns an honest connection
+error with the private save restored and the saved sign-in retained. Initial
+connection errors and anonymous progress semantics are unchanged.
+
+The native recovery regression runs in macOS release/PR validation using a
+temporary, isolated user-data override that is removed before export. For manual
+checks, run `verification/coop_state_interop.gd` only against a staged project
+whose custom user-data directory is not the installed game's directory. Its
+auth-expiry cases intentionally clear their fixture session file.
+
 ### Always-on gameplay capture
 
 Normal private, co-op and PvP gameplay is recorded automatically, including
