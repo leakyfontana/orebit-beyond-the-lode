@@ -70,6 +70,7 @@ class AuthServiceTest(unittest.IsolatedAsyncioTestCase):
 
     async def start(self):
         app = server.create_app(argparse.Namespace(db=str(self.db)))
+        self.backend = next(route.handler.__self__ for route in app.router.routes() if route.resource.canonical == "/api/ws")
         self.service = TestServer(app)
         with patch.object(server, "ClientSession", lambda **kwargs: ProviderTransport(self.provider_base, **kwargs)):
             await self.service.start_server()
@@ -141,11 +142,227 @@ class AuthServiceTest(unittest.IsolatedAsyncioTestCase):
     async def poll(self, flow):
         return await self.json_request("POST", "/api/auth/discord/poll", json={"poll_token": flow["poll_token"]})
 
-    async def join(self, token=""):
+    async def join(self, token="", **fields):
         socket = await self.http.ws_connect(self.base + "/api/ws")
         self.sockets.append(socket)
-        await socket.send_json({"type": "join", "token": token})
+        await socket.send_json({"type": "join", "token": token, **fields})
         return socket, await socket.receive_json(timeout=5)
+
+    async def event(self, socket, kind):
+        async with asyncio.timeout(5):
+            while True:
+                message = await socket.receive_json()
+                if message.get("type") == kind:
+                    return message
+
+    async def membership(self, mode, count):
+        async with asyncio.timeout(5):
+            while True:
+                _, health = await self.json_request("GET", "/healthz")
+                if health["modes"][mode]["players"] == count:
+                    return
+                await asyncio.sleep(0.01)
+
+    async def test_authenticated_resume_preserves_full_world_slot_state_and_capture(self):
+        credentials = {"username": "resume_full", "password": "resume-full-long-password"}
+        _, account = await self.json_request("POST", "/api/auth/signup", json=credentials)
+        for mode in ("coop", "pvp"):
+            with self.subTest(mode=mode):
+                fields = {"mode": mode, "pvp_rounds": 1}
+                with patch("capture.os.statvfs", return_value=SimpleNamespace(f_blocks=1000000, f_frsize=4096, f_bavail=900000)):
+                    response, capability = await self.json_request("POST", "/api/captures/session")
+                self.assertEqual(response.status, 200)
+                old, joined = await self.join(account["token"], **fields, capture_session=capability["session_id"], capture_token=capability["token"])
+                peers = [await self.join(**fields) for _ in range(4)]
+                observer, observer_joined = peers[0]
+                if mode == "coop":
+                    state = {"player_money": 83, "player_hp": 4, "player_cargo": {"Ironium": 2}, "player_items": {"Dynamite": 1}, "x": 3, "y": -8}
+                    await old.send_json({"type": "state", "state": state, "state_revision": 0})
+                    await self.event(old, "state_ack")
+                else:
+                    await old.send_json({"type": "state", "state": joined["state"], "state_revision": joined["state_revision"], "motion_seq": 77, "round_id": joined["round_id"]})
+                    await self.event(old, "state_ack")
+                    await old.send_json({"type": "damage", "source": "crash", "amount": 3, "round_id": joined["round_id"]})
+                    await self.event(old, "state_sync")
+                await old.send_json({"type": "transfer", "recipient_id": observer_joined["player_id"], "amount": 7, "round_id": joined.get("round_id")})
+                transferred = await self.event(old, "transfer_result")
+                self.assertTrue(transferred["accepted"])
+                _, rejected = await self.join(**fields)
+                self.assertEqual(rejected["code"], "server_full")
+                replacement, resumed = await self.join(account["token"], **fields, resume_player_id=joined["player_id"])
+                self.assertEqual(resumed["type"], "joined")
+                self.assertEqual(resumed["player_id"], joined["player_id"])
+                self.assertEqual(resumed["state"], transferred["state"])
+                self.assertEqual(resumed["state_revision"], transferred["state_revision"])
+                self.assertEqual({p["player_id"] for p in resumed["players"]}, {joined["player_id"], *(p["player_id"] for _, p in peers)})
+                self.assertEqual(len(resumed["players"]), 5)
+                self.assertEqual(resumed["capture_session_id"], capability["session_id"])
+                self.assertGreater(resumed["capture_server_sequence"], transferred["capture_server_sequence"])
+                if mode == "pvp":
+                    self.assertEqual(resumed["round_id"], joined["round_id"])
+                    # The logical player's motion watermark survives recovery:
+                    # replaying sequence 77 must not move its authoritative pod.
+                    stale = {**resumed["state"], "x": resumed["state"]["x"] + 0.25}
+                    await replacement.send_json({"type": "state", "state": stale, "state_revision": resumed["state_revision"], "motion_seq": 77, "round_id": resumed["round_id"]})
+                    synchronized = await self.event(replacement, "state_sync")
+                    self.assertEqual(synchronized["state"]["x"], resumed["state"]["x"])
+                    self.assertEqual(synchronized["state"]["player_hp"], 7)
+                await old.close()
+                await self.membership(mode, 5)
+                await replacement.send_json({"type": "ping"})
+                pong = await self.event(replacement, "pong")
+                self.assertEqual(pong["capture_session_id"], capability["session_id"])
+                self.assertGreater(pong["capture_server_sequence"], resumed["capture_server_sequence"])
+                await observer.send_json({"type": "transfer", "recipient_id": resumed["player_id"], "amount": 1, "round_id": resumed.get("round_id")})
+                self.assertTrue((await self.event(observer, "transfer_result"))["accepted"])
+                await replacement.send_json({"type": "state", "state": {}, "state_revision": -1, "motion_seq": 78, "round_id": resumed.get("round_id")})
+                synchronized = await self.event(replacement, "state_sync")
+                self.assertEqual(synchronized["state"]["player_money"], transferred["state"]["player_money"] + 1)
+                self.assertEqual(synchronized["state_revision"], transferred["state_revision"] + 1)
+                for connection in (replacement, *(connection for connection, _ in peers)):
+                    await connection.close()
+                await self.membership(mode, 0)
+                # Once removed, the same recovery packet uses the ordinary
+                # authenticated database restore, not a public-ID reconstruction.
+                restored_socket, restored = await self.join(account["token"], **fields, resume_player_id=resumed["player_id"])
+                self.assertEqual(restored["type"], "joined")
+                self.assertNotEqual(restored["player_id"], resumed["player_id"])
+                self.assertEqual(restored["state"]["player_money"], synchronized["state"]["player_money"])
+                self.assertEqual(restored["state_revision"], synchronized["state_revision"])
+                await restored_socket.close()
+                await self.membership(mode, 0)
+
+    async def test_resume_requires_same_authenticated_token_and_exact_world_player(self):
+        for mode in ("coop", "pvp"):
+            with self.subTest(mode=mode):
+                fields = {"mode": mode, "pvp_rounds": 1}
+                credentials = {"username": "resume_security_" + mode, "password": "resume-security-long-password"}
+                _, account = await self.json_request("POST", "/api/auth/signup", json=credentials)
+                _, other_token = await self.json_request("POST", "/api/auth/login", json=credentials)
+                _, foreign = await self.json_request("POST", "/api/auth/signup", json={**credentials, "username": "resume_foreign_" + mode})
+                old, joined = await self.join(account["token"], **fields)
+                # Valid foreign auth and anonymous joins stay ordinary joins;
+                # neither may claim the public ID or displace its owner.
+                anonymous_socket, anonymous = await self.join(**fields, resume_player_id=joined["player_id"])
+                foreign_socket, foreign_joined = await self.join(foreign["token"], **fields, resume_player_id=joined["player_id"])
+                self.assertNotEqual(anonymous["player_id"], joined["player_id"])
+                self.assertNotEqual(foreign_joined["player_id"], joined["player_id"])
+                for token, resume in (
+                    (account["token"], {}),
+                    (account["token"], {"resume_player_id": "not-this-player"}),
+                    (account["token"], {"resume_player_id": anonymous["player_id"]}),
+                    (account["token"], {"resume_player_id": []}),
+                    (other_token["token"], {"resume_player_id": joined["player_id"]}),
+                ):
+                    _, rejected = await self.join(token, **fields, **resume)
+                    self.assertEqual(rejected["code"], "already_connected")
+                    await old.send_json({"type": "ping"})
+                    await self.event(old, "pong")
+                _, rejected = await self.join("invalid-token-that-is-long-enough", **fields, resume_player_id=joined["player_id"])
+                self.assertEqual(rejected["code"], "invalid_token")
+                _, rejected = await self.join(account["token"], **fields, world_id="foreign-world", resume_player_id=joined["player_id"])
+                self.assertEqual(rejected["code"], "world_not_found")
+                # A guest's public ID is not an authentication credential either.
+                guest_socket, guest = await self.join(**fields, resume_player_id=anonymous["player_id"])
+                self.assertNotEqual(guest["player_id"], anonymous["player_id"])
+                await anonymous_socket.send_json({"type": "ping"})
+                await self.event(anonymous_socket, "pong")
+                await self.membership(mode, 4)
+                for connection in (old, anonymous_socket, foreign_socket, guest_socket):
+                    await connection.close()
+                await self.membership(mode, 0)
+
+    async def test_delayed_retired_actions_and_close_cannot_mutate_or_remove_resume(self):
+        for mode in ("coop", "pvp"):
+            with self.subTest(mode=mode):
+                fields = {"mode": mode, "pvp_rounds": 1}
+                _, account = await self.json_request("POST", "/api/auth/signup", json={"username": "resume_delayed_" + mode, "password": "resume-delayed-long-password"})
+                with patch("capture.os.statvfs", return_value=SimpleNamespace(f_blocks=1000000, f_frsize=4096, f_bavail=900000)):
+                    response, capability = await self.json_request("POST", "/api/captures/session")
+                    other_response, other_capture = await self.json_request("POST", "/api/captures/session")
+                self.assertEqual(response.status, 200)
+                self.assertEqual(other_response.status, 200)
+                old, joined = await self.join(account["token"], **fields, capture_session=capability["session_id"], capture_token=capability["token"])
+                world = self.backend.pvp if mode == "pvp" else self.backend
+                old_server_socket = world.members[joined["player_id"]].socket
+                original_close = old_server_socket.close
+                closing = asyncio.Event()
+                handler_finished = asyncio.Event()
+                release = asyncio.Event()
+
+                async def delayed_close(*args, **kwargs):
+                    if closing.is_set():
+                        handler_finished.set()
+                    closing.set()
+                    await release.wait()
+                    return await original_close(*args, **kwargs)
+
+                with patch.object(old_server_socket, "close", delayed_close):
+                    try:
+                        async with asyncio.timeout(1):
+                            replacement, resumed = await self.join(account["token"], **fields, resume_player_id=joined["player_id"])
+                            await closing.wait()
+                        self.assertEqual(resumed["type"], "joined")
+                        # The retired handler is still reading: the action must
+                        # fail ownership under the world lock, before dispatch.
+                        await old.send_json({"type": "capture_link", "capture_session": other_capture["session_id"], "capture_token": other_capture["token"]})
+                        await old.send_json({"type": "state", "state": {**resumed["state"], "player_money": 999}, "state_revision": resumed["state_revision"], "motion_seq": 100, "round_id": resumed.get("round_id")})
+                        await old.send_json({"type": "leave"})
+                        async with asyncio.timeout(1):
+                            await handler_finished.wait()
+                        await replacement.send_json({"type": "state", "state": {}, "state_revision": -1, "motion_seq": 1, "round_id": resumed.get("round_id")})
+                        synchronized = await self.event(replacement, "state_sync")
+                        self.assertEqual(synchronized["state"].get("player_money", 0), resumed["state"].get("player_money", 0))
+                        self.assertEqual(synchronized["state_revision"], resumed["state_revision"])
+                        self.assertEqual(synchronized["capture_session_id"], capability["session_id"])
+                        await self.membership(mode, 1)
+                    finally:
+                        release.set()
+                    await old.close()
+                await replacement.send_json({"type": "ping"})
+                await self.event(replacement, "pong")
+                await self.membership(mode, 1)
+                await replacement.close()
+                await self.membership(mode, 0)
+
+    async def test_pvp_resume_never_respawns_dead_player_or_resets_round_runtime(self):
+        _, account = await self.json_request("POST", "/api/auth/signup", json={"username": "resume_dead", "password": "resume-dead-long-password"})
+        old, joined = await self.join(account["token"], mode="pvp", pvp_rounds=1)
+        await old.send_json({"type": "damage", "source": "fuel", "amount": 10, "round_id": joined["round_id"]})
+        dead = await self.event(old, "state_sync")
+        self.assertFalse(dead["state"]["alive"])
+        snapshot = await self.event(old, "pvp_tick")
+        self.assertTrue(snapshot["bags"])
+        replacement, resumed = await self.join(account["token"], mode="pvp", pvp_rounds=1, resume_player_id=joined["player_id"])
+        self.assertEqual(resumed["player_id"], joined["player_id"])
+        self.assertEqual(resumed["state"], dead["state"])
+        self.assertEqual(resumed["state_revision"], dead["state_revision"])
+        self.assertEqual(resumed["round_id"], joined["round_id"])
+        self.assertEqual({bag["id"]: bag["amount"] for bag in resumed["bags"]}, {bag["id"]: bag["amount"] for bag in snapshot["bags"]})
+        self.assertFalse(resumed["state"]["alive"])
+        self.assertEqual(resumed["state"]["player_hp"], 0)
+        self.assertEqual(resumed["state"]["respawn_at"], dead["state"]["respawn_at"])
+        await old.close()
+        await replacement.send_json({"type": "ping"})
+        await self.event(replacement, "pong")
+        await self.membership("pvp", 1)
+
+    async def test_resume_id_does_not_cross_mode_membership_or_private_saves(self):
+        _, account = await self.json_request("POST", "/api/auth/signup", json={"username": "resume_modes", "password": "resume-modes-long-password"})
+        coop, joined = await self.join(account["token"])
+        await coop.send_json({"type": "state", "state": {"player_money": 321}, "state_revision": 0})
+        await self.event(coop, "state_ack")
+        pvp, pvp_joined = await self.join(account["token"], mode="pvp", pvp_rounds=1, resume_player_id=joined["player_id"])
+        self.assertNotEqual(pvp_joined["player_id"], joined["player_id"])
+        self.assertEqual(pvp_joined["state"]["player_money"], 20)
+        _, rejected = await self.join(account["token"], mode="pvp", pvp_rounds=1, resume_player_id=joined["player_id"])
+        self.assertEqual(rejected["code"], "already_connected")
+        await coop.send_json({"type": "state", "state": {}, "state_revision": -1})
+        self.assertEqual((await self.event(coop, "state_sync"))["state"]["player_money"], 321)
+        await pvp.send_json({"type": "ping"})
+        await self.event(pvp, "pong")
+        await self.membership("coop", 1)
+        await self.membership("pvp", 1)
 
     async def test_trusted_game_return_validation(self):
         accepted = [

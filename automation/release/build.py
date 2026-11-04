@@ -423,19 +423,35 @@ def build(args):
         write_presets(presets, project / "export_presets.cfg")
         run([godot, "--headless", "--editor", "--path", project, "--import"], cwd=work, env=environment)
         if target == "macos":
-            run([godot, "--headless", "--path", project,
-                 "--script", ROOT / "verification/coop_input_interop.gd", "--",
-                 "--touch-controls", "--mode=private",
-                 "--coop-url=http://127.0.0.1:1", "--coop-token="],
-                cwd=work, env=environment)
-            for probe in ("spawn_impact_interop.gd", "close_target_interop.gd", "lobby_controller_interop.gd",
-                          "pvp_state_interop.gd", "pvp_crash_interop.gd", "pvp_drill_interop.gd",
-                          "pvp_terrain_interop.gd", "pvp_impact_interop.gd", "pvp_fuel_interop.gd",
-                          "pvp_building_interop.gd"):
+            # Probes may expire their fixture sign-in; never use an installed
+            # game's userdata. Remove this override before producing the app.
+            override = project / "override.cfg"
+            if override.exists():
+                raise RuntimeError("Release staging contains an unexpected settings override")
+            override.write_text(
+                '[application]\nconfig/use_custom_user_dir=true\n'
+                'config/custom_user_dir_name="OrebitNativeChecks"\n'
+                'config/custom_user_dir_name.macos="OrebitNativeChecks"\n'
+                'config/custom_user_dir_name.windows="OrebitNativeChecks"\n'
+                'config/custom_user_dir_name.web="OrebitNativeChecks"\n',
+                encoding="utf-8",
+            )
+            try:
                 run([godot, "--headless", "--path", project,
-                     "--script", ROOT / "verification" / probe, "--",
-                     "--mode=private", "--coop-url=http://127.0.0.1:1", "--coop-token=", "--seed=1"],
+                     "--script", ROOT / "verification/coop_input_interop.gd", "--",
+                     "--touch-controls", "--mode=private",
+                     "--coop-url=http://127.0.0.1:1", "--coop-token="],
                     cwd=work, env=environment)
+                for probe in ("coop_state_interop.gd", "spawn_impact_interop.gd", "close_target_interop.gd",
+                              "lobby_controller_interop.gd", "pvp_state_interop.gd", "pvp_crash_interop.gd",
+                              "pvp_drill_interop.gd", "pvp_terrain_interop.gd", "pvp_impact_interop.gd",
+                              "pvp_fuel_interop.gd", "pvp_building_interop.gd"):
+                    run([godot, "--headless", "--path", project,
+                         "--script", ROOT / "verification" / probe, "--",
+                         "--mode=private", "--coop-url=http://127.0.0.1:1", "--coop-token=", "--seed=1"],
+                        cwd=work, env=environment)
+            finally:
+                override.unlink()
         export = work / "export"
         export.mkdir()
         filename = {"macos": "Orebit.app", "windows": "Orebit.exe", "android": "Orebit.apk", "web": "index.html"}[target]

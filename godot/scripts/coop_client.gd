@@ -6,10 +6,14 @@ signal identity_changed
 signal auth_state_changed
 signal joined_world(snapshot: Dictionary)
 signal connection_lost(message: String)
+signal recovery_started
 signal world_event(event: Dictionary)
 
 const DEFAULT_URL := "https://play.arcmonkeyswelding.com/coop"
 const SESSION_FILE := "user://orebit_coop_session.json"
+const RECOVERY_WINDOW_USEC := 35000000
+const RECOVERY_ATTEMPT_USEC := 8000000
+const RECOVERY_BACKOFF_USEC := [250000, 750000, 1500000, 2500000]
 var base_url := DEFAULT_URL
 var world_id := "public"
 var token := ""
@@ -22,6 +26,7 @@ var auth_busy: bool:
 var player_id := ""
 var connected := false
 var connecting := false
+var recovering := false
 var peers: Dictionary = {}
 var host: Node
 var state_revision := 0
@@ -32,7 +37,11 @@ var _poll_token := ""
 var _poll_after := 0.0
 var _state_after := 0.0
 var _join_sent := false
-var _connect_elapsed := 0.0
+var _connect_started_usec := 0
+var _join_context: Dictionary = {}
+var _recovery_deadline_usec := 0
+var _recovery_after_usec := 0
+var _recovery_attempt := 0
 var _sequence := 0
 var _pending_mines: Dictionary = {}
 var _economic_baseline: Dictionary = {}
@@ -149,6 +158,8 @@ func discord_login() -> void:
 	_request("/api/auth/discord/start", payload, "discord_start")
 
 func logout() -> void:
+	if connected or connecting or recovering:
+		_fail("Signed out. Sign in again or continue anonymously.")
 	cancel_auth(false)
 	if not token.is_empty():
 		var revocation := HTTPRequest.new()
@@ -211,7 +222,7 @@ func _expire_session() -> void:
 	_store_session()
 	identity_changed.emit()
 	auth_state_changed.emit()
-	if connected or connecting:
+	if connected or connecting or recovering:
 		_fail("Your sign-in expired. Sign in again to restore your account progress.")
 	else:
 		status_changed.emit("Your sign-in expired. Sign in again or continue anonymously.")
@@ -345,19 +356,60 @@ func join_world() -> void:
 		status_changed.emit("Finish signing in, or cancel sign-in to join anonymously.")
 		return
 	leave_world()
+	_join_context = {"base_url": base_url, "world_id": world_id, "mode": mode, "token": token}
+	var result := _open_socket()
+	if result != OK:
+		status_changed.emit("Unable to connect: " + error_string(result))
+		return
+	status_changed.emit("Joining " + ("PvP sandbox" if mode == "pvp" else "Co-op") + " · " + world_id + "…")
+
+func _open_socket() -> Error:
 	_socket = WebSocketPeer.new()
 	_socket.inbound_buffer_size = 4 * 1024 * 1024
 	_socket.max_queued_packets = 4096
-	var websocket_url := base_url.trim_suffix("/").replace("https://", "wss://").replace("http://", "ws://") + "/api/ws"
+	var websocket_url := str(_join_context.base_url).trim_suffix("/").replace("https://", "wss://").replace("http://", "ws://") + "/api/ws"
 	var result := _socket.connect_to_url(websocket_url)
 	if result != OK:
 		_socket = null
-		status_changed.emit("Unable to connect: " + error_string(result))
-		return
+		connecting = false
+		return result
 	connecting = true
-	_connect_elapsed = 0.0
+	_connect_started_usec = Time.get_ticks_usec()
 	_join_sent = false
-	status_changed.emit("Joining " + ("PvP sandbox" if mode == "pvp" else "Co-op") + " · " + world_id + "…")
+	return OK
+
+func _recovery_context_matches() -> bool:
+	return not token.is_empty() and not player_id.is_empty() and not _join_context.is_empty() and token == _join_context.token and base_url == _join_context.base_url and world_id == _join_context.world_id and mode == _join_context.mode
+
+func _begin_recovery(now: int) -> void:
+	recovering = true
+	_recovery_deadline_usec = now + RECOVERY_WINDOW_USEC
+	_recovery_attempt = 0
+	# An action may have reached the server even when its reply did not. Discard
+	# local pending work and rebuild from joined; never resubmit it on a retry.
+	_pending_mines.clear()
+	_pvp_blasts.clear()
+	_economic_baseline.clear()
+	transfer_pending = false
+	_transfer_elapsed = 0.0
+	_round_loading = false
+	_round_events.clear()
+	_reset_motion_history()
+	_schedule_recovery(now)
+	recovery_started.emit()
+	status_changed.emit("Reconnecting… Local controls are disabled until the server restores your session.")
+
+func _schedule_recovery(now: int) -> void:
+	if _socket != null:
+		_socket.close()
+	# Release this peer now: a dead transport's close handshake must not hold
+	# the replacement connection or the overall recovery deadline open.
+	_socket = null
+	connected = false
+	connecting = false
+	_join_sent = false
+	_recovery_after_usec = now + int(RECOVERY_BACKOFF_USEC[mini(_recovery_attempt, RECOVERY_BACKOFF_USEC.size() - 1)])
+	_recovery_attempt += 1
 
 func leave_world() -> void:
 	if host.gameplay_capture != null and host.is_coop:
@@ -369,6 +421,12 @@ func leave_world() -> void:
 	_socket = null
 	connected = false
 	connecting = false
+	recovering = false
+	_join_context.clear()
+	_recovery_deadline_usec = 0
+	_recovery_after_usec = 0
+	_recovery_attempt = 0
+	_connect_started_usec = 0
 	player_id = ""
 	peers.clear()
 	_pvp_blasts.clear()
@@ -525,27 +583,62 @@ func _process(delta: float) -> void:
 		_poll_after -= delta
 		if _poll_after <= 0.0:
 			_request("/api/auth/discord/poll", {"poll_token": _poll_token}, "discord_poll")
+	if recovering:
+		if not _recovery_context_matches():
+			_fail("Reconnection cancelled because the account, server, world or mode changed.")
+			return
+		if now >= _recovery_deadline_usec:
+			_fail("Could not reconnect to the server. Progress already confirmed by the server is retained; unconfirmed actions were not retried. Your private save is unchanged.")
+			return
+		if _socket == null and now >= _recovery_after_usec:
+			if _open_socket() != OK:
+				_schedule_recovery(now)
 	if _socket == null:
 		return
 	_socket.poll()
 	var ready := _socket.get_ready_state()
-	if ready == WebSocketPeer.STATE_CLOSED:
-		_fail("Disconnected from the server. Account progress already received by the server is retained; anonymous progress is not.")
-		return
-	if connecting:
-		_connect_elapsed += delta
-		if _connect_elapsed > 25.0:
-			_fail("The " + ("PvP" if mode == "pvp" else "co-op") + " server did not respond. Your private save is unchanged.")
-			return
-	if ready != WebSocketPeer.STATE_OPEN:
-		return
-	if not _join_sent:
+	if ready == WebSocketPeer.STATE_OPEN and not _join_sent:
 		_join_sent = true
-		_send({"type": "join", "token": token, "world_id": world_id, "mode": mode})
+		var join := {"type": "join", "token": _join_context.token, "world_id": _join_context.world_id, "mode": _join_context.mode}
+		if recovering:
+			join.resume_player_id = player_id
+		_send(join)
+	# A policy/auth error and its close frame may arrive in the same poll.
+	# Consume the error before deciding whether this was a transport loss.
 	while _socket != null and _socket.get_available_packet_count() > 0:
 		var parsed: Variant = JSON.parse_string(_socket.get_packet().get_string_from_utf8())
-		if parsed is Dictionary:
-			_receive(parsed)
+		if not parsed is Dictionary:
+			_fail("The server returned an unreadable game message.")
+			return
+		_receive(parsed)
+	if _socket == null:
+		return
+	ready = _socket.get_ready_state()
+	if ready in [WebSocketPeer.STATE_CLOSING, WebSocketPeer.STATE_CLOSED]:
+		var close_code := _socket.get_close_code()
+		# Native close processing can discard the final JSON error packet.
+		# Explicit server failure must remain terminal, not become a retry.
+		if close_code in [1002, 1003, 1007, 1008, 1009, 1011]:
+			var reason := _socket.get_close_reason()
+			if close_code == 1008 and reason in ["invalid_token", "Signed out"]:
+				_expire_session()
+			else:
+				_fail("The server ended this session." if reason.is_empty() else "The server ended this session: " + reason)
+		elif recovering:
+			_schedule_recovery(now)
+		elif connected and _recovery_context_matches():
+			_begin_recovery(now)
+		else:
+			_fail("Disconnected from the server. Account progress already received by the server is retained; anonymous progress is not.")
+		return
+	if connecting and now - _connect_started_usec > (RECOVERY_ATTEMPT_USEC if recovering else 25000000):
+		if recovering:
+			_schedule_recovery(now)
+		else:
+			_fail("The " + ("PvP" if mode == "pvp" else "co-op") + " server did not respond. Your private save is unchanged.")
+		return
+	if ready != WebSocketPeer.STATE_OPEN:
+		return
 	if not connected:
 		return
 	if transfer_pending:
@@ -565,14 +658,20 @@ func _process(delta: float) -> void:
 
 func _receive(event: Dictionary) -> void:
 	var kind := str(event.get("type", ""))
+	if kind == "error":
+		if str(event.get("code", "")) == "invalid_token":
+			_expire_session()
+		else:
+			_fail(str(event.get("message", "The server rejected the request.")))
+		return
+	if _round_loading and kind not in ["joined", "round_started"]:
+		if _round_events.size() >= 128:
+			_fail("World updates exceeded the scene-loading buffer. Reconnect to resume.")
+			return
+		_round_events.append(event)
+		return
 	if mode == "pvp" and kind not in ["joined", "round_started"]:
 		if event.has("round_id") and str(event.round_id) != round_id:
-			return
-		if _round_loading:
-			if _round_events.size() >= 128:
-				_fail("Round updates exceeded the scene-loading buffer. Reconnect to resume.")
-				return
-			_round_events.append(event)
 			return
 	if kind == "round_started" and str(event.get("round_id", "")) == round_id:
 		return
@@ -613,7 +712,7 @@ func _receive(event: Dictionary) -> void:
 				host.data.restore_coop_state(completed)
 				host.data.player_hp = ceili(maxf(0.0, float(completed.get("player_hp", host.data.player_hp))))
 				host.gameplay_capture.finish("round_end")
-			_round_loading = event.type == "round_started"
+			_round_loading = true
 			_round_events.clear()
 			round_id = str(event.get("round_id", ""))
 			_pending_mines.clear()
@@ -624,9 +723,15 @@ func _receive(event: Dictionary) -> void:
 			peers.clear()
 			connected = true
 			connecting = false
+			recovering = false
+			_recovery_deadline_usec = 0
+			_recovery_after_usec = 0
+			_recovery_attempt = 0
 			link_capture()
 			player_id = str(event.player_id)
 			world_id = str(event.world_id)
+			if not _join_context.is_empty():
+				_join_context.world_id = world_id
 			state_revision = int(event.get("state_revision", 0))
 			_economic_baseline = event.get("state", {}).duplicate(true)
 			for peer in event.get("players", []):
@@ -693,15 +798,11 @@ func _receive(event: Dictionary) -> void:
 				event.state = _reconcile_economic_state(event.get("state", {}))
 				world_event.emit(event)
 				send_state()
-		"error":
-			var message := str(event.get("message", "The server rejected the request."))
-			if connecting:
-				_fail(message)
-			else:
-				status_changed.emit(message)
 
 func _fail(message: String) -> void:
-	var was_active := connected or connecting
+	var was_active := connected or connecting or recovering
+	# A terminal failure must not flush uncertain local changes on its way out.
+	connected = false
 	leave_world()
 	status_changed.emit(message)
 	if was_active:
