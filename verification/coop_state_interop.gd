@@ -206,11 +206,17 @@ func _recovery_cases(host: Node) -> void:
 		# These writes have uncertain outcomes when the transport dies. They must
 		# neither prevent recovery/Leave nor be replayed against the joined state.
 		game_data.player_money = 999999
-		network._pending_mines[Vector2i(8, 6)] = 0.0
-		network.transfer_pending = true
+		network._pending_mines[Vector2i(8, 6)] = 20.01 if mode == "coop" else 0.0
+		network.transfer_pending = mode == "pvp"
 		network._pvp_blasts["uncertain-blast"] = "Dynamite"
-		original.stream.disconnect_from_host()
-		await _transport_ended(network)
+		if mode == "coop":
+			# A half-open connection must recover when excavation stops being
+			# acknowledged, before the transport reports a closed socket.
+			check(network._socket.get_ready_state() == WebSocketPeer.STATE_OPEN, "Excavation timeout fixture lost its open transport")
+			network._process(0.0)
+		else:
+			original.stream.disconnect_from_host()
+			await _transport_ended(network)
 		check(network.recovering and not network.connected, mode + ": signed-in loss did not start recovery")
 		check(host.coop.active and host.data == game_data and host.world == game_world, mode + ": interruption discarded game context")
 		check(network.token == "signed-in-recovery-fixture" and network.player_id == "recovery-" + mode, mode + ": interruption discarded recovery identity")

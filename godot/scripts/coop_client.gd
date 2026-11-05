@@ -649,7 +649,10 @@ func _process(delta: float) -> void:
 	for cell in _pending_mines.keys():
 		_pending_mines[cell] += delta
 		if _pending_mines[cell] > 20.0:
-			_fail("The server stopped confirming excavation. Rejoin before continuing.")
+			if _recovery_context_matches():
+				_begin_recovery(now)
+			else:
+				_fail("The server stopped confirming excavation. Rejoin before continuing.")
 			return
 	_state_after -= delta
 	if _state_after <= 0.0:

@@ -499,6 +499,12 @@ respawn timers continue on the server; reconnecting does not grant protection or
 a new life. Success rebuilds the visible game from the authoritative snapshot,
 including its active camera, rather than replaying uncertain local actions.
 
+In 0.7.3, an excavation left unconfirmed for 20 seconds also starts signed-in recovery,
+even if the socket still appears open. Pending excavation requests are discarded,
+not replayed; the authoritative snapshot restores terrain and player position.
+Anonymous excavation timeouts remain terminal because their progress cannot be
+recovered through authenticated session ownership.
+
 Recovery joins include the previous server-issued `resume_player_id`. The service
 hands off an existing player only when the target world, authenticated account
 and token match. This uses the same player slot; the old socket cannot mutate or
