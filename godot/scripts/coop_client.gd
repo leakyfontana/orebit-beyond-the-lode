@@ -757,9 +757,12 @@ func _receive(event: Dictionary) -> void:
 			var own := str(event.get("player_id", "")) == player_id
 			if own:
 				_pending_mines.erase(Vector2i(int(event.x), int(event.y)))
+				# Feedback belongs to a newly applied reward, not a replayed reply.
+				event.reward_applied = false
 				if bool(event.get("accepted", false)) and int(event.get("state_revision", 0)) > state_revision:
 					state_revision = int(event.state_revision)
 					event.state = _reconcile_economic_state(event.get("state", {}))
+					event.reward_applied = true
 				elif bool(event.get("accepted", false)):
 					event.state = host.data.coop_snapshot()
 			world_event.emit(event)

@@ -445,7 +445,8 @@ def build(args):
                 for probe in ("coop_state_interop.gd", "spawn_impact_interop.gd", "close_target_interop.gd",
                               "lobby_controller_interop.gd", "pvp_state_interop.gd", "pvp_crash_interop.gd",
                               "pvp_drill_interop.gd", "pvp_terrain_interop.gd", "pvp_impact_interop.gd",
-                              "pvp_fuel_interop.gd", "pvp_building_interop.gd"):
+                              "pvp_fuel_interop.gd", "pvp_building_interop.gd",
+                              "coop_mineral_feedback_interop.gd"):
                     run([godot, "--headless", "--path", project,
                          "--script", ROOT / "verification" / probe, "--",
                          "--mode=private", "--coop-url=http://127.0.0.1:1", "--coop-token=", "--seed=1"],

@@ -356,6 +356,13 @@ excavations, and account money, cargo, upgrades, items, transmissions and positi
 Physics runs locally; the server arbitrates excavation and awards each tile once.
 Pausing affects only the local player, not the server or other miners.
 
+Excavating a mineral does not guarantee it fits in the cargo bay: capacity is
+measured by mineral weight. Multiplayer shows the cargo-full warning and omits
+the pickup sound when the confirmed result adds no mineral. Already-applied
+mining replies do not repeat pickup feedback. Capacity, sale values and economic
+reconciliation are unchanged. `verification/coop_mineral_feedback_interop.gd`
+covers fitting, no-fit and sale-while-reply-pending outcomes.
+
 The **MODES / ACCOUNTS** action is a borderless dark-green two-miner icon with
 light-green landing-menu typography. Its visible artwork matches INV's size and
 extends the icon row to the right of Help/Options with the existing visual
