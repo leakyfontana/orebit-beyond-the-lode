@@ -147,6 +147,22 @@ same-version, same-commit publication retry, never a new release or downgrade.
 The required **Beta checks** status name and protected environment retain their
 existing infrastructure names; public versions and announcements do not.
 
+## Final-form boss artwork
+
+The Godot copy of Mr. Natas's final-form artwork uses an exterior-background
+matte across intro, standing, walking, arm attack, fireball attack and death.
+Only border-connected background pixels become transparent; enclosed dark
+details and foreground RGB are retained. The intro uses a derived PNG instead
+of its opaque JPEG. Original Unity artwork remains unchanged.
+
+Sprite dimensions, atlas regions, pivots, animation tracks, gameplay timings
+and collision geometry are unchanged. Detached arms and projectile textures
+that already had transparency are not rematted.
+
+Run `godot --headless --path godot --script "$PWD/verification/boss_backdrop_interop.gd"`
+to check the actual baked sprite and native-controller animation textures for
+opaque corners and retained dark hair.
+
 ## Sinclair fuel pricing
 
 The propellant station is Sinclair-branded and advertises its current regular
