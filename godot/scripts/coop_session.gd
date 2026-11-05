@@ -185,11 +185,15 @@ func _event(event: Dictionary) -> void:
 				if host.player != null and host.player.data == host.data:
 					host.refresh_tiles(changed)
 			if own and accepted:
-				host.data.restore_coop_state(event.get("state", {}), true)
 				var ore := str(event.get("ore", ""))
-				if host.data.minerals.has(ore):
-					host.createPopup("Excavated " + ore, "IsMineral")
-					host.audio.PlaySoundOneShot("MineralGet")
+				var cargo_before := int(host.data.player_cargo.get(ore, 0))
+				host.data.restore_coop_state(event.get("state", {}), true)
+				if bool(event.get("reward_applied", false)):
+					if host.data.minerals_name_list.has(ore) and int(host.data.player_cargo.get(ore, 0)) <= cargo_before:
+						host.createPopup("Cargo is full!\nYou lost " + ore, "IsWarning")
+					elif host.data.minerals.has(ore):
+						host.createPopup("Excavated " + ore, "IsMineral")
+						host.audio.PlaySoundOneShot("MineralGet")
 			if host.player != null and host.player.data == host.data:
 				host.player.coop_mining_resolved(x, y, accepted, own and str(event.get("method", "")) == "drill")
 				host.ui.updateAllUI()
