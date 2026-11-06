@@ -114,6 +114,24 @@ class CaptureStorageTest(unittest.TestCase):
             self.assert_status(400, self.store.ingest, self.session, self.token, 0, gzip.compress(raw))
         self.assertEqual(list(self.store.root.iterdir()), [])
 
+    def test_vulcan_death_and_respawn_are_nonterminal_life_events(self):
+        value = records(self.session)
+        value[0]["mode"] = "vulcan"
+        value[1]["events"] = [{"kind": "life", "alive": False}]
+        value[1]["next_observation"]["state"][STATE_FIELDS.index("alive")] = 0
+        revived = copy.deepcopy(value[1])
+        revived.update(sequence=1, tick=1, next_tick=2)
+        revived["observation"] = copy.deepcopy(value[1]["next_observation"])
+        revived["next_observation"]["state"][STATE_FIELDS.index("alive")] = 1
+        revived["events"] = [{"kind": "life", "alive": True}]
+        value.append(revived)
+        body = gzip.compress(canonical(value))
+        self.store.ingest(self.session, self.token, 0, body)
+        stored = decode_chunk(body, self.session, 0)
+        self.assertEqual([row["events"][0]["alive"] for row in stored[1:]], [False, True])
+        value[1].update(terminated=True, reason="death")
+        self.assert_status(400, decode_chunk, gzip.compress(canonical(value)), self.session, 0)
+
     def test_round_end_requires_terminal_pvp_boundary(self):
         for mode, terminated, truncated in (("private", True, False), ("coop", True, False),
                                              ("pvp", False, True), ("pvp", False, False)):

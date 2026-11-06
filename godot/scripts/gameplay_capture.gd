@@ -88,7 +88,7 @@ func begin_episode() -> void:
 	episode_id = Crypto.new().generate_random_bytes(16).hex_encode()
 	_sequence = 0
 	_started_at_ms = int(Time.get_unix_time_from_system() * 1000.0)
-	_mode = "pvp" if host.data.pvp_mode else ("coop" if host.is_coop else "private")
+	_mode = "vulcan" if host.data.vulcan_mode else ("pvp" if host.data.pvp_mode else ("coop" if host.is_coop else "private"))
 	_actor = "replay" if host.replay_runner != null else "human"
 	_peer_slots = [null, null, null, null]
 	_seed = host.world.generation_seed
@@ -140,7 +140,7 @@ func sample(only_changes: bool = false) -> void:
 	if episode_id.is_empty() or not is_instance_valid(host.player):
 		return
 	var next_observation := _observe()
-	var dead: bool = not host.player._alive and not host.data.pvp_mode
+	var dead: bool = not host.player._alive and not host.data.pvp_mode and not host.data.vulcan_mode
 	if only_changes and not dead and next_observation == _observation and _commands.is_empty() and _events.is_empty():
 		return
 	_record(next_observation, dead, false, "death" if dead else "running")
@@ -152,7 +152,7 @@ func finish(reason: String = "scene_change") -> void:
 	if episode_id.is_empty():
 		return
 	if is_instance_valid(host.player):
-		var dead: bool = not host.player._alive and not host.data.pvp_mode
+		var dead: bool = not host.player._alive and not host.data.pvp_mode and not host.data.vulcan_mode
 		var terminal: bool = dead or (reason == "round_end" and host.data.pvp_mode)
 		_record(_observe(), terminal, not terminal, "death" if dead else reason)
 	_flush()

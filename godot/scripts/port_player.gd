@@ -1017,6 +1017,12 @@ func _report_pvp_fuel_death() -> void:
 	var network: CoopClient = host.coop.network
 	if _pvp_fuel_death_sent or not network.connected or network.has_pending_actions():
 		return
+	if data.vulcan_mode:
+		var state: Dictionary = host.coop_state()
+		state.alive = false
+		_pvp_fuel_death_sent = true
+		network._send({"type": "state", "state": state, "state_revision": network.state_revision})
+		return
 	# Reconcile mining/transfers first, then preserve the latest purchases,
 	# carried money and physics position before the server creates the bag.
 	data.player_fuel = minf(0.0, data.player_fuel)
@@ -1025,7 +1031,7 @@ func _report_pvp_fuel_death() -> void:
 	network.pvp_action("damage", {"source": "fuel", "amount": 10})
 
 func killPlayer() -> void:
-	if data.pvp_mode:
+	if data.pvp_mode or data.vulcan_mode:
 		if not _alive or _pvp_fuel_death_pending:
 			return
 		# Do not predict life: an earlier alive snapshot may still be in flight.

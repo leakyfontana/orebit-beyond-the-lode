@@ -603,6 +603,65 @@ class AuthServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(failed["status"], "failed")
         await self.start_flow("https://game.example/")
 
+    async def test_vulcan_discord_flow_identity_and_token_scope_survive_restart(self):
+        response, flow = await self.json_request("POST", "/api/auth/discord/start?mode=vulcan",
+                                                json={"mode": "vulcan", "return_url": "https://game.example/?mode=vulcan"})
+        self.assertEqual(response.status, 200)
+        params = parse_qs(urlsplit(flow["authorization_url"]).query)
+        # A poll in the original scope cannot read or consume the Vulcan flow.
+        response, _ = await self.poll(flow)
+        self.assertEqual(response.status, 401)
+        code = self.provider_code(params)
+        response, _ = await self.callback(params, code=code)
+        self.assertEqual(response.status, 303)
+        self.assertEqual(response.headers["Location"], "https://game.example/?mode=vulcan&orebit_auth=complete")
+        response, complete = await self.json_request("POST", "/api/auth/discord/poll?mode=vulcan",
+                                                    json={"poll_token": flow["poll_token"], "mode": "vulcan"})
+        self.assertEqual(response.status, 200)
+        self.assertEqual(complete["status"], "complete")
+        vulcan_token = complete["token"]
+        original_flow, original_params = await self.start_flow()
+        response, _ = await self.callback(original_params, code=self.provider_code(original_params))
+        self.assertEqual(response.status, 200)
+        response, original = await self.poll(original_flow)
+        self.assertEqual(response.status, 200)
+        self.assertNotEqual(original["token"], vulcan_token)
+        # The same provider ID creates independent account rows, not aliases.
+        for store in (self.backend.store, self.backend.vulcan_store):
+            count = await store.run(lambda db: db.execute("SELECT COUNT(*) FROM users WHERE discord_id='12345'").fetchone()[0])
+            self.assertEqual(count, 1)
+        _, rejected = await self.join(vulcan_token)
+        self.assertEqual(rejected["code"], "invalid_token")
+        _, joined = await self.join(vulcan_token, mode="vulcan")
+        self.assertEqual(joined["mode"], "vulcan")
+        await self.stop()
+        await self.start()
+        for token, suffix in ((vulcan_token, "?mode=vulcan"), (original["token"], "")):
+            response, session = await self.json_request("GET", "/api/auth/session" + suffix,
+                                                       headers={"Authorization": "Bearer " + token})
+            self.assertEqual(response.status, 200)
+            self.assertEqual(session["user"]["name"], "Discord Miner")
+
+    async def test_vulcan_oauth_cancel_and_pending_flows_remain_scoped(self):
+        response, flow = await self.json_request("POST", "/api/auth/discord/start",
+                                                json={"mode": "vulcan", "return_url": server.NATIVE_DISCORD_RETURN})
+        self.assertEqual(response.status, 200)
+        params = parse_qs(urlsplit(flow["authorization_url"]).query)
+        await self.stop()
+        await self.start()
+        response, pending = await self.json_request("POST", "/api/auth/discord/poll",
+                                                    json={"mode": "vulcan", "poll_token": flow["poll_token"]})
+        self.assertEqual(response.status, 200)
+        self.assertEqual(pending["status"], "pending")
+        response, _ = await self.callback(params, error="access_denied")
+        self.assertEqual(response.status, 303)
+        self.assertEqual(response.headers["Location"], server.NATIVE_DISCORD_RETURN + "?orebit_auth=failed")
+        response, failed = await self.json_request("POST", "/api/auth/discord/poll",
+                                                   json={"mode": "vulcan", "poll_token": flow["poll_token"]})
+        self.assertEqual(response.status, 200)
+        self.assertEqual(failed["status"], "failed")
+        self.assertEqual(self.provider_calls, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

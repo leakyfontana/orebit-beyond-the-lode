@@ -30,7 +30,7 @@ EVENT_KINDS = {"server", "server_gap", "life", "gap", "timing"}
 REASONS = {"running", "death", "round_end", "scene_change", "disconnect", "shutdown"}
 HEX32 = re.compile(r"[0-9a-f]{32}\Z")
 HEX64 = re.compile(r"[0-9a-f]{64}\Z")
-PACKETS = {"joined", "round_started", "round_rejected", "state_ack", "state_sync", "state", "mined", "transfer_result", "building_result", "blast_result", "pvp_tick", "player_joined", "player_left", "pong", "capture_linked"}
+PACKETS = {"joined", "round_started", "round_rejected", "state_ack", "state_sync", "state", "mined", "transfer_result", "building_result", "blast_result", "pvp_tick", "vulcan_tick", "worm_death", "worm_respawn", "player_joined", "player_left", "pong", "capture_linked"}
 
 
 class CaptureError(ValueError):
@@ -93,7 +93,7 @@ def _records(raw, session_id, chunk_index):
     keys(manifest, ("type", "schema_version", "session_id", "episode_id", "chunk_index", "mode", "seed", "physics_hz", "build", "engine", "state_fields", "checkpoint", "started_at_ms", "source", "terrain", "actor"))
     if manifest["type"] != "manifest" or manifest["schema_version"] != 1 or manifest["session_id"] != session_id or manifest["chunk_index"] != chunk_index or not isinstance(manifest["episode_id"], str) or not HEX32.fullmatch(manifest["episode_id"]):
         invalid()
-    if manifest["mode"] not in ("private", "coop", "pvp") or manifest["physics_hz"] != 50 or manifest["state_fields"] != STATE_FIELDS or manifest["source"] != "runtime_scripts_sha256" or manifest["terrain"] != "visible_local_9x9_v1":
+    if manifest["mode"] not in ("private", "coop", "pvp", "vulcan") or manifest["physics_hz"] != 50 or manifest["state_fields"] != STATE_FIELDS or manifest["source"] != "runtime_scripts_sha256" or manifest["terrain"] != "visible_local_9x9_v1":
         invalid()
     if manifest["actor"] not in ("human", "replay"):
         invalid()
