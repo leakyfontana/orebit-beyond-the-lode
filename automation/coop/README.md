@@ -1,5 +1,45 @@
 # Co-op service
 
+## Vulcan isolation and authority
+
+Vulcan joins use `mode: "vulcan"` on the existing WebSocket endpoint. Native and
+Discord authentication requests select the same scope with `mode: "vulcan"`;
+GET session validation and logout also accept `?mode=vulcan`. The configured
+SQLite database filename plus `.vulcan` stores separate users, password hashes,
+tokens, OAuth flows, saved states, seed, excavations and worm runtime. Tokens
+cannot cross scopes. Co-op and PvP retain their existing authentication database.
+The client keeps Vulcan identity and pending native OAuth in a separate session
+file. Include both databases in consistent online SQLite backups; do not copy a
+live database without its WAL.
+
+`joined` and `vulcan_tick` contain a `worm` snapshot with ten head-first world
+coordinate `segments`, cardinal `direction`, `speed`, `step_interval`,
+`target_player_id`, `last_drill` and `server_time`. State packets add a boolean
+`drilling`, reporting actual drill activity rather than merely held movement.
+Fresh drilling packets select the nearest active driller; short drill bursts are
+remembered even between simulation ticks. Updates and simulation share the world
+lock. Body excavation and death are saved before publication; the worm awards
+no ore. Tick `terrain_changes` contain `[tile_x, depth, 0]`.
+
+`worm_death` and `worm_respawn` include `player_id`, authoritative `state`,
+`state_revision`, `respawn_at` and `server_time`. Death loses cargo/consumables
+but preserves money/upgrades. Respawn after three seconds restores upgraded
+hull/fuel at the Co-op surface pad. Revisions reject stale pre-death inventories;
+only authority can revive. Authenticated reconnect handoff preserves the current
+life and does not reset the worm or grant invulnerability. Guest persistence is
+unchanged. Simulation advances only while miners are connected.
+
+Run deterministic mechanics and real HTTP/WebSocket regressions with:
+
+```sh
+python -m unittest discover -s automation/coop -p 'test_*.py'
+```
+
+`test_vulcan.py` covers scope rejection, durable independent progress, reconnect,
+target selection and short bursts, all-body excavation/contact, retained money,
+resource loss, stale writes and respawn. Scoped Discord callback/poll, cancellation
+and pending-flow restart cases live in `test_auth.py`.
+
 ## Signed-in connection recovery
 
 A recovery `join` may include the previous `resume_player_id`. Under the target

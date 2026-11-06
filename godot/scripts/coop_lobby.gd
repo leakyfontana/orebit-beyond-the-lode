@@ -479,6 +479,8 @@ func show_mode() -> void:
 	_button("Co-op", func(): _choose_server("coop"), "ChooseCoop", false, choices)
 	_button("PvP", func(): _choose_server("pvp"), "ChoosePvp", false, choices)
 	_label("PvP: first to $1M held cash wins; each win starts a new round.", true)
+	_button("Vulcan", func(): _choose_server("vulcan"), "ChooseVulcan")
+	_label("Experimental outpost · isolated accounts and worlds. Play solo or with other miners.", true)
 	_finish_page()
 
 func _choose_server(mode: String) -> void:
@@ -488,14 +490,16 @@ func _choose_server(mode: String) -> void:
 		if not host.leave_coop():
 			return
 		host.change_scene("MainMenu")
-	client.mode = mode
+	client.select_mode(mode)
 	_message = ""
 	show_lobby()
 
 func show_lobby() -> void:
 	_open_page("lobby")
 	_lobby_state = _state_key()
-	_label("PvP ($1M)" if client.mode == "pvp" else "Co-op")
+	_label("Vulcan" if client.mode == "vulcan" else ("PvP ($1M)" if client.mode == "pvp" else "Co-op"))
+	if client.mode == "vulcan":
+		_label("Drilling attracts Shai-Hulud. Its entire body consumes earth and miners. Death loses cargo and items, but keeps your money. Respawn automatically on the surface.", true)
 	_identity = _label("", true)
 	_identity.name = "AccountIdentity"
 	if client.recovering:
@@ -613,7 +617,7 @@ func refresh_hud() -> void:
 	if not is_instance_valid(_hud_label):
 		return
 	leaderboard.refresh()
-	var header_text := "%s · %d/5" % ["PvP" if client.mode == "pvp" else "Co-op", client.peers.size()] if host.is_coop else "Private"
+	var header_text := "%s · %d/5" % ["Vulcan" if client.mode == "vulcan" else ("PvP" if client.mode == "pvp" else "Co-op"), client.peers.size()] if host.is_coop else "Private"
 	if client.recovering:
 		header_text = "Reconnecting…"
 	var needs_layout: bool = _hud_label.text != header_text or _hud_scene != host.scene_name or not _hud.visible

@@ -11,6 +11,7 @@ var _private_world: WorldData
 var _snapshot: Dictionary = {}
 var _remote_visuals: Dictionary = {}
 var pvp: PvpView
+var vulcan: VulcanView
 var _recovery_join := false
 
 func configure(main_host: Node) -> void:
@@ -32,10 +33,13 @@ func configure(main_host: Node) -> void:
 	pvp = PvpView.new()
 	add_child(pvp)
 	pvp.configure(host, network)
+	vulcan = VulcanView.new()
+	add_child(vulcan)
+	vulcan.configure(host, network)
 	# Existing deterministic replays retain private mode unless explicitly opted in.
 	if network.startup_mode == "auth_return":
 		lobby.show_lobby()
-	elif network.startup_mode in ["coop", "pvp"]:
+	elif network.startup_mode in ["coop", "pvp", "vulcan"]:
 		lobby.show_lobby()
 		network.join_world()
 	elif network.startup_mode == "private" or not host.replay.is_empty():
@@ -53,6 +57,7 @@ func _joined(snapshot: Dictionary) -> void:
 	host.data = GameData.new()
 	host.data.coop_mode = true
 	host.data.pvp_mode = network.mode == "pvp"
+	host.data.vulcan_mode = network.mode == "vulcan"
 	host.data.music_volume = _private_data.music_volume
 	host.data.sound_volume = _private_data.sound_volume
 	host.data.coop_save_requested.connect(network.send_state)
@@ -79,7 +84,7 @@ func scene_loaded() -> void:
 			host.player.position_unity = Vector2(float(state.get("x", 5.5)), float(state.get("y", -3.5)))
 			if bool(state.get("facing", false)) != host.player.isFacingRight:
 				host.player.flipCharacter()
-			if not host.data.pvp_mode and (not bool(state.get("alive", true)) or host.data.player_hp <= 0):
+			if not host.data.pvp_mode and not host.data.vulcan_mode and (not bool(state.get("alive", true)) or host.data.player_hp <= 0):
 				if _recovery_join:
 					# Recovery is not a new life. Keep the server-confirmed death.
 					host.player.killPlayer()
@@ -99,6 +104,12 @@ func scene_loaded() -> void:
 		lobby.leaderboard.announce(_snapshot.get("winner", {}))
 	else:
 		pvp.hide_respawn()
+	if host.data.vulcan_mode and host.scene_name == "Game":
+		vulcan.scene_loaded(_snapshot)
+		var saved: Dictionary = _snapshot.get("state", {})
+		host.player.apply_pvp_life(bool(saved.get("alive", true)), Vector2(float(saved.get("x", 5.5)), float(saved.get("y", -3.5))))
+	else:
+		vulcan.clear()
 	lobby._resize.call_deferred()
 	network.finish_round_load()
 	_recovery_join = false
@@ -111,6 +122,7 @@ func leave() -> bool:
 		return false
 	transfer.close_visit()
 	pvp.hide_respawn()
+	vulcan.clear()
 	if network.connected or network.connecting or network.recovering or not network.player_id.is_empty():
 		network.leave_world()
 	if active:
@@ -133,6 +145,10 @@ func state() -> Dictionary:
 	result.y = host.player_position.y
 	result.facing = host.player.isFacingRight if host.player != null else false
 	result.alive = host.player_alive
+	if host.data.vulcan_mode and host.player != null:
+		result.x = host.player.position_unity.x
+		result.y = host.player.position_unity.y
+		result.drilling = host.player_alive and not host.paused and (host.player.isDigging or host.player.is_digging_bottom or host.player.is_digging_side)
 	if host.data.pvp_mode and host.player != null:
 		result.building = pvp.building
 		# Render extrapolation is presentation, not an authoritative motion sample.
@@ -162,6 +178,32 @@ func _disconnected(message: String) -> void:
 func _event(event: Dictionary) -> void:
 	if not active:
 		return
+	if host.data.vulcan_mode:
+		var kind := str(event.get("type", ""))
+		if kind == "vulcan_tick":
+			vulcan.apply_event(event)
+			var changed: Array = []
+			for cell in event.get("terrain_changes", []):
+				changed.append_array(host.world.instantDigBlock(int(cell[0]), int(cell[1])))
+			if not changed.is_empty():
+				host.refresh_tiles(changed)
+			_sync_peers()
+			lobby.refresh_hud()
+			return
+		if kind in ["worm_death", "worm_respawn", "state_sync"]:
+			if str(event.get("player_id", network.player_id)) == network.player_id:
+				var saved: Dictionary = event.get("state", {})
+				if not bool(saved.get("alive", true)) and host.player_alive:
+					for panel in host.ui.PANEL_SCRIPTS:
+						if bool(host.ui.panel_active.get(panel, false)):
+							host.ui._set_panel(panel, false)
+					host.player.exitShop()
+					host.createPopup("Consumed by Shai-Hulud · cargo lost, money retained", "IsMineral")
+					host.paused = false
+				host.data.restore_coop_state(saved)
+				host.player.apply_pvp_life(bool(saved.get("alive", true)), Vector2(float(saved.get("x", 5.5)), float(saved.get("y", -3.5))))
+				host.ui.updateAllUI()
+			return
 	if host.data.pvp_mode:
 		if event.get("type", "") == "pvp_tick":
 			pvp.apply_event(event)
@@ -274,6 +316,8 @@ func tick(delta: float) -> void:
 	transfer.tick()
 	if host.data.pvp_mode:
 		pvp.tick(delta)
+	if host.data.vulcan_mode:
+		vulcan.tick(delta)
 	for id in _remote_visuals:
 		var remote: Node2D = _remote_visuals[id]
 		if not is_instance_valid(remote) or not network.peers.has(id):

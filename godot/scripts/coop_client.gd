@@ -11,6 +11,7 @@ signal world_event(event: Dictionary)
 
 const DEFAULT_URL := "https://play.arcmonkeyswelding.com/coop"
 const SESSION_FILE := "user://orebit_coop_session.json"
+const VULCAN_SESSION_FILE := "user://orebit_vulcan_session.json"
 const RECOVERY_WINDOW_USEC := 35000000
 const RECOVERY_ATTEMPT_USEC := 8000000
 const RECOVERY_BACKOFF_USEC := [250000, 750000, 1500000, 2500000]
@@ -107,8 +108,16 @@ func configure(main_host: Node) -> void:
 			explicit_token = true
 		elif str(argument).begins_with("--mode="):
 			startup_mode = str(argument).trim_prefix("--mode=")
-	if startup_mode == "pvp":
-		mode = "pvp"
+	if startup_mode in ["pvp", "vulcan"]:
+		mode = startup_mode
+	if mode == "vulcan" or (pending is Dictionary and str(pending.get("mode", "")) == "vulcan"):
+		mode = "vulcan"
+		var supplied_token := token if explicit_token else ""
+		var scoped_pending := _load_identity()
+		if not OS.has_feature("web"):
+			pending = scoped_pending
+		if explicit_token:
+			token = supplied_token
 	if saved_endpoint != base_url and not explicit_token:
 		token = ""
 		username = ""
@@ -117,7 +126,7 @@ func configure(main_host: Node) -> void:
 		_auth_expires_at = int(pending.get("expires_at", 0))
 		if _auth_expires_at > int(Time.get_unix_time_from_system()):
 			_poll_token = str(pending.get("poll_token", ""))
-			mode = "pvp" if str(pending.get("mode", mode)) == "pvp" else "coop"
+			mode = str(pending.get("mode", mode))
 			auth_returned = auth_returned or not _poll_token.is_empty()
 	if auth_returned:
 		startup_mode = "auth_return"
@@ -126,6 +135,41 @@ func configure(main_host: Node) -> void:
 	elif not token.is_empty():
 		session_checking = true
 		_validate_session.call_deferred()
+
+func _session_path() -> String:
+	return VULCAN_SESSION_FILE if mode == "vulcan" else SESSION_FILE
+
+func _load_identity() -> Dictionary:
+	token = ""
+	username = ""
+	expires_at = 0
+	if FileAccess.file_exists(_session_path()):
+		var saved: Variant = JSON.parse_string(FileAccess.get_file_as_string(_session_path()))
+		if saved is Dictionary and str(saved.get("base_url", DEFAULT_URL)) == base_url:
+			token = str(saved.get("token", ""))
+			username = str(saved.get("username", ""))
+			expires_at = int(saved.get("expires_at", 0))
+			var pending: Dictionary = saved.get("pending_auth", {})
+			if str(pending.get("base_url", "")) == base_url and int(pending.get("expires_at", 0)) > int(Time.get_unix_time_from_system()):
+				_poll_token = str(pending.get("poll_token", ""))
+				_auth_expires_at = int(pending.get("expires_at", 0))
+				_poll_after = 0.0
+			return pending
+	return {}
+
+func select_mode(next_mode: String) -> void:
+	if next_mode == mode:
+		return
+	var change_scope := (mode == "vulcan") != (next_mode == "vulcan")
+	if change_scope:
+		cancel_auth(false)
+	mode = next_mode
+	if change_scope:
+		_load_identity()
+		if not token.is_empty() and _poll_token.is_empty():
+			_validate_session()
+		identity_changed.emit()
+		auth_state_changed.emit()
 
 func endpoint_is_secure() -> bool:
 	if base_url.begins_with("https://"):
@@ -171,7 +215,7 @@ func logout() -> void:
 				status_changed.emit("Signed out locally, but the server could not revoke this session. Reconnect to the account service to revoke it.")
 			revocation.queue_free()
 		)
-		var result := revocation.request(base_url + "/api/auth/logout", ["Content-Type: application/json", "Authorization: Bearer " + token], HTTPClient.METHOD_POST, "{}")
+		var result := revocation.request(base_url + "/api/auth/logout" + ("?mode=vulcan" if mode == "vulcan" else ""), ["Content-Type: application/json", "Authorization: Bearer " + token], HTTPClient.METHOD_POST, "{}")
 		if result != OK:
 			revocation.queue_free()
 			status_changed.emit("Signed out locally; server session revocation could not be sent.")
@@ -228,7 +272,7 @@ func _expire_session() -> void:
 		status_changed.emit("Your sign-in expired. Sign in again or continue anonymously.")
 
 func _store_session() -> void:
-	var file := FileAccess.open(SESSION_FILE, FileAccess.WRITE)
+	var file := FileAccess.open(_session_path(), FileAccess.WRITE)
 	if file != null:
 		var pending := {"base_url": base_url, "poll_token": _poll_token, "expires_at": _auth_expires_at, "mode": mode} if not _poll_token.is_empty() else {}
 		file.store_string(JSON.stringify({"token": token, "username": username, "expires_at": expires_at, "base_url": base_url, "pending_auth": pending}))
@@ -244,6 +288,9 @@ func _request(path: String, payload: Dictionary, kind: String, method: HTTPClien
 	var headers := PackedStringArray(["Content-Type: application/json"])
 	if authorized:
 		headers.append("Authorization: Bearer " + token)
+	if mode == "vulcan":
+		payload.mode = "vulcan"
+		path += "?mode=vulcan"
 	var result := _http.request(base_url.trim_suffix("/") + path, headers, method, "" if method == HTTPClient.METHOD_GET else JSON.stringify(payload))
 	if result != OK:
 		_http_kind = ""
@@ -656,7 +703,7 @@ func _process(delta: float) -> void:
 			return
 	_state_after -= delta
 	if _state_after <= 0.0:
-		_state_after = 0.05 if mode == "pvp" else 0.5
+		_state_after = 0.05 if mode in ["pvp", "vulcan"] else 0.5
 		send_state()
 
 func _receive(event: Dictionary) -> void:
@@ -682,6 +729,20 @@ func _receive(event: Dictionary) -> void:
 		host.gameplay_capture.server_event(int(event.capture_server_sequence), str(event.capture_session_id))
 	if host.gameplay_capture != null and event.has("capture_session_id") and event.has("capture_gap_first") and event.has("capture_gap_last"):
 		host.gameplay_capture.server_gap(str(event.capture_session_id), int(event.capture_gap_first), int(event.capture_gap_last))
+	if mode == "vulcan":
+		if kind == "vulcan_tick":
+			for peer in event.get("players", []):
+				peers[str(peer.player_id)] = peer
+			world_event.emit(event)
+			return
+		if kind in ["worm_death", "worm_respawn"] or (kind == "state_sync" and bool(event.get("state", {}).get("alive", true)) != host.player_alive):
+			if str(event.get("player_id", player_id)) == player_id:
+				state_revision = int(event.get("state_revision", state_revision))
+				_economic_baseline = event.get("state", {}).duplicate(true)
+				_pending_mines.clear()
+				transfer_pending = false
+			world_event.emit(event)
+			return
 	match str(event.get("type", "")):
 		"round_rejected":
 			# Reset already retired these requests. An expected old-round NACK

@@ -38,6 +38,7 @@ from capture import CaptureError, CaptureStore, MAX_COMPRESSED
 from fuel_prices import FuelPrices, PriceUnavailable
 from pvp import MUTATIONS, PvpWorld, UPGRADE_NAMES
 from terrain import HEIGHT, MIN_X, MINERALS, WIDTH, WEIGHTS, award, generate, tile_name
+from vulcan import VulcanWorld
 from telemetry import configure_logging, event as log_event, log_context
 
 TOKEN_LIFETIME = 30 * 86400
@@ -204,6 +205,8 @@ class Player:
 class Service:
     def __init__(self, args):
         self.store = Store(args.db)
+        # Keep Vulcan identities, credentials and saves entirely separate.
+        self.vulcan_store = Store(str(args.db) + ".vulcan")
         self.world_id = os.environ.get("OREBIT_WORLD_ID", "public")
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", self.world_id):
             raise ValueError("OREBIT_WORLD_ID must be 1-32 ASCII letters, digits, underscore or hyphen")
@@ -231,6 +234,7 @@ class Service:
         self.http: ClientSession | None = None
         self.fuel_prices: FuelPrices | None = None
         self.pvp = PvpWorld(self, APIError)
+        self.vulcan = VulcanWorld(self, APIError)
         self.capture = CaptureStore(os.environ.get("OREBIT_CAPTURE_DIR", str(Path(args.db).expanduser().absolute().parent / "captures")))
         self.capture_queue = asyncio.Queue(maxsize=256)
         self.capture_task = None
@@ -253,6 +257,7 @@ class Service:
         self.terrain = await asyncio.to_thread(generate, self.seed)
         self.capture_task = asyncio.create_task(self.capture_writer())
         await self.pvp.startup()
+        await self.vulcan.startup()
         self.http = ClientSession(timeout=ClientTimeout(total=20), raise_for_status=True)
         self.fuel_prices = FuelPrices(
             user_agent=f"OrebitBeyondTheLode/1.0 (+{self.public_url})",
@@ -261,11 +266,12 @@ class Service:
 
     async def shutdown(self, app):
         await self.pvp.stop()
+        await self.vulcan.stop()
         retiring = list(self.retiring_sockets)
         for task in retiring:
             task.cancel()
         await asyncio.gather(*retiring, return_exceptions=True)
-        players = [*self.members.values(), *self.pvp.members.values()]
+        players = [*self.members.values(), *self.pvp.members.values(), *self.vulcan.members.values()]
         results = await asyncio.gather(*(p.socket.close(code=1001, message=b"Server shutting down; reconnect to resume") for p in players), return_exceptions=True)
         for player, result in zip(players, results):
             if isinstance(result, BaseException):
@@ -286,6 +292,7 @@ class Service:
         if self.http:
             await self.http.close()
         await self.store.close()
+        await self.vulcan_store.close()
         log_event("shutdown", world_id=self.world_id, members=len(self.members))
 
     def rate_limit(self, request, bucket: str, count: int, seconds: int):
@@ -315,6 +322,11 @@ class Service:
             raise APIError("invalid_json", "Request must contain a JSON object.")
         return value
 
+    def auth_store(self, mode="coop"):
+        if mode not in ("coop", "pvp", "vulcan"):
+            raise APIError("invalid_mode", "Choose coop, pvp or vulcan.")
+        return self.vulcan_store if mode == "vulcan" else self.store
+
     def issue_token(self, db, user):
         token = secrets.token_urlsafe(32)
         now = int(time.time())
@@ -331,6 +343,7 @@ class Service:
         if signup:
             self.rate_limit(request, "signup", 5, 3600)
         body = await self.body(request)
+        store = self.auth_store(body.get("mode", request.query.get("mode", "coop")))
         username, password = body.get("username"), body.get("password")
         if not isinstance(username, str) or not USERNAME.fullmatch(username):
             raise APIError("invalid_username", "Username must be 3-24 letters, digits, underscores or hyphens.")
@@ -347,9 +360,9 @@ class Service:
                         raise APIError("username_taken", "That username is already registered.", 409)
                     user = db.execute("SELECT * FROM users WHERE id=?", (cursor.lastrowid,)).fetchone()
                     return self.issue_token(db, user)
-                response = await self.store.run(create)
+                response = await store.run(create)
             else:
-                user = await self.store.run(lambda db: db.execute("SELECT * FROM users WHERE username=?", (normalized,)).fetchone())
+                user = await store.run(lambda db: db.execute("SELECT * FROM users WHERE username=?", (normalized,)).fetchone())
                 if user:
                     request["user_id"] = user["id"]
                 try:
@@ -363,15 +376,15 @@ class Service:
                     if replacement:
                         db.execute("UPDATE users SET password_hash=? WHERE id=?", (replacement, user["id"]))
                     return self.issue_token(db, user)
-                response = await self.store.run(login)
+                response = await store.run(login)
         request["user_id"] = response["user"]["id"]
         log_event("auth_success", operation="native_signup" if signup else "native_login", user_id=request["user_id"])
         return web.json_response(response)
 
-    async def lookup_token(self, token: str):
+    async def lookup_token(self, token: str, mode="coop"):
         if not isinstance(token, str) or not 20 <= len(token) <= 200:
             raise APIError("invalid_token", "Your sign-in expired. Sign in again.", 401)
-        user = await self.store.run(lambda db: db.execute("SELECT u.*,t.expires_at FROM tokens t JOIN users u ON u.id=t.user_id WHERE t.hash=? AND t.expires_at>?", (digest(token), int(time.time()))).fetchone())
+        user = await self.auth_store(mode).run(lambda db: db.execute("SELECT u.*,t.expires_at FROM tokens t JOIN users u ON u.id=t.user_id WHERE t.hash=? AND t.expires_at>?", (digest(token), int(time.time()))).fetchone())
         if not user:
             raise APIError("invalid_token", "Your sign-in expired. Sign in again.", 401)
         return user
@@ -383,17 +396,20 @@ class Service:
         return authorization[7:]
 
     async def session(self, request):
-        user = await self.lookup_token(self.bearer_token(request))
+        user = await self.lookup_token(self.bearer_token(request), request.query.get("mode", "coop"))
         request["user_id"] = user["id"]
         return web.json_response({"expires_at": user["expires_at"], "user": {"id": user["id"], "name": user["display_name"]}})
 
     async def logout(self, request):
         token = self.bearer_token(request)
-        user = await self.lookup_token(token)
+        body = await self.body(request) if request.can_read_body else {}
+        mode = body.get("mode", request.query.get("mode", "coop"))
+        store = self.auth_store(mode)
+        user = await self.lookup_token(token, mode)
         request["user_id"] = user["id"]
         hashed = digest(token)
-        await self.store.run(lambda db: db.execute("DELETE FROM tokens WHERE hash=?", (hashed,)))
-        for player in [*self.members.values(), *self.pvp.members.values()]:
+        await store.run(lambda db: db.execute("DELETE FROM tokens WHERE hash=?", (hashed,)))
+        for player in [*self.members.values(), *self.pvp.members.values(), *self.vulcan.members.values()]:
             if player.token_hash == hashed:
                 await player.socket.close(code=1008, message=b"Signed out")
         log_event("auth_success", operation="native_logout", user_id=user["id"])
@@ -440,6 +456,7 @@ class Service:
         self.discord_configured()
         self.rate_limit(request, "discord_start", 10, 600)
         body = await self.body(request) if request.can_read_body else {}
+        store = self.auth_store(body.get("mode", request.query.get("mode", "coop")))
         return_url = self.validate_return_url(body.get("return_url"))
         state, poll, verifier = (secrets.token_urlsafe(32) for _ in range(3))
         expires = int(time.time()) + OAUTH_LIFETIME
@@ -447,7 +464,7 @@ class Service:
         def create(db):
             db.execute("DELETE FROM oauth WHERE expires_at<=?", (int(time.time()),))
             db.execute("INSERT INTO oauth(state_hash,poll_hash,verifier,expires_at,return_url) VALUES(?,?,?,?,?)", (digest(state), digest(poll), verifier, expires, return_url))
-        await self.store.run(create)
+        await store.run(create)
         log_event("auth_success", operation="discord_start")
         params = {"client_id": self.client_id, "response_type": "code", "redirect_uri": self.callback, "scope": "identify", "state": state, "code_challenge": challenge, "code_challenge_method": "S256", "prompt": "none"}
         return web.json_response({"authorization_url": "https://discord.com/oauth2/authorize?" + urlencode(params), "poll_token": poll, "expires_at": expires})
@@ -492,18 +509,22 @@ class Service:
             if row:
                 db.execute("UPDATE oauth SET status='processing' WHERE state_hash=?", (hashed,))
             return row
-        flow = await self.store.run(claim)
+        store = self.store
+        flow = await store.run(claim)
+        if flow is None:
+            store = self.vulcan_store
+            flow = await store.run(claim)
         if flow is None:
             request["error_code"] = "invalid_callback"
             return self.callback_page("This sign-in link has expired or was already used. Start again in Orebit.", 400)
         if flow["expires_at"] <= int(time.time()):
             request["error_code"] = "invalid_callback"
-            await self.store.run(lambda db: db.execute("UPDATE oauth SET status='failed',error='Discord sign-in expired. Please try again.',verifier='' WHERE state_hash=?", (hashed,)))
+            await store.run(lambda db: db.execute("UPDATE oauth SET status='failed',error='Discord sign-in expired. Please try again.',verifier='' WHERE state_hash=?", (hashed,)))
             return self.callback_page("This sign-in expired. Start again in Orebit.", 400, flow["return_url"])
         code = request.query.get("code", "")
         if request.query.get("error") or not code or len(code) > 2048:
             request["error_code"] = "discord_cancelled"
-            await self.store.run(lambda db: db.execute("UPDATE oauth SET status='failed',error='Discord authorization was cancelled.',verifier='' WHERE state_hash=?", (hashed,)))
+            await store.run(lambda db: db.execute("UPDATE oauth SET status='failed',error='Discord authorization was cancelled.',verifier='' WHERE state_hash=?", (hashed,)))
             return self.callback_page("Discord sign-in was cancelled. Try again in Orebit when you're ready.", 400, flow["return_url"])
         try:
             async with self.http.post("https://discord.com/api/oauth2/token", data={"client_id": self.client_id, "client_secret": self.client_secret, "grant_type": "authorization_code", "code": code, "redirect_uri": self.callback, "code_verifier": flow["verifier"]}) as response:
@@ -523,14 +544,14 @@ class Service:
                 user = db.execute("SELECT id FROM users WHERE discord_id=?", (discord_id,)).fetchone()
                 db.execute("UPDATE oauth SET status='complete',user_id=?,verifier='' WHERE state_hash=?", (user["id"], hashed))
                 return user["id"]
-            request["user_id"] = await self.store.run(complete)
+            request["user_id"] = await store.run(complete)
         except (asyncio.TimeoutError, ValueError, KeyError, web.HTTPException) as error:
             request["error_code"], request["log_error"] = "discord_failed", error
-            await self.store.run(lambda db: db.execute("UPDATE oauth SET status='failed',error='Discord sign-in failed. Please try again.',verifier='' WHERE state_hash=?", (hashed,)))
+            await store.run(lambda db: db.execute("UPDATE oauth SET status='failed',error='Discord sign-in failed. Please try again.',verifier='' WHERE state_hash=?", (hashed,)))
             return self.callback_page("Discord sign-in failed. Try again in Orebit.", 502, flow["return_url"])
         except Exception as error:
             request["error_code"], request["log_error"] = "discord_failed", error
-            await self.store.run(lambda db: db.execute("UPDATE oauth SET status='failed',error='Discord is temporarily unavailable. Please try again.',verifier='' WHERE state_hash=?", (hashed,)))
+            await store.run(lambda db: db.execute("UPDATE oauth SET status='failed',error='Discord is temporarily unavailable. Please try again.',verifier='' WHERE state_hash=?", (hashed,)))
             return self.callback_page("Discord is temporarily unavailable. Try again in Orebit.", 502, flow["return_url"])
         log_event("auth_success", operation="discord_callback", user_id=request["user_id"])
         return self.callback_page("Your account is ready. Orebit will finish signing you in automatically.", return_url=flow["return_url"], complete=True)
@@ -538,6 +559,7 @@ class Service:
     async def discord_poll(self, request):
         self.rate_limit(request, "discord_poll", 900, 600)
         body = await self.body(request)
+        store = self.auth_store(body.get("mode", request.query.get("mode", "coop")))
         secret = body.get("poll_token", "")
         if not isinstance(secret, str) or not 20 <= len(secret) <= 200:
             raise APIError("invalid_completion", "Invalid sign-in completion secret.", 401)
@@ -554,7 +576,7 @@ class Service:
                 db.execute("DELETE FROM oauth WHERE poll_hash=?", (digest(secret),))
                 return {"status": "failed", "message": row["error"]}
             return {"status": "pending"}
-        result = await self.store.run(poll)
+        result = await store.run(poll)
         if result["status"] == "complete":
             request["user_id"] = result["user"]["id"]
             log_event("auth_success", operation="discord_poll", user_id=request["user_id"])
@@ -572,7 +594,7 @@ class Service:
         return web.json_response(result)
 
     async def health(self, request):
-        return web.json_response({"status": "ok", "protocol": 1, "world_id": self.world_id, "players": len(self.members), "capacity": 5, "modes": {"coop": {"players": len(self.members), "capacity": 5}, "pvp": {"players": len(self.pvp.members), "capacity": 5}}, "discord_configured": bool(self.client_id and self.client_secret)})
+        return web.json_response({"status": "ok", "protocol": 1, "world_id": self.world_id, "players": len(self.members), "capacity": 5, "modes": {"coop": {"players": len(self.members), "capacity": 5}, "pvp": {"players": len(self.pvp.members), "capacity": 5}, "vulcan": {"players": len(self.vulcan.members), "capacity": 5}}, "discord_configured": bool(self.client_id and self.client_secret)})
 
     async def capture_session(self, request):
         self.rate_limit(request, "capture_issue", 30, 3600)
@@ -883,13 +905,13 @@ class Service:
                 if join.get("world_id", self.world_id) != self.world_id:
                     raise APIError("world_not_found", "That server world does not exist.", 404)
                 mode = join.get("mode", "coop")
-                if mode not in ("coop", "pvp"):
-                    raise APIError("invalid_mode", "Choose coop or pvp.")
+                if mode not in ("coop", "pvp", "vulcan"):
+                    raise APIError("invalid_mode", "Choose coop, pvp or vulcan.")
                 if mode == "pvp" and (type(join.get("pvp_rounds")) is not int or join["pvp_rounds"] != 1):
                     raise APIError("client_update_required", "Update Orebit to 0.7.0 or newer to join million-dollar PvP rounds.")
-                world = self.pvp if mode == "pvp" else self
+                world = self.pvp if mode == "pvp" else self.vulcan if mode == "vulcan" else self
                 token = join.get("token", "")
-                user = await self.lookup_token(token) if token else None
+                user = await self.lookup_token(token, mode) if token else None
                 if user:
                     request["user_id"] = user["id"]
                     contexts.enter_context(log_context(user_id=user["id"]))
@@ -901,6 +923,8 @@ class Service:
                     if resumed:
                         if world is self.pvp and world.failed:
                             raise APIError("pvp_unavailable", "PvP simulation is unavailable. Co-op remains available.", 503)
+                        if world is self.vulcan and world.failed:
+                            raise APIError("vulcan_unavailable", "Vulcan simulation is unavailable. Other modes remain available.", 503)
                         player = previous
                         retired_socket = player.socket
                         retired_transport = player.transport
@@ -914,9 +938,9 @@ class Service:
                             raise APIError("server_full", "This server has five players. Please try again when a place opens.", 409)
                         if user and any(p.user_id == user["id"] for p in world.members.values()):
                             raise APIError("already_connected", "This account is already connected to this server.", 409)
-                        row = await self.store.run(lambda db: db.execute("SELECT state,revision FROM player_states WHERE world_id=? AND user_id=?", (world.world_id, user["id"])).fetchone()) if user else None
+                        row = await world.store.run(lambda db: db.execute("SELECT state,revision FROM player_states WHERE world_id=? AND user_id=?", (world.world_id, user["id"])).fetchone()) if user else None
                         player = Player(socket, secrets.token_hex(8), user["display_name"] if user else "Anonymous " + secrets.token_hex(2), user["id"] if user else None, digest(token) if user else None, user["expires_at"] if user else 0, json.loads(row["state"]) if row else {}, row["revision"] if row else 0)
-                        if world is self.pvp:
+                        if world is not self:
                             await world.prepare_player(player)
                     player.session_id = request["request_id"]
                     player.transport = request.transport
@@ -926,9 +950,9 @@ class Service:
                     contexts.enter_context(log_context(player_id=player.player_id))
                     world.members[player.player_id] = player
                     log_event("session_join", members=len(world.members), joining=self.joining)
-                    await self.send(player, {"type": "joined", "player_id": player.player_id, "world_id": self.world_id, "seed": world.seed, "excavated": sorted(world.excavated), "players": [p.public() for p in world.members.values()], "state": player.state, "state_revision": player.revision, **(world.join_details() if world is self.pvp else {})})
+                    await self.send(player, {"type": "joined", "player_id": player.player_id, "world_id": self.world_id, "seed": world.seed, "excavated": sorted(world.excavated), "players": [p.public() for p in world.members.values()], "state": player.state, "state_revision": player.revision, **(world.join_details() if world is not self else {})})
                     if not resumed:
-                        await world.broadcast({"type": "player_joined", "player": world.public(player) if world is self.pvp else player.public()}, exclude=player)
+                        await world.broadcast({"type": "player_joined", "player": world.public(player) if world is not self else player.public()}, exclude=player)
                         if world is self.pvp:
                             await world.finish_if_winner(player)
                 async for incoming in socket:
@@ -966,6 +990,8 @@ class Service:
                                                           "message": "This request belongs to another PvP round."})
                                 await world.sync(player)
                                 continue
+                        if world is self.vulcan and world.failed:
+                            raise APIError("vulcan_unavailable", "Vulcan simulation is unavailable. Other modes remain available.", 503)
                         player.capture_context = {key: message[key] for key in ("request_id", "motion_seq") if key in message}
                         if message.get("type") == "capture_link":
                             linked = self.link_capture(player, message)

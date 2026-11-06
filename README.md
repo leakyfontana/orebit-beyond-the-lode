@@ -257,6 +257,42 @@ document, offline fallback, next-navigation migration and persistent-data surviv
 Release status and remaining device acceptance checks are tracked on the release
 board; local verification is not a publication receipt.
 
+## Vulcan experimental outpost · 0.8.0
+
+Choose **Vulcan**, launch with `--mode=vulcan`, or open `?mode=vulcan` on Web.
+Play alone or share the five-miner outpost. Gameplay and world generation follow
+Co-op, including the western extension, shops and upgrades. Vulcan has separate
+accounts, sessions, saved player progress and terrain; existing Private, Co-op
+and PvP data are not imported or reset. Guest progress ends on departure.
+
+Drilling attracts **Shai-Hulud**, one shared ten-tile worm. It follows the nearest
+actively drilling miner, then the last drilling location after drilling stops.
+It moves in four cardinal directions at 5.4 tiles/second, 90% of the stock
+engine's 6.0 flying speed. Every body segment consumes traversed earth without
+awarding ore. Contact with any segment kills the miner, clears carried minerals
+and consumable items, and retains money and purchased upgrades. Respawn occurs
+automatically after three seconds with restored hull and fuel.
+
+The worm initially rests below the mine at `(18.5, -19.5)`, with nine segments
+behind it. It does not advance while nobody is connected, and there is no
+offline catch-up. It stays underground; surface shops, the respawn pad and
+immutable scenery remain intact. Movement, excavation and death are server-owned.
+
+The original animated pixel art uses rust/ochre segmented hide, mineral-cutting
+jaws, granular texture and traveling contraction bands. Visual research covered
+[Schoenherr illustrations and the 1984 practical creature](https://monsterlegacy.net/2014/04/28/monster-gallery-dune-1984/),
+[the 2021 film's annular hide and baleen-inspired mouth](https://www.syfy.com/syfy-wire/dune-sandworm-vfx-design),
+and [Recircle/TED-Ed's angular animated treatment](https://www.stashmedia.tv/ted-ed-why-read-dune-recircle/).
+No reference image is shipped or sampled. The two-jaw design and animation are
+original; visible segment positions follow authoritative snapshots without
+predicting diagonal shortcuts through the mine.
+
+Deploy `automation/coop/vulcan.py` with the updated service before publishing the
+client. Include `<configured-db>.vulcan` in online SQLite backups alongside the
+existing database; each database's WAL must be handled through SQLite's backup
+API. See [service documentation](automation/coop/README.md) for isolation and
+protocol details.
+
 ## Million-dollar PvP rounds · 0.7.0
 
 Choose **PvP**, launch with `--mode=pvp`, or use
@@ -549,7 +585,7 @@ auth-expiry cases intentionally clear their fixture session file.
 
 ### Always-on gameplay capture
 
-Normal private, co-op and PvP gameplay is recorded automatically, including
+Normal private, co-op, PvP and Vulcan gameplay is recorded automatically, including
 anonymous play; there is no opt-in switch. Capture uses the configured co-op
 HTTP service even during private play. The isolated bot/training environment is
 not started by capture or export. This section describes the capture protocol
@@ -597,7 +633,7 @@ provenance available when export strips script text. Release staging and
 
 Physics ticks are at 50 Hz and may repeat while paused. Chunk rotation does not
 end an episode. Private death is terminal; scene changes, disconnect and deliberate
-shutdown are truncations. PvP death/respawn is a life event, not match termination.
+shutdown are truncations. PvP and Vulcan death/respawn are life events, not match termination.
 A normal PvP round end is terminal (`round_end`) for winners and losers; the
 recipient's authoritative completed state is captured before the fresh world is
 loaded. New rounds begin new episodes. Existing archives remain readable; use
