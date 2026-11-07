@@ -32,7 +32,7 @@ class VulcanMechanicsTest(unittest.TestCase):
         self.world.members[name] = player
         return player
 
-    def test_nearest_active_drill_last_location_timeout_and_disconnect(self):
+    def test_nearest_active_drill_timeout_and_disconnect_resume_roaming(self):
         far = self.player("far", 30.5, -19.5, True)
         near = self.player("near", 21.5, -19.5, True)
         self.player("silent", 19.5, -19.5)
@@ -42,22 +42,24 @@ class VulcanMechanicsTest(unittest.TestCase):
         self.assertEqual(self.world.target(100), [30.5, -19.5])
         self.assertEqual(self.world.target_id, "far")
         far.contact_at = 100 - DRILL_TIMEOUT - 0.01
-        self.assertEqual(self.world.target(100), [30.5, -19.5])
+        self.assertIsNone(self.world.target(100))
         self.assertEqual(self.world.target_id, "")
         self.world.members.pop("far")
-        self.assertEqual(self.world.target(100), [30.5, -19.5])
+        self.assertIsNone(self.world.target(100))
         # A dead miner cannot attract the worm even with a stale drill flag.
         near.state.update(alive=False, drilling=True)
-        self.assertEqual(self.world.target(100), [30.5, -19.5])
+        self.assertIsNone(self.world.target(100))
         self.assertEqual(self.world.target_id, "")
 
-    def test_fixed_speed_cardinal_path_ten_segments_and_idle_spawn(self):
+    def test_fixed_speed_cardinal_path_fifteen_segments_and_roaming_spawn(self):
         self.assertAlmostEqual(BASE_FLYING_SPEED, 6.0)
-        self.assertAlmostEqual(WORM_SPEED, 5.4)
-        initial = self.world.segments()
+        self.assertAlmostEqual(WORM_SPEED, 4.5)
+        self.assertEqual(len(self.world.segments()), 15)
         self.player("silent", 0.5, -3.5)
-        self.world.step(10, 1000, 100)
-        self.assertEqual(self.world.segments(), initial)
+        before = self.world.segments()[0]
+        with patch("vulcan.secrets.choice", side_effect=lambda candidates: candidates[-1]):
+            self.world.step(0.1, 1000, 100)
+        self.assertAlmostEqual(math.dist(before, self.world.segments()[0]), 0.45)
         hunter = self.player("target", 30.5, -10.5, True)
         before = self.world.segments()[0]
         self.world.step(0.1, 1000, 100)
@@ -75,6 +77,15 @@ class VulcanMechanicsTest(unittest.TestCase):
         self.world.step(10, 2000, 200)
         self.assertEqual(self.world.segments(), before)
 
+    def test_roaming_can_choose_each_legal_heading_and_ignores_last_drill(self):
+        self.world.last_drill = [30.5, -19.5]
+        for heading in ((0, 1), (1, 0), (-1, 0)):
+            with self.subTest(heading=heading):
+                self.world.direction = [0, 1]
+                with patch("vulcan.secrets.choice", side_effect=lambda candidates: next(c for c in candidates if c[2:] == heading)):
+                    self.assertTrue(self.world.choose_direction(self.world.target(100)))
+                self.assertEqual(tuple(self.world.direction), heading)
+
     def test_entire_body_consumes_earth_ore_and_hazards_without_awards(self):
         player = self.player("observer", 0.5, -3.5)
         original = copy.deepcopy(player.state)
@@ -82,7 +93,7 @@ class VulcanMechanicsTest(unittest.TestCase):
         expected = set()
         for index, (x, y) in enumerate(self.world.segments()):
             cx, cy = math.floor(x), round(0.5 - y)
-            self.world.terrain[cx][cy] = tiles[index]
+            self.world.terrain[cx][cy] = tiles[index % len(tiles)]
             expected.add((cx, cy))
         self.world.terrain[19][20] = -3
         self.world.consume_body()
@@ -91,7 +102,7 @@ class VulcanMechanicsTest(unittest.TestCase):
         self.assertNotIn((19, 20), self.world.excavated)
         self.assertEqual(player.state, original)
 
-    def test_every_segment_contact_kills_once_and_respawns_retaining_money(self):
+    def test_only_head_contact_kills_once_and_respawns_retaining_money(self):
         for index in range(WORM_LENGTH):
             with self.subTest(segment=index):
                 x, y = self.world.segments()[index]
@@ -101,6 +112,13 @@ class VulcanMechanicsTest(unittest.TestCase):
                 player.state["player_items"]["Dynamite"] = 3
                 player.state["current_upgrades"].update(Hull="Ironium Hull", Fuel="Medium Tank")
                 self.world.step(0, 1000, 100)
+                if index > 0:
+                    self.assertTrue(player.state["alive"])
+                    self.assertEqual(player.state["player_cargo"]["Ironium"], 7)
+                    self.assertEqual(player.state["player_items"]["Dynamite"], 3)
+                    self.assertEqual(player.revision, 0)
+                    self.world.members.clear()
+                    continue
                 self.assertFalse(player.state["alive"])
                 self.assertEqual(player.state["player_hp"], 0)
                 self.assertEqual(player.state["player_money"], 12345)
@@ -123,7 +141,7 @@ class VulcanMechanicsTest(unittest.TestCase):
         self.player("target", 34.5, -19.5, True)
         self.world.step(3, 1000, 100)
         self.assertFalse(victim.state["alive"])
-        self.assertFalse(self.world.touches_body(victim.state["x"], victim.state["y"]))
+        self.assertFalse(self.world.touches_head(victim.state["x"], victim.state["y"]))
         self.assertTrue(any(event["type"] == "worm_death" and event["player_id"] == "victim" for event in self.world.events))
 
     def test_surface_bounds_and_immutable_tiles_are_preserved(self):
@@ -222,7 +240,7 @@ class VulcanServiceTest(unittest.IsolatedAsyncioTestCase):
         vulcan_socket, joined = await self.join(token=vulcan["token"])
         pvp_socket, pvp_join = await self.join("pvp", coop["token"])
         self.assertEqual(joined["mode"], "vulcan")
-        self.assertEqual(len(joined["worm"]["segments"]), 10)
+        self.assertEqual(len(joined["worm"]["segments"]), 15)
         self.assertNotIn("worm", coop_join)
         self.assertNotIn("worm", pvp_join)
         self.assertEqual([p["player_id"] for p in joined["players"]], [joined["player_id"]])
@@ -272,20 +290,25 @@ class VulcanServiceTest(unittest.IsolatedAsyncioTestCase):
         tick = await self.event(near, "vulcan_tick")
         self.assertEqual(tick["worm"]["target_player_id"], "")
         self.assertEqual(tick["worm"]["last_drill"], [30.5, -19.5])
-        self.assertGreater(tick["worm"]["segments"][0][0], 18.5)
+        self.assertAlmostEqual(math.dist(tick["worm"]["segments"][0], [18.5, -19.5]), 0.45)
         # No simulation tick occurs between these two state packets.
         await self.state(near, {"x": 23.5, "drilling": True})
         await self.state(near, {"drilling": False})
         self.assertEqual(self.backend.vulcan.last_drill, [23.5, -19.5])
 
-    async def test_body_death_resource_loss_stale_rejection_respawn_and_restart(self):
+    async def test_safe_body_head_death_resource_loss_stale_rejection_respawn_and_restart(self):
         account = await self.account()
         socket, joined = await self.join(token=account["token"])
         upgrades = {**joined["state"]["current_upgrades"], "Hull": "Ironium Hull", "Fuel": "Medium Tank"}
         await self.state(socket, {"player_money": 4321, "player_items": {"Dynamite": 4}, "player_cargo": {"Ironium": 5}, "current_upgrades": upgrades})
         old_state = copy.deepcopy(self.backend.vulcan.members[joined["player_id"]].state)
-        # Contact the tail, proving head-only checks cannot pass.
+        # Moving onto the tail is harmless, including the swept player path.
         x, y = joined["worm"]["segments"][-1]
+        safe = await self.state(socket, {"x": x, "y": y})
+        self.assertTrue(safe["state"]["alive"])
+        self.assertEqual(safe["state"]["player_cargo"]["Ironium"], 5)
+        # Approach the head from the tail: only mouth contact kills.
+        x, y = joined["worm"]["segments"][0]
         await socket.send_json({"type": "state", "state": {"x": x, "y": y}, "state_revision": 0})
         death = await self.event(socket, "worm_death")
         self.assertEqual(death["player_id"], joined["player_id"])
@@ -347,7 +370,28 @@ class VulcanServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(restored["state"]["drilling"])
         self.assertTrue(Path(str(self.db) + ".vulcan").is_file())
 
-    async def test_player_motion_crossing_body_is_swept_even_without_endpoint_contact(self):
+    async def test_saved_ten_tile_trail_grows_without_resetting_head_or_excavations(self):
+        account = await self.account()
+        _, joined = await self.join(token=account["token"])
+        world = self.backend.vulcan
+        world.nodes = world.nodes[:10]
+        world.progress = 0.25
+        world.runtime_dirty = True
+        await world.persist()
+        head = world.nodes[0][:]
+        excavated = set(world.excavated)
+        await self.stop()
+        await self.start()
+        socket, restored = await self.join(token=account["token"])
+        self.assertEqual(len(restored["worm"]["segments"]), 15)
+        self.assertEqual(restored["worm"]["segments"][0], [head[0], head[1] + 0.25])
+        self.assertTrue(excavated <= self.backend.vulcan.excavated)
+        await self.state(socket, {"x": 34.5, "y": -19.5, "drilling": True})
+        await self.advance(6 / WORM_SPEED)
+        segments = self.backend.vulcan.segments()
+        self.assertTrue(all(math.dist(a, b) > 0 for a, b in zip(segments, segments[1:])))
+
+    async def test_player_motion_crossing_head_is_swept_even_without_endpoint_contact(self):
         socket, joined = await self.join()
         await self.state(socket, {"x": 16.5, "y": -19.5})
         await socket.send_json({"type": "state", "state": {"x": 20.5, "y": -19.5}, "state_revision": 0})

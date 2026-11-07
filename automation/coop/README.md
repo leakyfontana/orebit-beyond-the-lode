@@ -12,14 +12,20 @@ The client keeps Vulcan identity and pending native OAuth in a separate session
 file. Include both databases in consistent online SQLite backups; do not copy a
 live database without its WAL.
 
-`joined` and `vulcan_tick` contain a `worm` snapshot with ten head-first world
+`joined` and `vulcan_tick` contain a `worm` snapshot with fifteen head-first world
 coordinate `segments`, cardinal `direction`, `speed`, `step_interval`,
 `target_player_id`, `last_drill` and `server_time`. State packets add a boolean
 `drilling`, reporting actual drill activity rather than merely held movement.
 Fresh drilling packets select the nearest active driller; short drill bursts are
-remembered even between simulation ticks. Updates and simulation share the world
-lock. Body excavation and death are saved before publication; the worm awards
-no ore. Tick `terrain_changes` contain `[tile_x, depth, 0]`.
+recorded even between simulation ticks. Without an active driller, the worm
+chooses random legal non-reversing cardinal steps instead of pursuing old noise.
+Speed is 4.5 tiles/second (75% of stock flight speed). Only the head kills miners,
+including swept head/player movement; the body is harmless but still excavates.
+Updates and simulation share the world lock. Excavation and death are saved
+before publication; the worm awards no ore. Tick `terrain_changes` contain
+`[tile_x, depth, 0]`. Saved ten-tile trails retain their head/path and grow the
+extra tail segments as they move, without inventing a path through scenery.
+Release the fifteen-segment client and authority together.
 
 `worm_death` and `worm_respawn` include `player_id`, authoritative `state`,
 `state_revision`, `respawn_at` and `server_time`. Death loses cargo/consumables
@@ -36,9 +42,10 @@ python -m unittest discover -s automation/coop -p 'test_*.py'
 ```
 
 `test_vulcan.py` covers scope rejection, durable independent progress, reconnect,
-target selection and short bursts, all-body excavation/contact, retained money,
-resource loss, stale writes and respawn. Scoped Discord callback/poll, cancellation
-and pending-flow restart cases live in `test_auth.py`.
+target selection, random roaming, safe body contact, swept head kills, all-body
+excavation, retained money, resource loss, stale writes, respawn and saved-trail
+growth. Scoped Discord callback/poll, cancellation and pending-flow restart cases
+live in `test_auth.py`.
 
 ## Signed-in connection recovery
 
