@@ -1,4 +1,4 @@
-"""Co-op terrain/economy with an isolated, durable, server-owned ten-tile worm.
+"""Co-op terrain/economy with an isolated, durable, server-owned fifteen-tile worm.
 
 Wire: join mode=vulcan; co-op state plus drilling:bool (actual drill animation).
 joined/vulcan_tick contain worm and Unity-world-coordinate segments, head first.
@@ -6,8 +6,8 @@ worm_death/worm_respawn carry player_id, state, state_revision, respawn_at and
 server_time. State revisions fence pre-death snapshots. Terrain changes use
 [x, depth, 0], matching ordinary co-op excavations; the worm never awards ore.
 
-Conservative spawn: head (18.5,-19.5), nine tiles behind it downwards. Idle until
-first drilling; no offline catch-up, and no movement without connected miners.
+Conservative spawn: head (18.5,-19.5), fourteen tiles behind it downwards.
+Roams without active drilling; no offline movement or movement without miners.
 The worm stays below the surface (center y <= -5.5), preserving shops/pavement
 and the fixed co-op respawn pad (5.5,-3.5). Immutable core scenery is not eaten.
 Death loses all cargo and consumable items, never money or purchased upgrades.
@@ -26,8 +26,8 @@ from terrain import HEIGHT, MIN_X, WEIGHTS, WIDTH, generate, tile_name
 
 # game_data.gd Stock Engine effect=6.0; port_player.gd uses it on both axes.
 BASE_FLYING_SPEED = 6.0
-WORM_SPEED = BASE_FLYING_SPEED * 0.9
-WORM_LENGTH = 10
+WORM_SPEED = BASE_FLYING_SPEED * 0.75
+WORM_LENGTH = 15
 TICK_SECONDS = 0.1
 RESPAWN_SECONDS = 3.0
 DRILL_TIMEOUT = 0.75
@@ -78,6 +78,9 @@ class VulcanWorld:
         self.terrain = await asyncio.to_thread(generate, self.seed)
         if runtime:
             self.nodes, self.direction, self.progress = runtime["nodes"], runtime["direction"], runtime["progress"]
+            # Grow older saved trails without inventing a path through scenery.
+            self.nodes = self.nodes[:WORM_LENGTH]
+            self.nodes.extend([list(self.nodes[-1]) for _ in range(WORM_LENGTH - len(self.nodes))])
             self.last_drill = runtime["last_drill"]
         # The complete initial body excavates too, not merely a later head step.
         self.consume_body()
@@ -176,7 +179,7 @@ class VulcanWorld:
         player.state["drilling"] = False
         if not player.state["alive"] and player.state["respawn_at"] <= time.time():
             self.respawn(player, time.time())
-        elif player.state["alive"] and self.touches_body(player.state["x"], player.state["y"]):
+        elif player.state["alive"] and self.touches_head(player.state["x"], player.state["y"]):
             self.kill(player, time.time())
         self.dirty_players.add(player)
         # This player is not a world member until joined has been sent.
@@ -193,14 +196,15 @@ class VulcanWorld:
             self.runtime_dirty = True
         else:
             self.target_id = ""
-        return self.last_drill
+        return self.last_drill if active else None
 
     def choose_direction(self, target):
         x, y = self.nodes[0]
-        tx = max(MIN_X + 0.5, min(WIDTH - 0.5, math.floor(target[0]) + 0.5))
-        ty = max(-HEIGHT + 1.5, min(-5.5, math.floor(target[1]) + 0.5))
-        if abs(tx - x) < 1e-8 and abs(ty - y) < 1e-8:
-            return False
+        if target is not None:
+            tx = max(MIN_X + 0.5, min(WIDTH - 0.5, math.floor(target[0]) + 0.5))
+            ty = max(-HEIGHT + 1.5, min(-5.5, math.floor(target[1]) + 0.5))
+            if abs(tx - x) < 1e-8 and abs(ty - y) < 1e-8:
+                return False
         candidates = []
         for dx, dy in DIRECTIONS:
             # A snake cannot reverse into its neck; it can turn at grid nodes.
@@ -212,10 +216,11 @@ class VulcanWorld:
             tile = self.terrain[math.floor(nx)][math.floor(0.5 - ny)]
             if tile != 0 and not tile_name(tile):
                 continue
-            candidates.append((abs(tx - nx) + abs(ty - ny), (dx, dy) != tuple(self.direction), dx, dy))
+            score = abs(tx - nx) + abs(ty - ny) if target is not None else 0
+            candidates.append((score, (dx, dy) != tuple(self.direction), dx, dy))
         if not candidates:
             return False
-        _, _, dx, dy = min(candidates)
+        _, _, dx, dy = min(candidates) if target is not None else secrets.choice(candidates)
         self.direction = [dx, dy]
         return True
 
@@ -227,8 +232,10 @@ class VulcanWorld:
                         self.excavated.add((cx, cy))
                         self.dirty_cells.add((cx, cy))
 
-    def touches_body(self, x, y):
-        return any(abs(x - bx) <= 0.9 and abs(y - by) <= 0.95 for bx, by in self.segments())
+    def touches_head(self, x, y):
+        hx = self.nodes[0][0] + self.direction[0] * self.progress
+        hy = self.nodes[0][1] + self.direction[1] * self.progress
+        return abs(x - hx) <= 0.9 and abs(y - hy) <= 0.95
 
     def kill(self, player, now):
         if not player.state["alive"]:
@@ -262,12 +269,12 @@ class VulcanWorld:
             if not player.state["alive"] and player.state["respawn_at"] <= now:
                 self.respawn(player, now)
         target = self.target(monotonic)
-        distance = max(0, elapsed) * WORM_SPEED if target else 0
-        # Substeps sweep every body segment, including stationary contact.
+        distance = max(0, elapsed) * WORM_SPEED
+        # Substeps sweep the lethal head, including stationary contact.
         while True:
             self.consume_body()
             for player in self.members.values():
-                if player.state["alive"] and self.touches_body(player.state["x"], player.state["y"]):
+                if player.state["alive"] and self.touches_head(player.state["x"], player.state["y"]):
                     self.kill(player, now)
             if distance <= 1e-9:
                 break
@@ -305,7 +312,7 @@ class VulcanWorld:
             ox, oy, nx, ny = old["x"], old["y"], state["x"], state["y"]
             steps = max(1, math.ceil(max(abs(nx - ox), abs(ny - oy)) / 0.1))
             # Do not adopt a carried-money/inventory snapshot before a swept kill.
-            collision = any(self.touches_body(ox + (nx - ox) * index / steps, oy + (ny - oy) * index / steps) for index in range(steps + 1))
+            collision = any(self.touches_head(ox + (nx - ox) * index / steps, oy + (ny - oy) * index / steps) for index in range(steps + 1))
             if collision:
                 self.kill(player, time.time())
             else:

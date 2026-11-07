@@ -499,7 +499,7 @@ func show_lobby() -> void:
 	_lobby_state = _state_key()
 	_label("Vulcan" if client.mode == "vulcan" else ("PvP ($1M)" if client.mode == "pvp" else "Co-op"))
 	if client.mode == "vulcan":
-		_label("Drilling attracts Shai-Hulud. Its entire body consumes earth and miners. Death loses cargo and items, but keeps your money. Respawn automatically on the surface.", true)
+		_label("Drilling attracts Shai-Hulud; otherwise it roams randomly. Only its mouth kills miners; its body is safe to touch. Death loses cargo and items, but keeps your money. Respawn automatically on the surface.", true)
 	_identity = _label("", true)
 	_identity.name = "AccountIdentity"
 	if client.recovering:

@@ -5,7 +5,7 @@ extends Node
 # Coordinates are Unity world units, exactly like PortPlayer.position_unity.
 # The original art is rasterized once at the terrain's 50 pixels/world unit.
 const UNITS := Vector2(1.0, -1.0)
-const SEGMENT_COUNT := 10
+const SEGMENT_COUNT := 15
 const ART_SIZE := 64
 const ART_FRAMES := 6
 const ART_FPS := 12.0
@@ -101,8 +101,8 @@ func apply_worm(worm: Dictionary) -> void:
 	if segments.size() != SEGMENT_COUNT:
 		return
 	# Never interpolate between tile corners or predict unconsumed terrain.
-	# Visible centers are the ten exact authoritative collision centers. Their
-	# motion has the server snapshot cadence; skin, jaws and dust animate at 12Hz.
+	# Visible centers are the fifteen exact authoritative segment centers.
+	# Motion has the server snapshot cadence; skin, jaws and dust animate at 12Hz.
 	var moved := false
 	for i in SEGMENT_COUNT:
 		var segment: Array = segments[i]

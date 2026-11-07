@@ -271,17 +271,18 @@ Co-op, including the western extension, shops and upgrades. Vulcan has separate
 accounts, sessions, saved player progress and terrain; existing Private, Co-op
 and PvP data are not imported or reset. Guest progress ends on departure.
 
-Drilling attracts **Shai-Hulud**, one shared ten-tile worm. It follows the nearest
-actively drilling miner, then the last drilling location after drilling stops.
-It moves in four cardinal directions at 5.4 tiles/second, 90% of the stock
+Drilling attracts **Shai-Hulud**, one shared fifteen-tile worm. It follows the
+nearest actively drilling miner and roams randomly when no drilling is detected.
+It moves in four cardinal directions at 4.5 tiles/second, 75% of the stock
 engine's 6.0 flying speed. Every body segment consumes traversed earth without
-awarding ore. Contact with any segment kills the miner, clears carried minerals
-and consumable items, and retains money and purchased upgrades. Respawn occurs
-automatically after three seconds with restored hull and fuel.
+awarding ore. Only head/mouth contact kills the miner; body contact is harmless.
+Death clears carried minerals and consumable items, retaining money and purchased
+upgrades. Respawn occurs automatically after three seconds with restored hull
+and fuel.
 
-The worm initially rests below the mine at `(18.5, -19.5)`, with nine segments
-behind it. It does not advance while nobody is connected, and there is no
-offline catch-up. It stays underground; surface shops, the respawn pad and
+The worm spawns below the mine at `(18.5, -19.5)`, with fourteen segments
+behind it. It roams as soon as miners connect, but does not advance while nobody
+is connected; there is no offline catch-up. Surface shops, the respawn pad and
 immutable scenery remain intact. Movement, excavation and death are server-owned.
 
 The original animated pixel art uses rust/ochre segmented hide, mineral-cutting
@@ -293,8 +294,8 @@ No reference image is shipped or sampled. The two-jaw design and animation are
 original; visible segment positions follow authoritative snapshots without
 predicting diagonal shortcuts through the mine.
 
-Deploy `automation/coop/vulcan.py` with the updated service before publishing the
-client. Include `<configured-db>.vulcan` in online SQLite backups alongside the
+Deploy the fifteen-segment authority and client together. Include
+`<configured-db>.vulcan` in online SQLite backups alongside the
 existing database; each database's WAL must be handled through SQLite's backup
 API. See [service documentation](automation/coop/README.md) for isolation and
 protocol details.
