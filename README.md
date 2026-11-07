@@ -51,6 +51,12 @@ under `/srv/motherload/puller/state`; public status is under `/srv/motherload/st
 After protocol changes, update the installed service/helper before publishing a
 client that requires them. Deployment candidates are not successful release receipts.
 
+Release `0.9.0` replaces the default engine startup image with Orebit's existing
+vessel icon on black across desktop and web exports. Android's OS splash uses
+the same vessel and background. The browser loader retains real download
+progress, with the menu's green border (`#4fd348`) and fill (`#299826`), and fits
+both desktop and narrow screens. Gameplay and menus are unchanged.
+
 Only after Drive, Web integrity and public browser checks succeed does `receipt.py`
 publish a normal `v0.MINOR.PATCH` release with a durable `publication.json` asset
 (`orebit.publication`, schema 1), then hide the completed transport candidate as a
