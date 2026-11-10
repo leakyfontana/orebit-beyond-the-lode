@@ -25,7 +25,8 @@ Updates and simulation share the world lock. Excavation and death are saved
 before publication; the worm awards no ore. Tick `terrain_changes` contain
 `[tile_x, depth, 0]`. Saved ten-tile trails retain their head/path and grow the
 extra tail segments as they move, without inventing a path through scenery.
-Release the fifteen-segment client and authority together.
+Clients render the snapshot's segment count; they do not impose another length.
+Older ten-segment Android clients must be updated for the fifteen-segment world.
 
 `worm_death` and `worm_respawn` include `player_id`, authoritative `state`,
 `state_revision`, `respawn_at` and `server_time`. Death loses cargo/consumables
