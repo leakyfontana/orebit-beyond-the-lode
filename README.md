@@ -294,11 +294,16 @@ No reference image is shipped or sampled. The two-jaw design and animation are
 original; visible segment positions follow authoritative snapshots without
 predicting diagonal shortcuts through the mine.
 
-Deploy the fifteen-segment authority and client together. Include
-`<configured-db>.vulcan` in online SQLite backups alongside the
-existing database; each database's WAL must be handled through SQLite's backup
-API. See [service documentation](automation/coop/README.md) for isolation and
-protocol details.
+The client sizes the visible chain from each authoritative snapshot rather than
+requiring a compiled-in segment count. The original ten-segment client otherwise
+hides the fifteen-segment worm; affected Android installations need an updated
+APK. Head/body art, animation and stale-snapshot rejection survive length changes
+and scene re-entry. `verification/vulcan_render_interop.gd` verifies actual rendered
+pixels on a real renderer (not `--headless`), including Android GLES compatibility.
+
+Include `<configured-db>.vulcan` in online SQLite backups alongside the existing
+database; each database's WAL must be handled through SQLite's backup API. See
+[service documentation](automation/coop/README.md) for isolation and protocol details.
 
 ## Million-dollar PvP rounds · 0.7.0
 

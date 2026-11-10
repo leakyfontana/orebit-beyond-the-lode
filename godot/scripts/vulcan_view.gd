@@ -5,7 +5,6 @@ extends Node
 # Coordinates are Unity world units, exactly like PortPlayer.position_unity.
 # The original art is rasterized once at the terrain's 50 pixels/world unit.
 const UNITS := Vector2(1.0, -1.0)
-const SEGMENT_COUNT := 15
 const ART_SIZE := 64
 const ART_FRAMES := 6
 const ART_FPS := 12.0
@@ -73,19 +72,24 @@ func scene_loaded(snapshot: Dictionary) -> void:
 	_canvas.z_index = 15
 	_canvas.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	host.world_root.add_child(_canvas)
-	_sprites.resize(SEGMENT_COUNT)
+	_canvas.hide()
+	apply_event(snapshot)
+
+func _resize_segments(count: int) -> void:
+	for sprite in _sprites:
+		sprite.free()
+	_sprites.resize(count)
 	# Draw from tail to head so the head's lip overlaps its flexible collar.
-	for i in range(SEGMENT_COUNT - 1, -1, -1):
+	for i in range(count - 1, -1, -1):
 		var sprite := Sprite2D.new()
-		sprite.name = "Head" if i == 0 else ("Tail" if i == SEGMENT_COUNT - 1 else "Ring%d" % i)
-		sprite.texture = _art[0 if i == 0 else (2 if i == SEGMENT_COUNT - 1 else 1)]
+		sprite.name = "Head" if i == 0 else ("Tail" if i == count - 1 else "Ring%d" % i)
+		sprite.texture = _art[0 if i == 0 else (2 if i == count - 1 else 1)]
 		sprite.hframes = ART_FRAMES
 		sprite.scale = Vector2.ONE * PIXEL
 		sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 		_canvas.add_child(sprite)
 		_sprites[i] = sprite
-	_canvas.hide()
-	apply_event(snapshot)
+	_last_frame = -1
 
 func apply_event(event: Dictionary) -> void:
 	if event.has("worm") and event.worm is Dictionary:
@@ -98,27 +102,31 @@ func apply_worm(worm: Dictionary) -> void:
 	if server_time < _last_server_time:
 		return
 	var segments: Array = worm.get("segments", [])
-	if segments.size() != SEGMENT_COUNT:
+	if segments.is_empty():
 		return
+	var count := segments.size()
+	# Length belongs to the authority; a release mismatch must not hide the worm.
+	if _sprites.size() != count:
+		_resize_segments(count)
 	# Never interpolate between tile corners or predict unconsumed terrain.
-	# Visible centers are the fifteen exact authoritative segment centers.
+	# Visible centers match the authoritative segments, including length changes.
 	# Motion has the server snapshot cadence; skin, jaws and dust animate at 12Hz.
 	var moved := false
-	for i in SEGMENT_COUNT:
+	for i in count:
 		var segment: Array = segments[i]
 		var point := Vector2(float(segment[0]), float(segment[1])) * UNITS
-		if _points.size() == SEGMENT_COUNT and point.distance_squared_to(_points[i]) > 0.000001:
+		if _points.size() == count and point.distance_squared_to(_points[i]) > 0.000001:
 			moved = true
 		_sprites[i].position = point
-	if _points.size() != SEGMENT_COUNT:
-		_points.resize(SEGMENT_COUNT)
-	for i in SEGMENT_COUNT:
+	if _points.size() != count:
+		_points.resize(count)
+	for i in count:
 		_points[i] = _sprites[i].position
 	var direction: Array = worm.get("direction", [1, 0])
 	var incoming := Vector2(float(direction[0]), -float(direction[1]))
 	if not incoming.is_zero_approx():
 		_heading = _cardinal(incoming)
-	for i in SEGMENT_COUNT:
+	for i in count:
 		var tangent := _heading if i == 0 else _cardinal(_points[i - 1] - _points[i])
 		_sprites[i].rotation = tangent.angle()
 	if moved:
@@ -154,7 +162,7 @@ func _update_animation() -> void:
 	if frame == _last_frame:
 		return
 	_last_frame = frame
-	for i in SEGMENT_COUNT:
+	for i in _sprites.size():
 		_sprites[i].frame = posmod(frame - i * 2, ART_FRAMES)
 	_canvas.age = _clock
 	_canvas.activity = minf(1.0, _motion_left * 8.0)
@@ -188,8 +196,7 @@ static func _art_pixel(kind: int, frame: int, x: int, y: int) -> Color:
 	if kind == 0 and u > -6.0:
 		radius = sqrt(maxf(0.0, 1.0 - pow((u - 1.0) / 29.0, 2.0))) * 23.0
 	elif kind == 2:
-		# The last lethal segment still has a full-width armored rump, not an
-		# invisible taper where the player could mistake it for safe ground.
+		# The armored tail retains its full-width silhouette.
 		radius -= maxf(0.0, -u) * 0.075
 	if absf(v) > radius:
 		return Color.TRANSPARENT
