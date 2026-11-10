@@ -382,9 +382,10 @@ def package_pvp_bots(work, adapter, api, output_root, commit, version):
     native_receipt = work / "pvp-native-provenance.json"
     native_receipt.write_text(json.dumps(native, indent=2) + "\n")
     bundle = work / "pvp-bots"
+    engine_archive = download("Godot_v4.7.2-stable_linux.x86_64.zip", work)
     run([sys.executable, ROOT / "automation/pvp_bots/package.py",
          "--source-commit", commit,
-         "--godot-archive", work / "Godot_v4.7.2-stable_linux.x86_64.zip",
+         "--godot-archive", engine_archive,
          "--library", library, "--native-provenance", native_receipt, "--output", bundle])
     destination = output_root / "pvp-bots"
     destination.mkdir(parents=True, exist_ok=True)
