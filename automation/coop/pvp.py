@@ -326,6 +326,26 @@ class PvpWorld:
         # At most five members exist; seven non-overlapping pads guarantee one.
         raise RuntimeError("No free PvP spawn pad")
 
+    def population(self):
+        bots = sum(p.is_bot for p in self.members.values())
+        return len(self.members) - bots, bots
+
+    def admission_victim(self, is_bot):
+        """Called under world_lock; bot arrivals never displace anyone."""
+        if is_bot or len(self.members) < 5:
+            return None
+        return max((p for p in self.members.values() if p.is_bot),
+                   key=lambda p: (-int(p.state.get("player_money", 0)), p.player_id),
+                   default=None)
+
+    async def detach_bot(self, player):
+        """Save and detach without combat effects; caller owns world_lock."""
+        if not player.is_bot or self.members.get(player.player_id) is not player:
+            raise RuntimeError("Only a current bot may yield an admission slot")
+        self.dirty_players.add(player)
+        await self.persist()
+        del self.members[player.player_id]
+
     async def prepare_player(self, player):
         if self.failed:
             raise self.error("pvp_unavailable", "PvP simulation is unavailable. Co-op remains available.", 503)

@@ -1,0 +1,61 @@
+[Unit]
+Description=Orebit frozen cycle 66 native PvP bot pool
+After=network.target orebit-coop.service
+Wants=orebit-coop.service
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=orebit-pvp-bots
+Group=orebit-pvp-bots
+WorkingDirectory=/srv/orebit-pvp-bots/current
+Environment=OREBIT_PVP_BOT_ENDPOINT=http://127.0.0.1:8765
+Environment=OREBIT_PVP_BOT_CREDENTIALS=/var/lib/orebit-pvp-bots/accounts.json
+Environment=OREBIT_PVP_BOT_GAME=/srv/orebit-pvp-bots/current/game
+Environment=OREBIT_PVP_BOT_GODOT=/srv/orebit-pvp-bots/current/runtime/godot
+EnvironmentFile=/etc/orebit-pvp-bots.env
+ExecStart=/usr/bin/python3 /srv/orebit-pvp-bots/current/supervisor.py --state-dir /var/lib/orebit-pvp-bots
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=15
+# SIGTERM reaches the supervisor first; its private stop files ask each native
+# client to leave normally. systemd kills remaining children after the deadline.
+KillMode=mixed
+KillSignal=SIGTERM
+StateDirectory=orebit-pvp-bots
+StateDirectoryMode=0700
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=orebit-pvp-bots
+LogRateLimitIntervalSec=30
+LogRateLimitBurst=100
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+CPUAccounting=true
+MemoryAccounting=true
+CPUQuota=150%
+MemoryHigh=1792M
+MemoryMax=2G
+TasksMax=256
+LimitNOFILE=1024
+
+[Install]
+WantedBy=multi-user.target

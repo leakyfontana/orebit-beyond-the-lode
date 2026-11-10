@@ -175,7 +175,6 @@ func rejections() -> void:
 	check(pvp.building_pending and bool(host.ui.panel_active[script]), "Forced panel close bypassed the authority lifecycle")
 	result = authority(script, false, true, Vector2(4.0, -3.5))
 	# Entry's old in-flight correction must not move the new exterior pose.
-	network._sent_motion_offsets[network._motion_sequence] = Vector2.ZERO
 	receive(result)
 	var exterior := player.position_unity
 	receive({"type": "state_ack", "state_revision": network.state_revision, "motion_seq": network._last_motion_ack, "requested_position": [3.0, -3.5], "state": {"x": 2.0, "y": -3.5}})
@@ -189,6 +188,17 @@ func rejections() -> void:
 	receive(authority(script, false, true, Vector2(4.5, -3.5)))
 	check_outside("Close during entry")
 
+func peer_contact_at(position: Vector2) -> Node2D:
+	var query := PhysicsPointQueryParameters2D.new()
+	query.position = position * PortPlayer.UNITS
+	query.collision_mask = 2
+	query.exclude = [host.body.get_rid()]
+	query.collide_with_areas = false
+	for hit in host.body.get_world_2d().direct_space_state.intersect_point(query):
+		if hit.collider is Node2D and hit.collider.is_in_group("PvpMiner"):
+			return hit.collider
+	return null
+
 func menus_and_remote() -> void:
 	for script in ["InventoryUIManager", "OptionsUIManager", "HelpUUIManager", "TransmissionManager"]:
 		var sequence := network.pvp_sequence
@@ -200,19 +210,20 @@ func menus_and_remote() -> void:
 		host.exitShop()
 	var state := {"alive": true, "building": "", "x": 4.0, "y": -3.5}
 	receive({"type": "pvp_tick", "players": [{"player_id": "remote", "name": "Remote", "state": state}]})
-	var remote: RigidBody2D = host.coop._remote_visuals.remote
-	check(remote.visible and remote.collision_layer != 0, "Remote fixture did not create a live collidable native peer")
+	var remote: Node2D = host.coop._remote_visuals.remote
+	var contact := peer_contact_at(Vector2(4.0, -3.5))
+	check(remote.visible and contact != null, "Remote fixture did not create a visible solid native peer")
 	state.building = "ItemShopManager"
 	receive({"type": "pvp_tick", "players": [{"player_id": "remote", "state": state}]})
-	check(not remote.visible and remote.collision_layer == 0 and remote.collision_mask == 0, "Remote interior vehicle remained visible/collidable")
-	check(not player._is_ground(remote), "Remote interior vehicle remained ground support")
+	check(not remote.visible and peer_contact_at(Vector2(4.0, -3.5)) == null, "Remote interior vehicle remained visible/collidable")
+	check(contact == null or not player._is_ground(contact), "Remote interior vehicle remained ground support")
 	player.position_unity = Vector2(2.0, -3.5)
 	player.moveX = 5.0
 	player.isFacingRight = true
 	check(player.pvp_drill_direction() == Vector2.ZERO, "Remote interior vehicle remained a drill target")
 	state.building = ""
 	receive({"type": "pvp_tick", "players": [{"player_id": "remote", "state": state}]})
-	check(remote.visible and remote.collision_layer != 0, "Remote exit did not restore its native peer")
+	check(remote.visible and peer_contact_at(Vector2(4.0, -3.5)) != null, "Remote exit did not restore its native peer")
 	receive({"type": "player_left", "player_id": "remote"})
 
 func persistence_and_death() -> void:

@@ -367,6 +367,49 @@ def package_zip(directory, destination):
                     shutil.copyfileobj(source, output)
 
 
+def package_pvp_bots(work, adapter, api, output_root, commit, version):
+    """Publish the same reviewed client fix to the native opponents, not just Web."""
+    library = adapter / "bin/addons/godot-box2d/bin/libgodot-box2d.linux.template_release.x86_64.so"
+    pins = json.loads((ROOT / "verification/box2d_build.json").read_text())
+    native = {
+        "physics_patch_sha256": sha256(ROOT / pins["patch"]["path"]),
+        "fixture_patch_sha256": sha256(ROOT / pins["box2d_fixture_patch"]["path"]),
+        "api_sha256": sha256(api),
+        "library_sha256": sha256(library),
+        "build_exit_code": 0,
+        "sources": pins["sources"],
+    }
+    native_receipt = work / "pvp-native-provenance.json"
+    native_receipt.write_text(json.dumps(native, indent=2) + "\n")
+    bundle = work / "pvp-bots"
+    engine_archive = download("Godot_v4.7.2-stable_linux.x86_64.zip", work)
+    run([sys.executable, ROOT / "automation/pvp_bots/package.py",
+         "--source-commit", commit,
+         "--godot-archive", engine_archive,
+         "--library", library, "--native-provenance", native_receipt, "--output", bundle])
+    destination = output_root / "pvp-bots"
+    destination.mkdir(parents=True, exist_ok=True)
+    archive = destination / ("Orebit-" + version + "-pvp-bots.zip")
+    # Unlike public exports, a source-run native client needs .import sidecars
+    # and the verified .godot runtime cache. Keep the public ZIP guard strict.
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as output:
+        for path in sorted(bundle.rglob("*")):
+            if path.is_symlink():
+                raise RuntimeError("Native bot artifact cannot contain symlinks")
+            if not path.is_file():
+                continue
+            info = zipfile.ZipInfo(path.relative_to(bundle).as_posix(), date_time=(1980, 1, 1, 0, 0, 0))
+            info.create_system = 3
+            info.external_attr = path.stat().st_mode << 16
+            info.compress_type = zipfile.ZIP_DEFLATED
+            with path.open("rb") as source, output.open(info, "w", force_zip64=True) as sink:
+                shutil.copyfileobj(source, sink)
+    receipt = {"schema": 1, "kind": "orebit.native_pvp_bots", "commit": commit, "version": version,
+               "archive": {"name": archive.name, "sha256": sha256(archive), "size": archive.stat().st_size},
+               "provenance_sha256": sha256(bundle / "provenance.json")}
+    (destination / "native-bots.json").write_text(json.dumps(receipt, indent=2) + "\n")
+
+
 def build(args):
     system, machine = platform.system(), platform.machine().lower()
     expected = {"macos-arm64": "Darwin", "windows-x86_64": "Windows", "android-arm64": "Linux", "web": "Linux"}
@@ -445,7 +488,7 @@ def build(args):
                 for probe in ("coop_state_interop.gd", "spawn_impact_interop.gd", "close_target_interop.gd",
                               "lobby_controller_interop.gd", "pvp_state_interop.gd", "pvp_crash_interop.gd",
                               "pvp_drill_interop.gd", "pvp_terrain_interop.gd", "pvp_impact_interop.gd",
-                              "pvp_fuel_interop.gd", "pvp_building_interop.gd",
+                              "pvp_fuel_interop.gd", "pvp_building_interop.gd", "pvp_hull_interop.gd",
                               "coop_mineral_feedback_interop.gd"):
                     run([godot, "--headless", "--path", project,
                          "--script", ROOT / "verification" / probe, "--",
@@ -488,6 +531,8 @@ def build(args):
             shutil.copy2(export / filename, artifact)
         else:
             package_zip(export, artifact)
+        if target == "web":
+            package_pvp_bots(work, adapter, api, output_root, args.sha, version)
         metadata = {"schema": 1, "commit": args.sha, "version": version, "platform": args.platform,
                     "artifacts": [{"path": artifact.relative_to(ROOT).as_posix(), "sha256": sha256(artifact), "size": artifact.stat().st_size}]}
         if args.validation:

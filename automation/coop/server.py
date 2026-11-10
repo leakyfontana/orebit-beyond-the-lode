@@ -104,6 +104,10 @@ class Store:
                 expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS token_user ON tokens(user_id);
+            CREATE TABLE IF NOT EXISTS pvp_bot_accounts (
+                user_id INTEGER PRIMARY KEY REFERENCES users(id),
+                slot INTEGER NOT NULL UNIQUE CHECK(slot BETWEEN 1 AND 5)
+            );
             CREATE TABLE IF NOT EXISTS oauth (
                 state_hash TEXT PRIMARY KEY, poll_hash TEXT NOT NULL UNIQUE,
                 verifier TEXT NOT NULL, expires_at INTEGER NOT NULL,
@@ -197,6 +201,7 @@ class Player:
     capture_session: str = ""
     capture_context: dict = field(default_factory=dict)
     transport: asyncio.Transport | None = None
+    is_bot: bool = False
 
     def public(self):
         return {"player_id": self.player_id, "name": self.name, "state": self.state}
@@ -221,6 +226,7 @@ class Service:
         self.origins = set(filter(None, (s.strip() for s in os.environ.get("OREBIT_ALLOWED_ORIGINS", default_origin).split(","))))
         self.client_id = os.environ.get("OREBIT_DISCORD_CLIENT_ID", "")
         self.client_secret = os.environ.get("OREBIT_DISCORD_CLIENT_SECRET", "")
+        self.bot_control_key = os.environ.get("OREBIT_PVP_BOT_CONTROL_KEY", "")
         self.hash_password = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=2)
         self.password_slots = asyncio.Semaphore(4)
         self.dummy_hash = self.hash_password.hash(secrets.token_urlsafe(32))
@@ -594,7 +600,32 @@ class Service:
         return web.json_response(result)
 
     async def health(self, request):
-        return web.json_response({"status": "ok", "protocol": 1, "world_id": self.world_id, "players": len(self.members), "capacity": 5, "modes": {"coop": {"players": len(self.members), "capacity": 5}, "pvp": {"players": len(self.pvp.members), "capacity": 5}, "vulcan": {"players": len(self.vulcan.members), "capacity": 5}}, "discord_configured": bool(self.client_id and self.client_secret)})
+        humans, bots = self.pvp.population()
+        return web.json_response({"status": "ok", "protocol": 1, "world_id": self.world_id, "players": len(self.members), "capacity": 5, "modes": {"coop": {"players": len(self.members), "capacity": 5}, "pvp": {"players": len(self.pvp.members), "capacity": 5, "humans": humans, "bots": bots}, "vulcan": {"players": len(self.vulcan.members), "capacity": 5}}, "discord_configured": bool(self.client_id and self.client_secret)})
+
+    async def bot_pool(self, request):
+        if not self.bot_control_key:
+            raise APIError("bot_pool_unavailable", "PvP bot control is not configured.", 404)
+        authorization = request.headers.get("Authorization", "")
+        expected = "Bearer " + self.bot_control_key
+        if not secrets.compare_digest(authorization.encode(), expected.encode()):
+            raise APIError("invalid_control_key", "PvP bot control authorization is required.", 401)
+        async with self.pvp.world_lock:
+            bots = await self.store.run(lambda db: [
+                {"slot": row["slot"], "user_id": row["user_id"], "name": row["display_name"]}
+                for row in db.execute("SELECT b.slot,b.user_id,u.display_name FROM pvp_bot_accounts b JOIN users u ON u.id=b.user_id ORDER BY b.slot")
+            ])
+            humans, _ = self.pvp.population()
+            return web.json_response({
+                "enabled": not self.pvp.failed, "capacity": 5,
+                "world_id": self.pvp.world_id, "round_id": self.pvp.round_id,
+                "humans": humans, "target_bots": max(0, 5 - humans) if not self.pvp.failed else 0,
+                "bots": bots,
+                "connected_bots": [
+                    {"user_id": p.user_id, "player_id": p.player_id, "cash": int(p.state.get("player_money", 0))}
+                    for p in self.pvp.members.values() if p.is_bot
+                ],
+            })
 
     async def capture_session(self, request):
         self.rate_limit(request, "capture_issue", 30, 3600)
@@ -675,9 +706,14 @@ class Service:
         try:
             # A half-open peer must not hold the replacement join or a world lock.
             async with asyncio.timeout(2):
-                await socket.close(code=1001, message=b"Session resumed on a new connection")
+                await socket.close(code=1001, message=b"Session replaced; reconnect when a place opens")
         except (ConnectionError, RuntimeError, asyncio.TimeoutError):
             pass
+
+    def schedule_socket_retirement(self, socket, transport):
+        retiring = asyncio.create_task(self.retire_socket(socket))
+        self.retiring_sockets[retiring] = transport
+        retiring.add_done_callback(self.retired_socket_done)
 
     def retired_socket_done(self, task):
         # The service owns the transport even if shutdown cancels the task
@@ -911,7 +947,16 @@ class Service:
                     raise APIError("client_update_required", "Update Orebit to 0.7.0 or newer to join million-dollar PvP rounds.")
                 world = self.pvp if mode == "pvp" else self.vulcan if mode == "vulcan" else self
                 token = join.get("token", "")
+                if not isinstance(token, str):
+                    raise APIError("invalid_token", "Your sign-in expired. Sign in again.", 401)
                 user = await self.lookup_token(token, mode) if token else None
+                # Only the main account store's trusted registry grants this role.
+                # Vulcan IDs are in a different identity namespace.
+                is_bot = bool(user and mode != "vulcan" and await self.store.run(
+                    lambda db: db.execute("SELECT 1 FROM pvp_bot_accounts WHERE user_id=?", (user["id"],)).fetchone()
+                ))
+                if is_bot and mode != "pvp":
+                    raise APIError("bot_mode_forbidden", "Bot accounts may join PvP only.", 403)
                 if user:
                     request["user_id"] = user["id"]
                     contexts.enter_context(log_context(user_id=user["id"]))
@@ -929,19 +974,25 @@ class Service:
                         retired_socket = player.socket
                         retired_transport = player.transport
                         player.socket = socket
-                        retiring = asyncio.create_task(self.retire_socket(retired_socket))
-                        self.retiring_sockets[retiring] = retired_transport
-                        retiring.add_done_callback(self.retired_socket_done)
+                        self.schedule_socket_retirement(retired_socket, retired_transport)
                         player.capture_context.clear()
                     else:
-                        if len(world.members) >= 5:
-                            raise APIError("server_full", "This server has five players. Please try again when a place opens.", 409)
                         if user and any(p.user_id == user["id"] for p in world.members.values()):
                             raise APIError("already_connected", "This account is already connected to this server.", 409)
+                        if world is self.pvp and world.failed:
+                            raise APIError("pvp_unavailable", "PvP simulation is unavailable. Co-op remains available.", 503)
+                        victim = world.admission_victim(is_bot) if world is self.pvp else None
+                        if len(world.members) >= 5 and victim is None:
+                            raise APIError("server_full", "This server has five players. Please try again when a place opens.", 409)
                         row = await world.store.run(lambda db: db.execute("SELECT state,revision FROM player_states WHERE world_id=? AND user_id=?", (world.world_id, user["id"])).fetchone()) if user else None
-                        player = Player(socket, secrets.token_hex(8), user["display_name"] if user else "Anonymous " + secrets.token_hex(2), user["id"] if user else None, digest(token) if user else None, user["expires_at"] if user else 0, json.loads(row["state"]) if row else {}, row["revision"] if row else 0)
+                        player = Player(socket, secrets.token_hex(8), user["display_name"] if user else "Anonymous " + secrets.token_hex(2), user["id"] if user else None, digest(token) if user else None, user["expires_at"] if user else 0, json.loads(row["state"]) if row else {}, row["revision"] if row else 0, is_bot=is_bot)
                         if world is not self:
                             await world.prepare_player(player)
+                        if victim is not None:
+                            # Preparation and all rejection paths precede detachment.
+                            # Persist the real profile, without death, loot or resets.
+                            await world.detach_bot(victim)
+                            self.schedule_socket_retirement(victim.socket, victim.transport)
                     player.session_id = request["request_id"]
                     player.transport = request.transport
                     player.received += received
@@ -951,6 +1002,8 @@ class Service:
                     world.members[player.player_id] = player
                     log_event("session_join", members=len(world.members), joining=self.joining)
                     await self.send(player, {"type": "joined", "player_id": player.player_id, "world_id": self.world_id, "seed": world.seed, "excavated": sorted(world.excavated), "players": [p.public() for p in world.members.values()], "state": player.state, "state_revision": player.revision, **(world.join_details() if world is not self else {})})
+                    if not resumed and victim is not None:
+                        await world.broadcast({"type": "player_left", "player_id": victim.player_id}, exclude=player)
                     if not resumed:
                         await world.broadcast({"type": "player_joined", "player": world.public(player) if world is not self else player.public()}, exclude=player)
                         if world is self.pvp:
@@ -1139,6 +1192,7 @@ def create_app(args):
     app.router.add_post("/api/captures/session", service.capture_session)
     app.router.add_post("/api/captures/{session_id}/chunks/{chunk_index}", service.capture_chunk)
     app.router.add_get("/api/ws", service.websocket)
+    app.router.add_get("/api/pvp/bot-pool", service.bot_pool)
     app.router.add_get("/healthz", service.health)
     app.router.add_options("/{path:.*}", lambda request: web.Response(status=204))
     app.on_startup.append(service.startup)

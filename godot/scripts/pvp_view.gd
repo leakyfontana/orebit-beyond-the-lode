@@ -1,6 +1,8 @@
 class_name PvpView
 extends Node
 
+const HullIndicator = preload("res://scripts/pvp_hull_indicator.gd")
+
 var host: Node
 var network: CoopClient
 var objects: Dictionary = {}
@@ -24,14 +26,24 @@ var building_request_id := ""
 var _requested_building := ""
 var _requested_enter := false
 var _close_requested := false
+var _local_hull: PvpHullIndicator
+var _peer_hulls: Dictionary = {}
+var _retired_hull_ids: Array[String] = []
+var _local_hull_current := 10.0
+var _local_hull_maximum := 10.0
 
 func configure(main_host: Node, client: CoopClient) -> void:
 	host = main_host
 	network = client
+	# Main updates local render extrapolation and remote interpolation first.
+	process_priority = 100
 	_build_respawn_overlay()
 
 func scene_loaded(snapshot: Dictionary) -> void:
 	objects.clear()
+	_clear_hull_indicators()
+	_local_hull_current = 10.0
+	_local_hull_maximum = 10.0
 	building = ""
 	_clear_building_request()
 	apply_state(snapshot.get("state", {}))
@@ -40,6 +52,9 @@ func scene_loaded(snapshot: Dictionary) -> void:
 func apply_state(state: Dictionary, full: bool = true) -> void:
 	if host.player == null or host.scene_name != "Game":
 		return
+	_local_hull_current = float(state.get("player_hp", _local_hull_current))
+	if state.has("current_upgrades"):
+		_local_hull_maximum = HullIndicator.capacity(state)
 	var was_alive: bool = host.player_alive
 	var alive := bool(state.get("alive", true))
 	if full or alive != was_alive:
@@ -234,7 +249,52 @@ func _update_impact_pose(sprite: Sprite2D) -> void:
 	var blink_phase := 2.0 * blink_age + 2.5 * blink_age * blink_age
 	sprite.visible = age < 0.4 or fmod(blink_phase, 1.0) < 0.55
 
+func _process(_delta: float) -> void:
+	if host == null:
+		return
+	if not host.is_coop or not host.data.pvp_mode or host.scene_name != "Game" or host.player == null or not network.connected:
+		_clear_hull_indicators()
+		return
+	if not is_instance_valid(_local_hull):
+		_local_hull = HullIndicator.new()
+		host.world_root.add_child(_local_hull)
+	_local_hull.update_hull(_local_hull_current, _local_hull_maximum)
+	_local_hull.follow(host.player.visual, host.player_alive and not host.player.pvp_building_hidden)
+	var visuals: Dictionary = host.coop._remote_visuals
+	_retired_hull_ids.clear()
+	for id in _peer_hulls:
+		if not network.peers.has(id) or not visuals.has(id) or not is_instance_valid(visuals[id]) or not is_instance_valid(_peer_hulls[id]):
+			_retired_hull_ids.append(id)
+	for id in _retired_hull_ids:
+		_free_hull_indicator(_peer_hulls[id])
+		_peer_hulls.erase(id)
+	for id in visuals:
+		if id == network.player_id or not network.peers.has(id) or not is_instance_valid(visuals[id]):
+			continue
+		if not _peer_hulls.has(id):
+			var created := HullIndicator.new()
+			host.world_root.add_child(created)
+			_peer_hulls[id] = created
+		var indicator: PvpHullIndicator = _peer_hulls[id]
+		var state: Dictionary = network.peers[id].get("state", {})
+		indicator.update_hull(float(state.get("player_hp", 0.0)), HullIndicator.capacity(state))
+		indicator.follow(visuals[id], bool(state.get("alive", true)) and str(state.get("building", "")).is_empty())
+
+func _free_hull_indicator(indicator: Variant) -> void:
+	if is_instance_valid(indicator):
+		indicator.hide()
+		indicator.queue_free()
+
+func _clear_hull_indicators() -> void:
+	_free_hull_indicator(_local_hull)
+	_local_hull = null
+	for id in _peer_hulls:
+		_free_hull_indicator(_peer_hulls[id])
+	_peer_hulls.clear()
+	_retired_hull_ids.clear()
+
 func hide_respawn() -> void:
+	_clear_hull_indicators()
 	_respawn_root.hide()
 	_last_respawn_seconds = -1
 

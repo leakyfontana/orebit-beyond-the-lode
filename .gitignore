@@ -5,6 +5,14 @@
 !/automation/coop/
 !/automation/ops/
 !/automation/vps/
+!/automation/pvp_bots/
+/automation/pvp_bots/*
+!/automation/pvp_bots/supervisor.py
+!/automation/pvp_bots/worker.gd
+!/automation/pvp_bots/policy.gd
+!/automation/pvp_bots/pool.json
+!/automation/pvp_bots/package.py
+!/automation/pvp_bots/orebit-pvp-bots.service
 /automation/vps/*
 !/automation/vps/orebit-ops.service
 !/automation/vps/orebit-ops.timer
@@ -25,6 +33,7 @@
 !/verification/spawn_impact_interop.gd
 !/verification/close_target_interop.gd
 !/verification/lobby_controller_interop.gd
+!/verification/pvp_hull_interop.gd
 
 # Built artifacts and per-machine credentials are never source inputs.
 /dist/
