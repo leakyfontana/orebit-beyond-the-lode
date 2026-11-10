@@ -26,7 +26,7 @@ from terrain import HEIGHT, MIN_X, WEIGHTS, WIDTH, generate, tile_name
 
 # game_data.gd Stock Engine effect=6.0; port_player.gd uses it on both axes.
 BASE_FLYING_SPEED = 6.0
-WORM_SPEED = BASE_FLYING_SPEED * 0.75
+WORM_SPEED = BASE_FLYING_SPEED * 0.375
 WORM_LENGTH = 15
 TICK_SECONDS = 0.1
 RESPAWN_SECONDS = 3.0
