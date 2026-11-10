@@ -53,13 +53,13 @@ class VulcanMechanicsTest(unittest.TestCase):
 
     def test_fixed_speed_cardinal_path_fifteen_segments_and_roaming_spawn(self):
         self.assertAlmostEqual(BASE_FLYING_SPEED, 6.0)
-        self.assertAlmostEqual(WORM_SPEED, 4.5)
+        self.assertAlmostEqual(WORM_SPEED, 2.25)
         self.assertEqual(len(self.world.segments()), 15)
         self.player("silent", 0.5, -3.5)
         before = self.world.segments()[0]
         with patch("vulcan.secrets.choice", side_effect=lambda candidates: candidates[-1]):
             self.world.step(0.1, 1000, 100)
-        self.assertAlmostEqual(math.dist(before, self.world.segments()[0]), 0.45)
+        self.assertAlmostEqual(math.dist(before, self.world.segments()[0]), 0.225)
         hunter = self.player("target", 30.5, -10.5, True)
         before = self.world.segments()[0]
         self.world.step(0.1, 1000, 100)
@@ -290,7 +290,7 @@ class VulcanServiceTest(unittest.IsolatedAsyncioTestCase):
         tick = await self.event(near, "vulcan_tick")
         self.assertEqual(tick["worm"]["target_player_id"], "")
         self.assertEqual(tick["worm"]["last_drill"], [30.5, -19.5])
-        self.assertAlmostEqual(math.dist(tick["worm"]["segments"][0], [18.5, -19.5]), 0.45)
+        self.assertAlmostEqual(math.dist(tick["worm"]["segments"][0], [18.5, -19.5]), 0.225)
         # No simulation tick occurs between these two state packets.
         await self.state(near, {"x": 23.5, "drilling": True})
         await self.state(near, {"drilling": False})

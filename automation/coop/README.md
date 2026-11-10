@@ -19,7 +19,7 @@ coordinate `segments`, cardinal `direction`, `speed`, `step_interval`,
 Fresh drilling packets select the nearest active driller; short drill bursts are
 recorded even between simulation ticks. Without an active driller, the worm
 chooses random legal non-reversing cardinal steps instead of pursuing old noise.
-Speed is 4.5 tiles/second (75% of stock flight speed). Only the head kills miners,
+Speed is 2.25 tiles/second (37.5% of stock flight speed). Only the head kills miners,
 including swept head/player movement; the body is harmless but still excavates.
 Updates and simulation share the world lock. Excavation and death are saved
 before publication; the worm awards no ore. Tick `terrain_changes` contain

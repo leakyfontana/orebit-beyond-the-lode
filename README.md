@@ -273,7 +273,7 @@ and PvP data are not imported or reset. Guest progress ends on departure.
 
 Drilling attracts **Shai-Hulud**, one shared fifteen-tile worm. It follows the
 nearest actively drilling miner and roams randomly when no drilling is detected.
-It moves in four cardinal directions at 4.5 tiles/second, 75% of the stock
+It moves in four cardinal directions at 2.25 tiles/second, 37.5% of the stock
 engine's 6.0 flying speed. Every body segment consumes traversed earth without
 awarding ore. Only head/mouth contact kills the miner; body contact is harmless.
 Death clears carried minerals and consumable items, retaining money and purchased
