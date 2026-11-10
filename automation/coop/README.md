@@ -197,3 +197,27 @@ For authority rollback, stop the bot unit, restore the backed-up `server.py` and
 and restart `orebit-coop`. Keep the additive registry and all live databases;
 restoring an old database would discard legitimate progress and is not a normal
 code rollback. Do not restart unrelated services or change the public client.
+
+### CI-built native client updates
+
+The Web build produces `dist/pvp-bots/Orebit-<version>-pvp-bots.zip` and
+`native-bots.json` inside `beta-production-web` (validation builds use
+`dist/validation/pvp-bots`). Failure to package/import/check the native runtime
+fails that required build. The ZIP includes the official Linux engine, freshly
+compiled pinned Box2D, current game scripts/imported runtime assets, unchanged
+promoted policy and supervisor; it contains no accounts, tokens or database.
+`native-bots.json` binds archive checksum/size and provenance checksum to the
+exact source commit and release version.
+
+The existing outbound publisher automatically deploys **Web**, not this worker
+service. After required PR checks, squash merge and successful main publication,
+the operator downloads that exact successful **main-push** CI artifact, verifies
+its commit/version/archive/provenance/full file inventory, and installs a new
+root-owned immutable `/srv/orebit-pvp-bots/releases/` directory. Stop only
+`orebit-pvp-bots`, atomically switch `current`, then restart that unit and prove
+normal authenticated fill/contact against the existing authority. Do not edit
+scripts on the VPS, build a different artifact locally, restore a database, or
+restart `orebit-coop` for a client-only update. Preserve the previous symlink
+target for worker-only rollback and retain `/var/lib/orebit-pvp-bots` unchanged.
+The native package is assembled by CI; the scoped operator cutover is not an
+automatic worker deployment and must not be described as one.

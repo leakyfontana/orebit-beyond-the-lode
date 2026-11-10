@@ -312,7 +312,10 @@ func _wrap_source_text(id: String) -> void:
 
 func _finish_layout() -> void:
 	for id in scene.game_objects:
-		var target := nodes.get(id) as Control
+		var candidate: Variant = nodes.get(id)
+		if not is_instance_valid(candidate):
+			continue
+		var target := candidate as Control
 		if target == null:
 			continue
 		for component in components(id):

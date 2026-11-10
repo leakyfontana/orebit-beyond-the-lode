@@ -81,22 +81,13 @@ func game(pvp: bool, cooperative: bool) -> void:
 
 func peer(position: Vector2, alive: bool = true, velocity: Vector2 = Vector2.ZERO) -> void:
 	# Traverse the production snapshot/event path, including its real remote
-	# collision body. Snap the fixture's authoritative pose, not a lerped trail.
+	# collision body. Do not override its transforms, freeze mode or interpolation.
 	network._receive({"type": "pvp_tick", "players": [{
 		"player_id": "fixture-peer", "name": "Drill fixture", "state": {
 			"x": position.x, "y": position.y, "alive": alive, "facing": true,
 			"vx": velocity.x, "vy": velocity.y,
 		},
 	}]})
-	if host.coop._remote_visuals.has("fixture-peer"):
-		var remote: Node2D = host.coop._remote_visuals["fixture-peer"]
-		if remote is RigidBody2D:
-			# Snapshot jumps are not simulated player motion. Static freeze keeps
-			# solid contact without sweeping a teleported hull across our craft.
-			remote.freeze_mode = RigidBody2D.FREEZE_MODE_STATIC
-		remote.position = position * PortPlayer.UNITS
-		if remote is RigidBody2D:
-			PhysicsServer2D.body_set_state(remote.get_rid(), PhysicsServer2D.BODY_STATE_TRANSFORM, remote.global_transform)
 
 func no_side_engagement(label: String, offset: Vector2, alive: bool = true) -> void:
 	peer(player.position_unity + offset, alive)
@@ -312,6 +303,47 @@ func terrain_mining(pvp: bool, cooperative: bool, label: String) -> void:
 	check(not player.isOnGround or not condition("IsDiggingSide"), label + " idle terrain contact deployed side melee")
 	print("PVP_DRILL_TERRAIN mode=", label, " states=", _states)
 
+func peer_motion_contact() -> void:
+	game(true, true)
+	player.position_unity = Vector2(18.5, 6.5)
+	peer(Vector2(16.0, 6.5))
+	step(2)
+	# Real modal/building pauses stop the native clock, while network peer
+	# presentation continues. A snapshot must not build a kinematic sweep that
+	# launches the local craft when its hidden body returns after the pause.
+	player.set_pvp_building_hidden(true)
+	host.paused = true
+	for frame in 30:
+		peer(Vector2(16.0 + 5.0 * float(frame + 1) / 30.0, 6.5))
+		step()
+	var before := player.position_unity
+	player.set_pvp_building_hidden(false)
+	host.paused = false
+	var max_speed := 0.0
+	for frame in 4:
+		step()
+		max_speed = maxf(max_speed, player.velocity_unity.length())
+	check(player.position_unity.distance_to(before) < 0.1 and max_speed < 1.0, "Paused peer snapshots synthesized a launch when native simulation resumed")
+	# The fix must retain actual native hull contact, not disable peer physics.
+	peer(Vector2(20.0, 6.5))
+	host.data.player_horizontal_speed = 3.0
+	key(KEY_D, true)
+	var touched := false
+	for frame in 100:
+		step()
+		var contact := PhysicsServer2D.body_get_direct_state(host.body.get_rid())
+		for index in contact.get_contact_count():
+			var collider := contact.get_contact_collider_object(index)
+			touched = touched or (collider is Node and collider.is_in_group("PvpMiner"))
+	check(touched and player.position_unity.x > before.x + 0.3 and player.position_unity.x < 19.7, "Authoritative peer snapshots no longer provide solid native hull contact")
+	# Retreating/teleporting away must release that contact immediately, without
+	# the lerped presentation remaining an obsolete physical wall.
+	var contact_position := player.position_unity
+	peer(Vector2(24.0, 6.5))
+	step(8)
+	check(player.position_unity.x > contact_position.x + 0.05 and player.velocity_unity.length() < 6.0, "Peer retreat retained a stale collision wall or synthesized a shove")
+	release_keys()
+
 func _run() -> void:
 	if not OS.get_cmdline_user_args().has("--mode=private"):
 		push_error("Drill regression requires --mode=private; never connect this fixture to a live world")
@@ -334,6 +366,7 @@ func _run() -> void:
 	air_approach()
 	fast_approach()
 	sky_detector()
+	peer_motion_contact()
 	terrain_mining(true, true, "pvp")
 	terrain_mining(false, false, "private")
 	terrain_mining(false, true, "coop")

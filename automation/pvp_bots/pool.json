@@ -8,7 +8,6 @@
     "snapshot": "byte-for-byte; load BotHost and BotBrain only; do not run the practice shell",
     "learning": false
   },
-  "native_base_revision": "6b80c72ad6679ca5a7b58e445a9f558d20cf0705",
   "capacity": 5,
   "maximum_fps": 50,
   "time_scale": 1.0,

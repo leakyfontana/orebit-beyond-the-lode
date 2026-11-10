@@ -10,6 +10,7 @@ var _private_data: GameData
 var _private_world: WorldData
 var _snapshot: Dictionary = {}
 var _remote_visuals: Dictionary = {}
+var _remote_bodies: Dictionary = {}
 var pvp: PvpView
 var vulcan: VulcanView
 var _recovery_join := false
@@ -77,6 +78,7 @@ func _joined(snapshot: Dictionary) -> void:
 
 func scene_loaded() -> void:
 	_remote_visuals.clear()
+	_remote_bodies.clear()
 	if active and host.scene_name == "Game":
 		var state: Dictionary = _snapshot.get("state", {})
 		if not state.is_empty():
@@ -136,6 +138,7 @@ func leave() -> bool:
 		_private_world = null
 	_snapshot.clear()
 	_remote_visuals.clear()
+	_remote_bodies.clear()
 	_recovery_join = false
 	return true
 
@@ -264,21 +267,34 @@ func _sync_peers() -> void:
 			if is_instance_valid(_remote_visuals[id]):
 				_remote_visuals[id].queue_free()
 			_remote_visuals.erase(id)
+			if _remote_bodies.has(id):
+				if is_instance_valid(_remote_bodies[id]):
+					_remote_bodies[id].queue_free()
+				_remote_bodies.erase(id)
 	for id in network.peers:
 		if id == network.player_id or _remote_visuals.has(id):
 			continue
-		var remote: Node2D = RigidBody2D.new() if host.data.pvp_mode else Node2D.new()
-		if remote is RigidBody2D:
-			remote.freeze = true
-			remote.freeze_mode = RigidBody2D.FREEZE_MODE_KINEMATIC
-			remote.collision_layer = 2
-			remote.collision_mask = 3
-			remote.add_to_group("PvpMiner")
-			for shape in host.player._shapes:
-				remote.add_child(shape.duplicate())
+		var remote := Node2D.new()
 		remote.name = "RemoteMiner_" + str(id)
 		remote.z_index = 20
 		host.world_root.add_child(remote)
+		if host.data.pvp_mode:
+			# Network poses are snapshots, not kinematic motion. Moving a frozen
+			# kinematic body turns render/paused updates into solver velocities.
+			# Keep solid contact at the accepted pose, separate from presentation.
+			var contact := StaticBody2D.new()
+			contact.name = "PeerContact_" + str(id)
+			contact.collision_layer = 2
+			contact.collision_mask = 3
+			contact.add_to_group("PvpMiner")
+			for index in host.player._shapes.size():
+				var shape: Node2D = host.player._shapes[index].duplicate()
+				shape.transform = host.player._shape_transforms[index]
+				shape.set("disabled", false)
+				shape.set_meta("base_transform", shape.transform)
+				contact.add_child(shape)
+			host.world_root.add_child(contact)
+			_remote_bodies[id] = contact
 		# Remote visuals carry no input or gameplay scripts.
 		var visual: Node2D = host.player.visual.duplicate(0)
 		visual.name = "Pod"
@@ -298,17 +314,21 @@ func _sync_peers() -> void:
 		_remote_visuals[id] = remote
 	for id in _remote_visuals:
 		if network.peers.has(id):
-			_update_peer_presence(_remote_visuals[id], network.peers[id].get("state", {}))
-
-func _update_peer_presence(remote: Node2D, peer_state: Dictionary) -> void:
-	var present := bool(peer_state.get("alive", true)) and str(peer_state.get("building", "")).is_empty()
-	remote.visible = present
-	if remote is RigidBody2D:
-		remote.collision_layer = 2 if present else 0
-		remote.collision_mask = 3 if present else 0
-		for child in remote.get_children():
-			if child is CollisionShape2D or child is CollisionPolygon2D:
-				child.set_deferred("disabled", not present)
+			var peer_state: Dictionary = network.peers[id].get("state", {})
+			var present := bool(peer_state.get("alive", true)) and str(peer_state.get("building", "")).is_empty()
+			_remote_visuals[id].visible = present
+			if _remote_bodies.has(id):
+				var contact: StaticBody2D = _remote_bodies[id]
+				contact.collision_layer = 2 if present else 0
+				contact.collision_mask = 3 if present else 0
+				var target := Vector2(float(peer_state.get("x", 5.5)), -float(peer_state.get("y", -3.5)))
+				contact.position = target
+				# The manual native clock can step before Node notifications flush.
+				PhysicsServer2D.body_set_state(contact.get_rid(), PhysicsServer2D.BODY_STATE_TRANSFORM, contact.global_transform)
+				var mirror := Transform2D(Vector2(-1.0, 0.0), Vector2(0.0, 1.0), Vector2.ZERO)
+				for shape in contact.get_children():
+					var base: Transform2D = shape.get_meta("base_transform")
+					shape.transform = mirror * base if bool(peer_state.get("facing", false)) else base
 
 func tick(delta: float) -> void:
 	if not active or network.recovering:
@@ -325,6 +345,5 @@ func tick(delta: float) -> void:
 		var peer_state: Dictionary = network.peers[id].get("state", {})
 		var target := Vector2(float(peer_state.get("x", 5.5)), -float(peer_state.get("y", -3.5)))
 		remote.position = remote.position.lerp(target, minf(1.0, delta * 12.0))
-		_update_peer_presence(remote, peer_state)
 		var visual := remote.get_node("Pod") as Node2D
 		visual.scale.x = absf(visual.scale.x) * (-1.0 if bool(peer_state.get("facing", false)) else 1.0)

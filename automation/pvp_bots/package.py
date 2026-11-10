@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 import shutil
 import sys
+import subprocess
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -34,6 +35,9 @@ def sha256(path: Path) -> str:
 
 
 def package(args) -> None:
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    if args.source_commit != head:
+        raise ValueError("Native bot source identity must equal the checked-out commit")
     if args.output.exists():
         raise ValueError("Output must be a new directory")
     pins = json.loads((ROOT / "verification/box2d_build.json").read_text())
@@ -80,13 +84,15 @@ def package(args) -> None:
                       "file_logging/enable_file_logging.pc=false\n")
     for name in ("supervisor.py", "worker.gd", "policy.gd", "pool.json", "orebit-pvp-bots.service"):
         shutil.copy2(HERE / name, args.output / name)
-    authority = args.output / "authority"
-    authority.mkdir()
-    for name in ("server.py", "pvp.py", "bot_pool.py"):
-        shutil.copy2(ROOT / "automation/coop" / name, authority / name)
+    subprocess.run([str(runtime / "godot"), "--headless", "--editor", "--path",
+                    str(args.output / "game"), "--import", "--quit"], check=True)
+    subprocess.run([str(runtime / "godot"), "--headless", "--path", str(args.output / "game"),
+                    "--script", str(args.output / "worker.gd"), "--check-only"], check=True)
+    # Runtime needs imported assets/class cache, not editor layout/history.
+    shutil.rmtree(args.output / "game/.godot/editor", ignore_errors=False)
     provenance = {
         "schema_version": 1,
-        "native_base_revision": policy["native_base_revision"],
+        "source_commit": args.source_commit,
         "policy": policy["policy"],
         "godot_archive_url": "https://github.com/godotengine/godot/releases/download/4.7.2-stable/" + ENGINE_MEMBER + ".zip",
         "godot_archive_sha256": ENGINE_ARCHIVE_SHA256,
@@ -103,6 +109,7 @@ def package(args) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--source-commit", required=True)
     parser.add_argument("--godot-archive", type=Path, required=True)
     parser.add_argument("--library", type=Path, required=True)
     parser.add_argument("--native-provenance", type=Path, required=True)

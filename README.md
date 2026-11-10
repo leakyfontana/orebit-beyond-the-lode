@@ -899,3 +899,33 @@ Ticket implementation/runtime acceptance is verified across macOS, Windows,
 Android and Web, including a simultaneous five-client VPS session and native/
 Discord account persistence. Local working-tree exports and these checks do not
 replace the beta-release CI/publication gates or publish updated game clients.
+
+## PvP combat stability and external hull · 0.10.0
+
+Motion acknowledgments now retire the old prediction trajectory after a genuine
+server correction. An accepted delayed acknowledgment cannot manufacture another
+correction or echo a previous displacement. Fresh authoritative corrections still
+apply; server collision arbitration, damage and anti-cheat limits are unchanged.
+Remote collision bodies follow accepted snapshots independently of smoothed pod
+visuals. Snapshot/paused presentation changes therefore cannot create kinematic
+velocities and launch a touching vehicle when gameplay resumes. Bodies remain
+solid and disappear from contact while dead or inside a protected building.
+
+Visible PvP vehicles—your own, other humans and bots—show world-space hull bars
+with current/maximum hull. Capacity follows the actual hull upgrade, fractional
+damage remains visible, and low hull uses warning colors. Bars follow the rendered
+pod without mirroring with its facing; protected/dead/disconnected craft hide
+their indicators. New lives and round/scene replacement retire old-world bars.
+Private, co-op and Vulcan modes do not gain these PvP indicators.
+
+Native `pvp_state_interop.gd`, `pvp_drill_interop.gd`,
+`pvp_building_interop.gd` and `pvp_hull_interop.gd` cover delayed correction echoes,
+paused contact, solid/drill/door behavior, damage/repair/upgraded capacity,
+visibility and round cleanup. They run in the existing macOS CI behavior gate
+using isolated fixture data. Rendered hull verification uses the real game,
+not a browser mock or a replacement physics model.
+
+Both human clients and headless opponents must use the corrected client. The Web
+CI build also assembles a checksummed native bot ZIP under `dist/pvp-bots/` in its
+normal Actions artifact, using the same commit and freshly compiled Linux physics.
+See `automation/coop/README.md` for the reviewed-artifact worker cutover.

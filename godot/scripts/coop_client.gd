@@ -60,8 +60,6 @@ var pvp_sequence := 0
 var _pvp_blasts: Dictionary = {}
 var _motion_sequence := 0
 var _last_motion_ack := 0
-var _motion_offset := Vector2.ZERO
-var _sent_motion_offsets: Dictionary = {}
 var round_id := ""
 var _round_loading := false
 var _round_events: Array[Dictionary] = []
@@ -495,36 +493,29 @@ func send_state() -> void:
 		if mode == "pvp":
 			_motion_sequence += 1
 			message.motion_seq = _motion_sequence
-			_sent_motion_offsets[_motion_sequence] = _motion_offset
-			# Only outstanding acknowledgements need history; old replies are ignored.
-			if _sent_motion_offsets.size() > 128:
-				_sent_motion_offsets.erase(_sent_motion_offsets.keys()[0])
 		_send(message)
 
 func _reset_motion_history() -> void:
-	_sent_motion_offsets.clear()
-	_motion_offset = Vector2.ZERO
 	_last_motion_ack = _motion_sequence
 
 func _acknowledge_motion(event: Dictionary) -> void:
 	var sequence := int(event.get("motion_seq", 0))
-	if sequence <= _last_motion_ack or not _sent_motion_offsets.has(sequence):
+	if sequence <= _last_motion_ack or sequence > _motion_sequence:
 		return
 	_last_motion_ack = sequence
-	var sent_offset: Vector2 = _sent_motion_offsets[sequence]
-	for pending in _sent_motion_offsets.keys():
-		if int(pending) <= sequence:
-			_sent_motion_offsets.erase(pending)
 	var requested: Array = event.get("requested_position", [])
 	if requested.size() != 2 or not host.player_alive or host.player == null or host.player.pvp_building_hidden:
 		return
 	var state: Dictionary = event.get("state", {})
 	var accepted := Vector2(float(state.x), float(state.y))
 	var requested_position := Vector2(float(requested[0]), float(requested[1]))
-	var correction := accepted - requested_position - (_motion_offset - sent_offset)
+	var correction := accepted - requested_position
 	if correction.length_squared() > 0.000001:
 		host.player.apply_motion_correction(correction)
-		_motion_offset += correction
+		# Every already-sent sample belongs to the discarded prediction path.
+		# Its reply can reconcile money/health, but not translate this new path:
+		# even an accepted old sample otherwise echoes the correction back.
+		_last_motion_ack = _motion_sequence
 
 func pvp_action(kind: String, fields: Dictionary = {}) -> String:
 	if connected and mode == "pvp" and not _round_loading:

@@ -55,26 +55,45 @@ func _run() -> void:
 	check(host.player.position_unity.distance_to(Vector2(8, -3.5)) < 0.0001, "Health sync rewound a living craft to an old pose")
 	network._receive({"type":"pvp_tick", "players":[{"player_id":"self", "state_revision":2, "state":accepted}]})
 	check(host.player.position_unity.distance_to(Vector2(8, -3.5)) < 0.0001, "Periodic tick rewound locally simulated flight")
-	# Preserve movement after send; multiple in-flight wall corrections apply once.
-	network._motion_sequence = 2
-	network._sent_motion_offsets[1] = Vector2.ZERO
-	network._sent_motion_offsets[2] = Vector2.ZERO
+	# Use real outgoing motion samples. Several can be in flight when collision
+	# authority discards one prediction path; accepted replies from that old path
+	# must not echo its correction into the next path.
+	network.connected = true
+	host.player.position_unity = Vector2(7.0, -3.5)
+	network.send_state()
+	var first_motion := network._motion_sequence
+	host.player.position_unity = Vector2(7.1, -3.5)
+	network.send_state()
+	host.player.position_unity = Vector2(7.2, -3.5)
+	network.send_state()
+	host.player.position_unity = Vector2(8.0, -3.5)
 	var motion_state: Dictionary = accepted.duplicate(true)
 	motion_state.x = 6.8
-	network._receive({"type":"state_ack", "state_revision":2, "motion_seq":1, "requested_position":[7.0,-3.5], "state":motion_state})
+	network._receive({"type":"state_ack", "state_revision":2, "motion_seq":first_motion, "requested_position":[7.0,-3.5], "state":motion_state})
 	check(host.player.position_unity.distance_to(Vector2(7.8,-3.5)) < 0.0001, "Collision correction discarded movement after the request")
 	motion_state.x = 6.9
-	network._receive({"type":"state_ack", "state_revision":2, "motion_seq":2, "requested_position":[7.1,-3.5], "state":motion_state})
-	check(host.player.position_unity.distance_to(Vector2(7.8,-3.5)) < 0.0001, "Overlapping in-flight corrections compounded the same displacement")
+	network._receive({"type":"state_ack", "state_revision":2, "motion_seq":first_motion + 1, "requested_position":[7.1,-3.5], "state":motion_state})
+	check(host.player.position_unity.distance_to(Vector2(7.8,-3.5)) < 0.0001, "Superseded collision samples compounded the same displacement")
+	motion_state.x = 7.2
+	network._receive({"type":"state_ack", "state_revision":2, "motion_seq":first_motion + 2, "requested_position":[7.2,-3.5], "state":motion_state})
+	check(host.player.position_unity.distance_to(Vector2(7.8,-3.5)) < 0.0001, "Accepted old prediction echoed a collision correction back into flight")
 	motion_state.x = 5.0
-	network._receive({"type":"state_ack", "state_revision":2, "motion_seq":1, "requested_position":[7.0,-3.5], "state":motion_state})
+	network._receive({"type":"state_ack", "state_revision":2, "motion_seq":first_motion, "requested_position":[7.0,-3.5], "state":motion_state})
 	check(host.player.position_unity.distance_to(Vector2(7.8,-3.5)) < 0.0001, "Duplicate motion acknowledgement moved the craft twice")
-	network._motion_sequence = 3
-	network._sent_motion_offsets[3] = network._motion_offset
 	host.player.position_unity = Vector2(8.2,-3.5)
-	motion_state.x = 7.8
-	network._receive({"type":"state_ack", "state_revision":2, "motion_seq":3, "requested_position":[7.8,-3.5], "state":motion_state})
-	check(host.player.position_unity.distance_to(Vector2(8.2,-3.5)) < 0.0001, "Accepted motion acknowledgement rewound newer local movement")
+	network.send_state()
+	motion_state.x = 8.0
+	host.player.position_unity = Vector2(8.5,-3.5)
+	network._receive({"type":"state_ack", "state_revision":2, "motion_seq":network._motion_sequence, "requested_position":[8.2,-3.5], "state":motion_state})
+	check(host.player.position_unity.distance_to(Vector2(8.3,-3.5)) < 0.0001, "New prediction path ignored a genuine server collision correction")
+	for sample in 12:
+		var requested: Vector2 = host.player.position_unity
+		network.send_state()
+		motion_state.x = requested.x
+		motion_state.y = requested.y
+		network._receive({"type":"state_ack", "state_revision":2, "motion_seq":network._motion_sequence, "requested_position":[requested.x,requested.y], "state":motion_state})
+		check(host.player.position_unity.distance_to(Vector2(8.3,-3.5)) < 0.0001, "Accepted zero-input samples sustained a correction feedback loop")
+	network.connected = false
 	# Predicted explosive consumption must not be applied twice on confirmation.
 	data.player_items.Dynamite = 2
 	network._economic_baseline = host.coop.state()

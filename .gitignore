@@ -33,6 +33,7 @@
 !/verification/spawn_impact_interop.gd
 !/verification/close_target_interop.gd
 !/verification/lobby_controller_interop.gd
+!/verification/pvp_hull_interop.gd
 
 # Built artifacts and per-machine credentials are never source inputs.
 /dist/
