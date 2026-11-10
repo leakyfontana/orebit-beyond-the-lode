@@ -12,6 +12,18 @@ const MAX_BYTES: int = 64 * 1024 * 1024
 const MAX_ELEMENTS: int = 4 * 1024 * 1024
 const FIELDS: Array = ["player_money", "current_upgrades", "player_items", "my_map", "player_cargo", "transmissions"]
 
+enum Phase {
+	IDLE, READING_HEADER, READING_RECORDS, RESOLVING_ROOT,
+	BUILDING_LAYOUT, WRITING_HEADER, WRITING_ROOT, DRAINING_ARRAYS,
+	WRITING_END, COMPLETE, FAILED,
+}
+enum CursorState { AVAILABLE, EXHAUSTED, FAILED }
+enum ArrayPhase { READING, COMPLETE, FAILED }
+enum ReferenceState { UNREGISTERED, REGISTERED }
+enum ClassLayout { DECLARE, REUSE }
+enum GraphNodeKind { NONE, OBJECT, ARRAY, REFERENCE, NULL_RUN }
+
+var phase: Phase = Phase.IDLE
 var error: String = ""
 var _stream: StreamPeerBuffer = StreamPeerBuffer.new()
 var _objects: Dictionary = {}
@@ -35,14 +47,23 @@ static func comparer_type() -> String:
 	return "System.Collections.Generic.GenericEqualityComparer`1[[System.String, %s]]" % CORE
 
 func _fail(message: String) -> void:
-	if error.is_empty():
+	if phase != Phase.FAILED:
 		error = message
+		phase = Phase.FAILED
+
+func _cursor_state(count: int) -> CursorState:
+	if count < 0 or count > _stream.get_available_bytes():
+		return CursorState.EXHAUSTED
+	return CursorState.FAILED if phase == Phase.FAILED else CursorState.AVAILABLE
 
 func _available(count: int) -> bool:
-	if count < 0 or count > _stream.get_available_bytes():
-		_fail("Truncated NRBF stream")
-		return false
-	return error.is_empty()
+	match _cursor_state(count):
+		CursorState.EXHAUSTED:
+			_fail("Truncated NRBF stream")
+			return false
+		CursorState.FAILED:
+			return false
+	return true
 
 func _byte() -> int:
 	return _stream.get_u8() if _available(1) else 0
@@ -126,8 +147,11 @@ func _type_info(kind: int) -> Variant:
 	_fail("Invalid NRBF binary type")
 	return null
 
+func _reference_state(id: int) -> ReferenceState:
+	return ReferenceState.REGISTERED if _objects.has(id) else ReferenceState.UNREGISTERED
+
 func _register(id: int, value: Variant) -> void:
-	if id == 0 or _objects.has(id):
+	if id == 0 or _reference_state(id) == ReferenceState.REGISTERED:
 		_fail("Duplicate or zero NRBF object ID")
 		return
 	_objects[id] = value
@@ -187,10 +211,10 @@ func _class(record: int) -> Variant:
 		meta = {"type": type, "names": names, "kinds": kinds, "info": info}
 		_metadata[id] = meta
 	var members: Dictionary = {}
-	var node: Dictionary = {"type": meta.type, "members": members}
+	var node: Dictionary = {"node_kind": GraphNodeKind.OBJECT, "type": meta.type, "members": members}
 	_register(id, node)
 	for index in meta.names.size():
-		if not error.is_empty():
+		if phase == Phase.FAILED:
 			return null
 		members[meta.names[index]] = _primitive(meta.info[index]) if meta.kinds[index] == 0 else _value()
 	return node
@@ -214,20 +238,32 @@ func _array(record: int) -> Variant:
 		kind = 0 if record == 15 else (2 if record == 16 else 1)
 		info = _byte() if record == 15 else null
 	var values: Array = []
-	var node: Dictionary = {"array": values, "kind": kind, "info": info}
+	var node: Dictionary = {"node_kind": GraphNodeKind.ARRAY, "array": values, "kind": kind, "info": info, "phase": ArrayPhase.READING}
 	_register(id, node)
-	while values.size() < count and error.is_empty():
+	_advance_array(node, count)
+	while node.phase == ArrayPhase.READING:
 		var value: Variant = _primitive(info) if kind == 0 else _value()
-		if value is Dictionary and value.has("nulls"):
-			var nulls: int = value.nulls
-			if nulls <= 0 or values.size() + nulls > count:
-				_fail("Invalid NRBF null run")
-				break
-			for index in nulls:
-				values.append(null)
-		else:
-			values.append(value)
+		_append_array_value(node, value, count)
 	return node
+
+func _advance_array(node: Dictionary, count: int) -> void:
+	if phase == Phase.FAILED:
+		node.phase = ArrayPhase.FAILED
+	elif node.array.size() >= count:
+		node.phase = ArrayPhase.COMPLETE
+
+func _append_array_value(node: Dictionary, value: Variant, count: int) -> void:
+	if value is Dictionary and value.get("node_kind", GraphNodeKind.NONE) == GraphNodeKind.NULL_RUN:
+		var nulls: int = value.nulls
+		if nulls <= 0 or node.array.size() + nulls > count:
+			_fail("Invalid NRBF null run")
+			_advance_array(node, count)
+			return
+		for index in nulls:
+			node.array.append(null)
+	else:
+		node.array.append(value)
+	_advance_array(node, count)
 
 func _value() -> Variant:
 	_depth += 1
@@ -236,7 +272,7 @@ func _value() -> Variant:
 		_depth -= 1
 		return null
 	var value: Variant = null
-	while error.is_empty():
+	while phase != Phase.FAILED:
 		var record: int = _byte()
 		match record:
 			1, 2, 3, 4, 5:
@@ -250,7 +286,7 @@ func _value() -> Variant:
 			8:
 				value = _primitive(_byte())
 			9:
-				value = {"ref": _int()}
+				value = {"node_kind": GraphNodeKind.REFERENCE, "ref": _int()}
 			10:
 				value = null
 			12:
@@ -261,9 +297,9 @@ func _value() -> Variant:
 				_libraries[id] = name
 				continue
 			13:
-				value = {"nulls": _byte()}
+				value = {"node_kind": GraphNodeKind.NULL_RUN, "nulls": _byte()}
 			14:
-				value = {"nulls": _int()}
+				value = {"node_kind": GraphNodeKind.NULL_RUN, "nulls": _int()}
 			_:
 				_fail("Unsupported NRBF record: " + str(record))
 		break
@@ -271,8 +307,8 @@ func _value() -> Variant:
 	return value
 
 func _resolve(value: Variant) -> Variant:
-	if value is Dictionary and value.has("ref"):
-		if not _objects.has(value.ref):
+	if value is Dictionary and value.get("node_kind", GraphNodeKind.NONE) == GraphNodeKind.REFERENCE:
+		if _reference_state(value.ref) == ReferenceState.UNREGISTERED:
 			_fail("Unresolved NRBF reference")
 			return null
 		return _objects[value.ref]
@@ -280,7 +316,7 @@ func _resolve(value: Variant) -> Variant:
 
 func _members(value: Variant, type: String) -> Dictionary:
 	var node: Variant = _resolve(value)
-	if not node is Dictionary or node.get("type", "") != type:
+	if not node is Dictionary or node.get("node_kind", GraphNodeKind.NONE) != GraphNodeKind.OBJECT or node.get("type", "") != type:
 		_fail("Expected NRBF " + type)
 		return {}
 	return node.members
@@ -300,7 +336,7 @@ func _integer(value: Variant) -> int:
 
 func _array_values(value: Variant) -> Array:
 	var node: Variant = _resolve(value)
-	if not node is Dictionary or not node.has("array"):
+	if not node is Dictionary or node.get("node_kind", GraphNodeKind.NONE) != GraphNodeKind.ARRAY:
 		_fail("Expected NRBF backing array")
 		return []
 	return node.array
@@ -310,7 +346,7 @@ func _list(value: Variant, element: String, depth: int = 0) -> Array:
 		_fail("Invalid SaveDataType list depth")
 		return []
 	var members: Dictionary = _members(value, list_type(element))
-	if not error.is_empty():
+	if phase == Phase.FAILED:
 		return []
 	var backing: Array = _array_values(members._items)
 	var size: int = _integer(members._size)
@@ -319,13 +355,13 @@ func _list(value: Variant, element: String, depth: int = 0) -> Array:
 		return []
 	var result: Array = []
 	for index in size:
-		if not error.is_empty():
+		if phase == Phase.FAILED:
 			break
 		if element == INT:
 			result.append(_integer(backing[index]))
 		elif element == TUPLE:
 			var tuple: Dictionary = _members(backing[index], TUPLE)
-			if not error.is_empty():
+			if phase == Phase.FAILED:
 				break
 			if not tuple.Item4 is bool:
 				_fail("Expected transmission Boolean")
@@ -338,7 +374,7 @@ func _list(value: Variant, element: String, depth: int = 0) -> Array:
 
 func _dictionary(value: Variant, element: String) -> Dictionary:
 	var members: Dictionary = _members(value, dictionary_type(element))
-	if not error.is_empty():
+	if phase == Phase.FAILED:
 		return {}
 	var comparer: Variant = _resolve(members.Comparer)
 	if comparer != null:
@@ -354,7 +390,7 @@ func _dictionary(value: Variant, element: String) -> Dictionary:
 		return result
 	for entry in _array_values(members.KeyValuePairs):
 		var pair: Dictionary = _members(entry, pair_type(element))
-		if not error.is_empty():
+		if phase == Phase.FAILED:
 			break
 		var key: String = _text(pair.key)
 		if result.has(key):
@@ -362,12 +398,19 @@ func _dictionary(value: Variant, element: String) -> Dictionary:
 		result[key] = _text(pair.value) if element == STRING else _integer(pair.value)
 	return result
 
-func decode(bytes: PackedByteArray) -> Dictionary:
+func _begin_decode(bytes: PackedByteArray) -> void:
+	# Failure is terminal for this codec instance; its first error is retained.
+	if phase != Phase.FAILED:
+		phase = Phase.READING_HEADER
 	if bytes.size() > MAX_BYTES:
 		_fail("Save exceeds NRBF size limit")
-		return {}
+		return
 	_stream.data_array = bytes
 	_stream.big_endian = false
+
+func _read_header() -> int:
+	if phase != Phase.READING_HEADER:
+		return 0
 	if _byte() != 0:
 		_fail("Not an NRBF SerializedStreamHeader")
 	var root_id: int = _int()
@@ -376,19 +419,41 @@ func decode(bytes: PackedByteArray) -> Dictionary:
 	var minor: int = _int()
 	if root_id <= 0 or header_id != -1 or major != 1 or minor != 0:
 		_fail("Unsupported NRBF stream header")
-	while error.is_empty() and _stream.get_available_bytes() > 0:
+	if phase == Phase.READING_HEADER:
+		phase = Phase.READING_RECORDS
+	return root_id
+
+func decode(bytes: PackedByteArray) -> Dictionary:
+	_begin_decode(bytes)
+	if bytes.size() > MAX_BYTES:
+		return {}
+	var root_id: int = _read_header()
+	while phase == Phase.READING_RECORDS and _stream.get_available_bytes() > 0:
 		if _stream.data_array[_stream.get_position()] == 11:
-			_byte()
-			if _stream.get_available_bytes() != 0:
-				_fail("Trailing NRBF data")
-			var root: Dictionary = _members({"ref": root_id}, "SaveDataType")
-			if not error.is_empty():
-				return {}
-			var result: Dictionary = {"player_money": _integer(root.player_money), "current_upgrades": _dictionary(root.current_upgrades, STRING), "player_items": _dictionary(root.player_items, INT), "my_map": _list(root.my_map, list_type(list_type(INT))), "player_cargo": _dictionary(root.player_cargo, INT), "transmissions": _list(root.transmissions, TUPLE)}
-			return result if error.is_empty() else {}
+			_accept_message_end()
+			return _resolve_root(root_id)
 		_value()
 	_fail("Missing NRBF MessageEnd")
 	return {}
+
+func _resolve_root(root_id: int) -> Dictionary:
+	# Resolve the root even after a trailing-data error, as the reader always
+	# has; the sticky error still wins over any subsequent graph failure.
+	var root: Dictionary = _members({"node_kind": GraphNodeKind.REFERENCE, "ref": root_id}, "SaveDataType")
+	if phase != Phase.RESOLVING_ROOT:
+		return {}
+	var result: Dictionary = {"player_money": _integer(root.player_money), "current_upgrades": _dictionary(root.current_upgrades, STRING), "player_items": _dictionary(root.player_items, INT), "my_map": _list(root.my_map, list_type(list_type(INT))), "player_cargo": _dictionary(root.player_cargo, INT), "transmissions": _list(root.transmissions, TUPLE)}
+	if phase == Phase.RESOLVING_ROOT:
+		phase = Phase.COMPLETE
+		return result
+	return {}
+
+func _accept_message_end() -> void:
+	_byte()
+	if _stream.get_available_bytes() != 0:
+		_fail("Trailing NRBF data")
+	if phase == Phase.READING_RECORDS:
+		phase = Phase.RESOLVING_ROOT
 
 func _put_string(text: String) -> void:
 	var bytes: PackedByteArray = text.to_utf8_buffer()
@@ -410,15 +475,21 @@ func _put_info(kind: int, info: Variant) -> void:
 	elif kind == 3:
 		_put_string(info)
 
+func _class_layout(type: String, member_count: int) -> ClassLayout:
+	if _metadata.has(type) and _metadata[type].has(member_count):
+		return ClassLayout.REUSE
+	return ClassLayout.DECLARE
+
 func _put_class(type: String, members: Dictionary) -> void:
 	var id: int = _id()
+	var layout: ClassLayout = _class_layout(type, members.size())
 	if not _metadata.has(type):
 		_metadata[type] = {}
 	var variants: Dictionary = _metadata[type]
 	# The only optional schema member is Dictionary.KeyValuePairs. Its empty
 	# and populated layouts must not share a ClassWithId metadata record.
 	var member_count := members.size()
-	if variants.has(member_count):
+	if layout == ClassLayout.REUSE:
 		_stream.put_u8(1)
 		_stream.put_32(id)
 		_stream.put_32(variants[member_count])
@@ -454,15 +525,36 @@ func _put_value(value: Variant) -> void:
 		_stream.put_u8(6)
 		_stream.put_32(_id())
 		_put_string(value)
-	elif value is Dictionary and value.has("array"):
+	elif value is Dictionary and value.get("node_kind", GraphNodeKind.NONE) == GraphNodeKind.ARRAY:
 		# SerializationInfo array members require reference fixups in Mono's
 		# formatter. Emit their definitions after the containing objects.
-		var id := _id()
-		_stream.put_u8(9)
-		_stream.put_32(id)
-		_pending_arrays.append({"id": id, "value": value})
+		_defer_array(value)
 	else:
 		_put_class(value.type, value.members)
+
+func _defer_array(value: Dictionary) -> void:
+	var id := _id()
+	_stream.put_u8(9)
+	_stream.put_32(id)
+	_pending_arrays.append({"id": id, "value": value})
+
+func _drain_arrays() -> void:
+	var pending_index := 0
+	while phase == Phase.DRAINING_ARRAYS:
+		if pending_index == _pending_arrays.size():
+			phase = Phase.WRITING_END
+		else:
+			var pending: Dictionary = _pending_arrays[pending_index]
+			_put_array(int(pending.id), pending.value)
+			pending_index += 1
+
+func _write_message_end() -> void:
+	if phase == Phase.WRITING_END:
+		_stream.put_u8(11)
+		if _stream.get_size() > MAX_BYTES:
+			_fail("Save exceeds NRBF size limit")
+		else:
+			phase = Phase.COMPLETE
 
 func _put_array(id: int, value: Dictionary) -> void:
 	if value.element == INT:
@@ -493,28 +585,28 @@ func _make_list(values: Array, element: String) -> Dictionary:
 			if not value is Dictionary or not value.has_all(["text", "signature", "picture_name", "displayed"]) or not value.displayed is bool:
 				_fail("Invalid transmission")
 				return {}
-			backing.append({"type": TUPLE, "members": {"Item1": _text(value.text), "Item2": _text(value.signature), "Item3": _text(value.picture_name), "Item4": value.displayed}})
+			backing.append({"node_kind": GraphNodeKind.OBJECT, "type": TUPLE, "members": {"Item1": _text(value.text), "Item2": _text(value.signature), "Item3": _text(value.picture_name), "Item4": value.displayed}})
 		else:
 			if not value is Array:
 				_fail("Invalid map list")
 				return {}
 			backing.append(_make_list(value, INT if element == list_type(INT) else list_type(INT)))
-	return {"type": list_type(element), "members": {"_items": {"array": backing, "element": element}, "_size": values.size(), "_version": values.size()}}
+	return {"node_kind": GraphNodeKind.OBJECT, "type": list_type(element), "members": {"_items": {"node_kind": GraphNodeKind.ARRAY, "array": backing, "element": element}, "_size": values.size(), "_version": values.size()}}
 
 func _make_dictionary(values: Dictionary, element: String) -> Dictionary:
 	var pairs: Array = []
 	_length(values.size())
 	for key in values:
-		pairs.append({"type": pair_type(element), "members": {"key": _text(key), "value": _text(values[key]) if element == STRING else _integer(values[key])}})
+		pairs.append({"node_kind": GraphNodeKind.OBJECT, "type": pair_type(element), "members": {"key": _text(key), "value": _text(values[key]) if element == STRING else _integer(values[key])}})
 	# Match Dictionary's prime-bucket convention, with room for every entry.
 	# HashSize zero represents an empty dictionary without KeyValuePairs.
 	var capacity: int = 0 if pairs.is_empty() else 3
 	while capacity < pairs.size() or not _is_prime(capacity):
 		capacity += 2
-	var members: Dictionary = {"Version": values.size(), "Comparer": {"type": comparer_type(), "members": {}}, "HashSize": capacity}
+	var members: Dictionary = {"Version": values.size(), "Comparer": {"node_kind": GraphNodeKind.OBJECT, "type": comparer_type(), "members": {}}, "HashSize": capacity}
 	if capacity > 0:
-		members.KeyValuePairs = {"array": pairs, "element": pair_type(element)}
-	return {"type": dictionary_type(element), "members": members}
+		members.KeyValuePairs = {"node_kind": GraphNodeKind.ARRAY, "array": pairs, "element": pair_type(element)}
+	return {"node_kind": GraphNodeKind.OBJECT, "type": dictionary_type(element), "members": members}
 
 func _is_prime(number: int) -> bool:
 	if number == 0:
@@ -526,7 +618,38 @@ func _is_prime(number: int) -> bool:
 		divisor += 2
 	return true
 
+func _begin_encode() -> void:
+	if phase != Phase.FAILED:
+		phase = Phase.BUILDING_LAYOUT
+
+func _begin_stream_write() -> void:
+	if phase == Phase.BUILDING_LAYOUT:
+		phase = Phase.WRITING_HEADER
+
+func _write_header() -> void:
+	if phase != Phase.WRITING_HEADER:
+		return
+	_stream.big_endian = false
+	_stream.put_u8(0)
+	_stream.put_32(1)
+	_stream.put_32(-1)
+	_stream.put_32(1)
+	_stream.put_32(0)
+	_stream.put_u8(12)
+	_stream.put_32(1)
+	_put_string(ASSEMBLY)
+	phase = Phase.WRITING_ROOT
+
+func _write_root(members: Dictionary) -> void:
+	if phase == Phase.WRITING_ROOT:
+		_put_class("SaveDataType", members)
+		if phase == Phase.WRITING_ROOT:
+			phase = Phase.DRAINING_ARRAYS
+
 func encode(saved: Dictionary) -> PackedByteArray:
+	_begin_encode()
+	if phase != Phase.BUILDING_LAYOUT:
+		return PackedByteArray()
 	if not saved.has_all(FIELDS):
 		_fail("Incomplete SaveDataType")
 		return PackedByteArray()
@@ -538,25 +661,11 @@ func encode(saved: Dictionary) -> PackedByteArray:
 		_fail("Invalid SaveDataType list")
 		return PackedByteArray()
 	var members: Dictionary = {"player_money": _integer(saved.player_money), "current_upgrades": _make_dictionary(saved.current_upgrades, STRING), "player_items": _make_dictionary(saved.player_items, INT), "my_map": _make_list(saved.my_map, list_type(list_type(INT))), "player_cargo": _make_dictionary(saved.player_cargo, INT), "transmissions": _make_list(saved.transmissions, TUPLE)}
-	if not error.is_empty():
+	if phase == Phase.FAILED:
 		return PackedByteArray()
-	_stream.big_endian = false
-	_stream.put_u8(0)
-	_stream.put_32(1)
-	_stream.put_32(-1)
-	_stream.put_32(1)
-	_stream.put_32(0)
-	_stream.put_u8(12)
-	_stream.put_32(1)
-	_put_string(ASSEMBLY)
-	_put_class("SaveDataType", members)
-	var pending_index := 0
-	while pending_index < _pending_arrays.size():
-		var pending: Dictionary = _pending_arrays[pending_index]
-		_put_array(int(pending.id), pending.value)
-		pending_index += 1
-	_stream.put_u8(11)
-	if _stream.get_size() > MAX_BYTES:
-		_fail("Save exceeds NRBF size limit")
-		return PackedByteArray()
-	return _stream.data_array
+	_begin_stream_write()
+	_write_header()
+	_write_root(members)
+	_drain_arrays()
+	_write_message_end()
+	return _stream.data_array if phase == Phase.COMPLETE else PackedByteArray()

@@ -3,14 +3,20 @@ extends Control
 
 signal hud_layout_changed
 
+enum TouchSupport { UNAVAILABLE, AVAILABLE }
+enum FocusState { FOCUSED, UNFOCUSED }
+enum Availability { INACTIVE, ACTIVE }
+enum GameplayGate { ENABLED, DISABLED }
+enum GestureState { IDLE, HELD }
+enum EmulationLease { UNOWNED, RESTORE_DISABLED, RESTORE_ENABLED }
+
 var host: Node
-var _touch_enabled := false
-var _focused := true
-var _active := false
-var _gameplay_enabled := true
-var _joystick_held := false
-var _restore_mouse_touch := false
-var _previous_mouse_touch := false
+var _touch_support := TouchSupport.UNAVAILABLE
+var _focus_state := FocusState.FOCUSED
+var _availability := Availability.INACTIVE
+var _gameplay_gate := GameplayGate.ENABLED
+var _joystick_gesture := GestureState.IDLE
+var _emulation_lease := EmulationLease.UNOWNED
 var _buttons: Array[TouchScreenButton] = []
 var _hud_safe_rect := Rect2()
 @onready var _joystick: VirtualJoystick = $Joystick
@@ -25,10 +31,9 @@ func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var desktop_override: bool = OS.get_cmdline_user_args().has("--touch-controls")
-	_touch_enabled = DisplayServer.is_touchscreen_available() or desktop_override
+	_touch_support = TouchSupport.AVAILABLE if DisplayServer.is_touchscreen_available() or desktop_override else TouchSupport.UNAVAILABLE
 	if desktop_override and not OS.has_feature("mobile"):
-		_previous_mouse_touch = Input.is_emulating_touch_from_mouse()
-		_restore_mouse_touch = true
+		_emulation_lease = EmulationLease.RESTORE_ENABLED if Input.is_emulating_touch_from_mouse() else EmulationLease.RESTORE_DISABLED
 		Input.set_emulate_touch_from_mouse(true)
 	for child in _items.get_children():
 		var button := child as TouchScreenButton
@@ -47,32 +52,33 @@ func _process(_delta: float) -> void:
 
 # Call immediately from host lifecycle setters as well as the per-frame safety check.
 func sync_state() -> void:
-	var available: bool = _touch_enabled and _focused and _gameplay_enabled and is_instance_valid(host)
+	var available: bool = _touch_support == TouchSupport.AVAILABLE and _focus_state == FocusState.FOCUSED and _gameplay_gate == GameplayGate.ENABLED and is_instance_valid(host)
 	if available:
 		available = host.scene_name == "Game" and host.player_alive and not host.paused and host.pending_scene.is_empty() and not get_tree().paused
-	if available == _active:
+	var next := Availability.ACTIVE if available else Availability.INACTIVE
+	if next == _availability:
 		return
-	_active = available
-	if not _active:
+	_availability = next
+	if _availability == Availability.INACTIVE:
 		release_all()
-	visible = _active
-	_joystick.mouse_filter = Control.MOUSE_FILTER_STOP if _active else Control.MOUSE_FILTER_IGNORE
+	visible = _availability == Availability.ACTIVE
+	_joystick.mouse_filter = Control.MOUSE_FILTER_STOP if _availability == Availability.ACTIVE else Control.MOUSE_FILTER_IGNORE
 
 func set_gameplay_enabled(enabled: bool) -> void:
-	_gameplay_enabled = enabled
+	_gameplay_gate = GameplayGate.ENABLED if enabled else GameplayGate.DISABLED
 	if is_node_ready():
 		sync_state()
 
 func release_all() -> void:
 	if not is_node_ready():
 		return
-	if _joystick_held:
+	if _joystick_gesture == GestureState.HELD:
 		# VirtualJoystick has no public cancel method. Resizing uses its native
 		# reset path, clearing the captured finger and all simulated actions.
 		var old_size: Vector2 = _joystick.size
 		_joystick.size = old_size + Vector2.ONE
 		_joystick.size = old_size
-		_joystick_held = false
+		_joystick_gesture = GestureState.IDLE
 	for button in _buttons:
 		if button.is_pressed():
 			# Native visibility handling releases the finger and its InputMap action.
@@ -87,25 +93,26 @@ func _visibility_changed() -> void:
 func _notification(what: int) -> void:
 	match what:
 		NOTIFICATION_APPLICATION_FOCUS_OUT, NOTIFICATION_WM_WINDOW_FOCUS_OUT, NOTIFICATION_APPLICATION_PAUSED:
-			_focused = false
+			_focus_state = FocusState.UNFOCUSED
 			if is_node_ready():
 				sync_state()
 		NOTIFICATION_APPLICATION_FOCUS_IN, NOTIFICATION_WM_WINDOW_FOCUS_IN, NOTIFICATION_APPLICATION_RESUMED:
-			_focused = true
+			_focus_state = FocusState.FOCUSED
 			if is_node_ready():
 				_layout_controls()
 				sync_state()
 
 func _exit_tree() -> void:
 	release_all()
-	if _restore_mouse_touch:
-		Input.set_emulate_touch_from_mouse(_previous_mouse_touch)
+	if _emulation_lease != EmulationLease.UNOWNED:
+		Input.set_emulate_touch_from_mouse(_emulation_lease == EmulationLease.RESTORE_ENABLED)
+		_emulation_lease = EmulationLease.UNOWNED
 
 func _stick_pressed() -> void:
-	_joystick_held = true
+	_joystick_gesture = GestureState.HELD
 
 func _stick_released(_vector: Vector2) -> void:
-	_joystick_held = false
+	_joystick_gesture = GestureState.IDLE
 
 func _item_pressed(button: TouchScreenButton) -> void:
 	button.modulate = Color(1.25, 1.25, 1.25, 1.0)
@@ -115,7 +122,7 @@ func _item_released(button: TouchScreenButton) -> void:
 
 func get_hud_safe_rect() -> Rect2:
 	# Empty on desktop: the original source HUD must retain its authored layout.
-	return _hud_safe_rect if _touch_enabled else Rect2()
+	return _hud_safe_rect if _touch_support == TouchSupport.AVAILABLE else Rect2()
 
 func _layout_controls() -> void:
 	if not is_node_ready() or size.x <= 0.0 or size.y <= 0.0:

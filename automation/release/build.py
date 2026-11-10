@@ -22,6 +22,7 @@ Gatekeeper approval in Privacy & Security. No Apple account is needed.
 
 import argparse
 import configparser
+from enum import Enum, auto
 import hashlib
 import json
 import os
@@ -61,6 +62,43 @@ EXCLUDES = ("data/unity_manifest.json,exports/*,android/*,tools/*,verification/*
 # Public certificate fingerprint of the preserved beta-1/beta-2 APK identity.
 BETA_SIGNER_SHA256 = "3f6a839417710379c51f940de8810bde1d67d5542708f30a5ee3380f33f3bdf1"
 SECRETS = []
+
+
+class BuildOutputState(Enum):
+    UNPUBLISHED = auto()
+    PACKAGED = auto()
+    RECEIPTED = auto()
+
+
+class BuildOutput:
+    """Filesystem-derived package/receipt state; metadata alone marks success."""
+
+    def __init__(self, metadata_path, artifact):
+        self.metadata_path = metadata_path
+        self.artifact = artifact
+
+    @property
+    def state(self):
+        if self.metadata_path.exists():
+            return BuildOutputState.RECEIPTED
+        return BuildOutputState.PACKAGED if self.artifact.is_file() else BuildOutputState.UNPUBLISHED
+
+    def invalidate_receipt(self):
+        # A previous package may remain, but cannot be accepted after failure.
+        self.metadata_path.unlink(missing_ok=True)
+
+    def package(self, export, filename, target):
+        self.artifact.parent.mkdir(parents=True, exist_ok=True)
+        if target == "android":
+            shutil.copy2(export / filename, self.artifact)
+        else:
+            package_zip(export, self.artifact)
+
+    def commit_receipt(self, metadata):
+        if self.state is not BuildOutputState.PACKAGED:
+            raise RuntimeError("Build metadata requires an unreceipted package")
+        self.metadata_path.parent.mkdir(parents=True, exist_ok=True)
+        self.metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
 
 
 def run(command, cwd=None, env=None):
@@ -427,8 +465,10 @@ def build(args):
     target, arch, preset_name, library = TARGETS[args.platform]
     output_root = ROOT / ("dist/validation" if args.validation else "dist")
     metadata_path = output_root / "metadata" / (args.platform + ".json")
+    artifact = output_root / args.platform / ("Orebit-" + version + "-" + args.platform + (".apk" if target == "android" else ".zip"))
+    build_output = BuildOutput(metadata_path, artifact)
     # Never leave an older successful manifest behind after a failed rebuild.
-    metadata_path.unlink(missing_ok=True)
+    build_output.invalidate_receipt()
     with tempfile.TemporaryDirectory(prefix="orebit-release-") as temporary:
         work = Path(temporary)
         signer = android_signer(work, args.validation) if target == "android" else None
@@ -524,21 +564,14 @@ def build(args):
                 raise RuntimeError("Web export has no WebAssembly runtime")
             entrypoint = stage_web_bundle(export)
             (export / "build.json").write_text(json.dumps({"commit": args.sha, "version": version, "entrypoint": entrypoint}, indent=2) + "\n", encoding="utf-8")
-        destination = output_root / args.platform
-        destination.mkdir(parents=True, exist_ok=True)
-        artifact = destination / ("Orebit-" + version + "-" + args.platform + (".apk" if target == "android" else ".zip"))
-        if target == "android":
-            shutil.copy2(export / filename, artifact)
-        else:
-            package_zip(export, artifact)
+        build_output.package(export, filename, target)
         if target == "web":
             package_pvp_bots(work, adapter, api, output_root, args.sha, version)
         metadata = {"schema": 1, "commit": args.sha, "version": version, "platform": args.platform,
                     "artifacts": [{"path": artifact.relative_to(ROOT).as_posix(), "sha256": sha256(artifact), "size": artifact.stat().st_size}]}
         if args.validation:
             metadata["validation"] = True
-        metadata_path.parent.mkdir(parents=True, exist_ok=True)
-        metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+        build_output.commit_receipt(metadata)
         print("Built " + artifact.relative_to(ROOT).as_posix())
 
 

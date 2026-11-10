@@ -18,7 +18,7 @@ from aiohttp.test_utils import TestServer
 from argon2 import PasswordHasher
 
 from bot_pool import ProvisionError, provision
-from pvp import stock_state
+from pvp import SimulationPhase, stock_state
 import server
 
 
@@ -289,7 +289,7 @@ class BotPoolNetworkTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(duplicate["code"], "already_connected")
         await self.backend.pvp.stop()
         async with self.backend.pvp.world_lock:
-            self.backend.pvp.failed = True
+            self.backend.pvp.phase = SimulationPhase.FAILED
         try:
             _, unavailable = await self.join()
             self.assertEqual(unavailable["code"], "pvp_unavailable")
@@ -298,7 +298,7 @@ class BotPoolNetworkTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(snapshot["target_bots"], 0)
             self.assertEqual({b["player_id"] for b in snapshot["connected_bots"]}, before)
         finally:
-            self.backend.pvp.failed = False
+            self.backend.pvp.phase = SimulationPhase.RUNNING
 
     async def test_duplicate_human_at_capacity_does_not_displace_another_bot(self):
         async with self.http.post(self.base + "/api/auth/signup", json={

@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { PublicationSource, REPOSITORY, isPublicRelease, type Release, type WorkflowRun } from './github';
-import { validateReceipt, renderAnnouncement } from './message';
+import { validateReceipt, renderAnnouncement, type DiscordAnnouncement } from './message';
 import { AnnouncementDelivery } from './delivery';
 
 const CHANNEL = '1565584282389454879';
@@ -12,29 +12,71 @@ export type PublicationOutcome = {
   messageId?: string;
 };
 
+enum AdmissionState {
+  Ledger,
+  SuccessfulRun,
+  Receipt,
+  Delivery,
+  Finished,
+}
+
+type ReleaseAdmission =
+  | { state: AdmissionState.Ledger | AdmissionState.SuccessfulRun | AdmissionState.Receipt; commit: string; key: string }
+  | { state: AdmissionState.Delivery; commit: string; key: string; message: DiscordAnnouncement }
+  | { state: AdmissionState.Finished; result: PublicationOutcome };
+
+enum PollingState {
+  Poll,
+  Wait,
+}
+
 export class ReleaseAnnouncer {
   constructor(private source: PublicationSource, private delivery: AnnouncementDelivery) {}
 
   async processRelease(release: Release, knownRun?: WorkflowRun): Promise<PublicationOutcome> {
+    let admission = this.publicationAdmission(release);
+    for (;;) {
+      switch (admission.state) {
+        case AdmissionState.Finished:
+          return admission.result;
+        case AdmissionState.Ledger:
+          if (this.delivery.hasPublished(admission.key)) {
+            return { outcome: 'already_announced', commit: admission.commit };
+          }
+          admission = { ...admission, state: AdmissionState.SuccessfulRun };
+          break;
+        case AdmissionState.SuccessfulRun: {
+          const run = knownRun ?? await this.source.successfulRun(admission.commit);
+          if (!run || !await this.source.isSuccessful(run, admission.commit)) {
+            return { outcome: 'waiting_for_successful_run', commit: admission.commit };
+          }
+          admission = { ...admission, state: AdmissionState.Receipt };
+          break;
+        }
+        case AdmissionState.Receipt: {
+          const asset = await this.source.receipt(release);
+          const receipt = validateReceipt(asset.value);
+          if (receipt.commit !== admission.commit || receipt.release_id !== admission.commit || receipt.repository !== REPOSITORY ||
+              `v${receipt.version}` !== release.tag_name) {
+            throw new Error('Publication receipt identity differs from its trusted GitHub release');
+          }
+          const message = renderAnnouncement(receipt, { releaseUrl: release.html_url, receiptUrl: asset.url });
+          admission = { ...admission, state: AdmissionState.Delivery, message };
+          break;
+        }
+        case AdmissionState.Delivery: {
+          const result = await this.delivery.publish(admission.key, admission.message);
+          return { outcome: result.created ? 'announced' : 'already_announced', commit: admission.commit, messageId: result.messageId };
+        }
+      }
+    }
+  }
+
+  private publicationAdmission(release: Release): ReleaseAdmission {
     if (!isPublicRelease(release)) {
-      return { outcome: 'waiting_for_publication' };
+      return { state: AdmissionState.Finished, result: { outcome: 'waiting_for_publication' } };
     }
-    const commit = release.target_commitish;
-    const key = `${REPOSITORY}:${commit}`;
-    if (this.delivery.hasPublished(key)) return { outcome: 'already_announced', commit };
-    const run = knownRun ?? await this.source.successfulRun(commit);
-    if (!run || !await this.source.isSuccessful(run, commit)) {
-      return { outcome: 'waiting_for_successful_run', commit };
-    }
-    const asset = await this.source.receipt(release);
-    const receipt = validateReceipt(asset.value);
-    if (receipt.commit !== commit || receipt.release_id !== commit || receipt.repository !== REPOSITORY ||
-        `v${receipt.version}` !== release.tag_name) {
-      throw new Error('Publication receipt identity differs from its trusted GitHub release');
-    }
-    const message = renderAnnouncement(receipt, { releaseUrl: release.html_url, receiptUrl: asset.url });
-    const result = await this.delivery.publish(key, message);
-    return { outcome: result.created ? 'announced' : 'already_announced', commit, messageId: result.messageId };
+    return { state: AdmissionState.Ledger, commit: release.target_commitish, key: `${REPOSITORY}:${release.target_commitish}` };
   }
 
   /** A real workflow event/replay uses the same gate as polling. Failed/PR runs never reach delivery. */
@@ -78,10 +120,19 @@ async function main() {
   }
   if (args[0] === '--once') { await announcer.cycle(); return; }
   report({ outcome: 'ready', repository: REPOSITORY, channel: CHANNEL });
+  let polling = PollingState.Poll;
   for (;;) {
-    try { await announcer.cycle(); }
-    catch (error) { report({ outcome: 'source_error', error: String(error).slice(0, 500) }); }
-    await Bun.sleep(60_000);
+    switch (polling) {
+      case PollingState.Poll:
+        try { await announcer.cycle(); }
+        catch (error) { report({ outcome: 'source_error', error: String(error).slice(0, 500) }); }
+        polling = PollingState.Wait;
+        break;
+      case PollingState.Wait:
+        await Bun.sleep(60_000);
+        polling = PollingState.Poll;
+        break;
+    }
   }
 }
 

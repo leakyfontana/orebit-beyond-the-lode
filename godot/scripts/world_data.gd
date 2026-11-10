@@ -1,6 +1,9 @@
 class_name WorldData
 extends RefCounted
 
+enum ExcavationState { ABSENT, SOLID, HALFWAY, COMPLETED }
+enum TextureLatch { UNCHANGED, HALFWAY_TEXTURE }
+
 # Map coordinates are [x][y], with y increasing downwards. A Unity tile center
 # is (x + .5, -y + .5). Rotation indices map to Unity degrees 90 * (rotation - 2).
 # The renderer must negate those degrees when converting to Godot y-down.
@@ -12,7 +15,12 @@ const RIA_SLAB_RIGHT := -3
 const PVP_HAZARD_SEED_XOR := 0x505650
 const PVP_HAZARD_CHANCE := 8
 var data: GameData
-var blockChangedTexture: bool = false
+var texture_latch := TextureLatch.UNCHANGED
+var blockChangedTexture: bool:
+	get:
+		return texture_latch == TextureLatch.HALFWAY_TEXTURE
+	set(value):
+		texture_latch = TextureLatch.HALFWAY_TEXTURE if value else TextureLatch.UNCHANGED
 var generation_seed: int = 0
 # Co-op-only columns, indexed by x - COOP_SURFACE_LEFT; never serialized in GameData.
 var western_columns: Array = []
@@ -410,7 +418,7 @@ func generate(seed_value: Variant = null) -> void:
 	generation_seed = random.seed_value
 	data.my_map = []
 	halfway_blocks.clear()
-	blockChangedTexture = false
+	texture_latch = TextureLatch.UNCHANGED
 	western_columns.clear()
 	for x in range(data.earthWidth):
 		data.my_map.append(_generate_column(random))
@@ -621,10 +629,31 @@ func getTunnelTileGraphicName(x: int, y: int) -> Dictionary:
 	tilename += _wallValue(x + 1, y + 1)
 	return _tile("DirtConnectors/" + TunnelTiles[tilename], "DirtConnector", 2, "Traversable")
 
+func excavation_state(x: int, y: int) -> ExcavationState:
+	if not inBounds(x, y):
+		return ExcavationState.ABSENT
+	if halfway_blocks.has(Vector2i(x, y)):
+		return ExcavationState.HALFWAY
+	var raw: Array = getRawTile(x, y)
+	if raw.is_empty():
+		return ExcavationState.ABSENT
+	return ExcavationState.COMPLETED if int(raw[0]) == 0 else ExcavationState.SOLID
+
+func _begin_halfway_excavation(cell: Vector2i, raw: Array, original: Dictionary) -> void:
+	halfway_blocks[cell] = original
+	texture_latch = TextureLatch.HALFWAY_TEXTURE
+	raw[0] = 0
+	raw[1] = 0
+
+func _complete_excavation(cell: Vector2i) -> void:
+	# Completion clears the global latch even when another cell remains halfway.
+	# It deliberately does not clear raw map data on its own.
+	texture_latch = TextureLatch.UNCHANGED
+	halfway_blocks.erase(cell)
+
 func getBlockData(x: int, y: int) -> Dictionary:
-	var key: Vector2i = Vector2i(x, y)
-	if inBounds(x, y) and halfway_blocks.has(key):
-		return halfway_blocks[key]
+	if excavation_state(x, y) == ExcavationState.HALFWAY:
+		return halfway_blocks[Vector2i(x, y)]
 	return getTileDataFromLevelData(x, y)
 
 func getBlockNameFromAllTiles(x: int, y: int) -> String:
@@ -651,10 +680,7 @@ func halfwayDigBlock(x: int, y: int, previous_x: int, previous_y: int, desired_o
 	if raw.is_empty() or (x < 0 and original.layer != "Diggable"):
 		return {}
 	original.filename = "BlockHalfwayDug" + data.blockHalfwayDugFilename[Vector2i(original.rotation, desired_orientation)]
-	halfway_blocks[Vector2i(x, y)] = original
-	blockChangedTexture = true
-	raw[0] = 0
-	raw[1] = 0
+	_begin_halfway_excavation(Vector2i(x, y), raw, original)
 	# Original TilesManager intentionally swaps previous_y and previous_x.
 	var refresh: Array[Vector2i] = []
 	if inBounds(previous_y, previous_x) and getBlockData(previous_y, previous_x).layer == "Traversable":
@@ -665,8 +691,7 @@ func digBlock(x: int, y: int) -> Array[Vector2i]:
 	if getRawTile(x, y).is_empty() or (x < 0 and getBlockData(x, y).name == "Pavement"):
 		return []
 	# Does not clear the map: halfwayDigBlock normally did that already.
-	blockChangedTexture = false
-	halfway_blocks.erase(Vector2i(x, y))
+	_complete_excavation(Vector2i(x, y))
 	var changed: Array[Vector2i] = [Vector2i(x, y)]
 	for offset in NEIGHBOURS:
 		var neighbour: Vector2i = Vector2i(x, y) + offset

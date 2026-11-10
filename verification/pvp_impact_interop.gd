@@ -61,16 +61,16 @@ func _run() -> void:
 	# briefly default to the sprite sheet's intact first frame before tick().
 	view.apply_event(snapshot(100.0,102.4))
 	for key in ["impactsrock-100","impactslava-100"]:
-		var sprite: Sprite2D = view.objects[key]
+		var sprite: Sprite2D = view._replicas[key].sprite
 		check(sprite.frame == 7 and sprite.visible, key+" showed intact art on a late impact snapshot")
 	await capture("late-snapshot")
 	view.tick(0.11)
-	check(view.objects.is_empty(), "Impact did not expire at its deadline")
+	check(view._replicas.is_empty(), "Impact did not expire at its deadline")
 	# Server ticks may still carry this impact after local extrapolated expiry.
 	# Recreating it used to show intact frame zero for one render frame.
 	for packet in 3:
 		view.apply_event(snapshot(100.0,102.45))
-		check(view.objects.is_empty(), "Expired impact was recreated from a delayed snapshot")
+		check(view._replicas.is_empty(), "Expired impact was recreated from a delayed snapshot")
 	await capture("expired-delayed-snapshot")
 	# Fresh impacts still play their authored break/splash, then hold the final
 	# pose on every visible blink until removal (without restarting on updates).
@@ -79,19 +79,19 @@ func _run() -> void:
 	var seen_off := false
 	for frame in range(126):
 		view.tick(0.02)
-		for key in view.objects:
-			var sprite: Sprite2D = view.objects[key]
+		for key in view._replicas:
+			var sprite: Sprite2D = view._replicas[key].sprite
 			if view.server_time >= 110.4:
 				check(sprite.frame == 7, key+" reverted from broken art while blinking")
 				seen_on = seen_on or sprite.visible
 				seen_off = seen_off or not sprite.visible
 		if frame % 5 == 0:
 			view.apply_event(snapshot(110.0,110.0+float(frame)*0.02))
-			for key in view.objects:
+			for key in view._replicas:
 				if view.server_time >= 110.4:
-					check(view.objects[key].frame == 7, key+" restarted impact art on a repeated snapshot")
+					check(view._replicas[key].sprite.frame == 7, key+" restarted impact art on a repeated snapshot")
 	check(seen_on and seen_off, "Broken residue did not blink before expiry")
-	check(view.objects.is_empty(), "Final stale snapshot resurrected an expired impact")
+	check(view._replicas.is_empty(), "Final stale snapshot resurrected an expired impact")
 	host.coop.active = false
 	host.free()
 	await process_frame

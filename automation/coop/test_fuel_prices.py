@@ -117,6 +117,23 @@ class FuelProviderTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual((await provider.price())["source"], "aaa")
                 self.assertEqual(provider._fetch.await_count, 2)
 
+    async def test_cancelled_quote_fetch_does_not_block_the_next_consumer(self):
+        started = asyncio.Event()
+
+        async def fetch():
+            started.set()
+            await asyncio.Future()
+
+        self.provider._fetch.side_effect = fetch
+        task = asyncio.create_task(self.provider.price())
+        await started.wait()
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        self.provider._fetch.side_effect = None
+        self.assertEqual((await self.provider.price())["price_per_gallon"], 3.259)
+        self.assertEqual(self.provider._fetch.await_count, 2)
+
     def process(self, raw=None, returncode=0):
         reader = asyncio.StreamReader()
         if raw is not None:

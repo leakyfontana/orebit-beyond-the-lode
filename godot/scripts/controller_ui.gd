@@ -7,13 +7,23 @@ const ITEM_NAMES = PortPlayer.ITEM_NAMES
 const REPEAT_DELAY := 0.38
 const REPEAT_INTERVAL := 0.12
 
+enum NavigationState { GAMEPLAY, MENU }
+enum FocusOwner { ROOT, POPUP, HELP, PANEL }
+enum DismissOwner { NONE, POPUP, MAIN_MENU, PANEL }
+enum RepeatState { IDLE, INITIAL_DELAY, REPEATING }
+
 var ui: Node
 var _controls: Array[Control] = []
 var _original_focus: Dictionary = {}
 var _focus_scopes: Dictionary[Control, Control] = {}
 var _candidates: Array[Control] = []
 var _scope: Control
-var _menu_open := false
+var _focus_target: Control
+var _navigation_state := NavigationState.GAMEPLAY
+var _focus_owner := FocusOwner.ROOT
+var _repeat_state := RepeatState.IDLE
+var _dismiss_reference: String
+var _dismiss_script: String
 var _direction := Vector2.ZERO
 var _repeat_left := 0.0
 var _hint: Label
@@ -80,20 +90,20 @@ func sync_state(delta: float = 0.0) -> void:
 	var gameplay: bool = ui.host.scene_name == "Game" and ui.host.player_alive and not ui.host.paused and ui.host.pending_scene.is_empty() and not get_tree().paused
 	GameInput.set_gameplay_available(gameplay)
 	if ui.host.coop != null and ui.host.coop.lobby != null and (ui.host.coop.lobby.modal or ui.host.coop.lobby.leaderboard.modal):
-		_menu_open = true
+		_navigation_state = NavigationState.MENU
 		_scope = null
 		_candidates.clear()
 		_hint_panel.hide()
 		_highlight.hide()
 		return
-	_menu_open = not gameplay
+	_navigation_state = NavigationState.GAMEPLAY if gameplay else NavigationState.MENU
 	var next_scope := _active_scope()
 	var scope_changed := next_scope != _scope
 	_scope = next_scope
 	_candidates.clear()
 	for control in _controls:
 		var in_scope: bool = _scope == control or _scope.is_ancestor_of(control) or _focus_scopes.get(control) == _scope
-		var eligible: bool = _menu_open and control.is_visible_in_tree() and in_scope
+		var eligible: bool = _navigation_state == NavigationState.MENU and control.is_visible_in_tree() and in_scope
 		if control is BaseButton:
 			eligible = eligible and not control.disabled
 		elif control is Slider:
@@ -105,43 +115,47 @@ func sync_state(delta: float = 0.0) -> void:
 		else:
 			control.focus_mode = _original_focus[control]
 	var focused := get_viewport().gui_get_focus_owner()
-	if GameInput.controller_active and _menu_open:
+	if GameInput.controller_active and _navigation_state == NavigationState.MENU:
 		if scope_changed or focused == null or not _candidates.has(focused):
 			_focus_first()
-	elif focused != null and (not focused.is_visible_in_tree() or (GameInput.controller_active and not _menu_open)):
+	elif focused != null and (not focused.is_visible_in_tree() or (GameInput.controller_active and _navigation_state == NavigationState.GAMEPLAY)):
 		focused.release_focus()
 	if scope_changed:
-		_direction = Vector2.ZERO
-		_repeat_left = REPEAT_DELAY
-	if GameInput.controller_active and _menu_open:
+		_reset_repeat()
+	if GameInput.controller_active and _navigation_state == NavigationState.MENU:
 		var direction := GameInput.controller_direction()
 		if direction == Vector2.ZERO:
 			_direction = Vector2.ZERO
-		elif direction != _direction:
+			_repeat_state = RepeatState.IDLE
+		elif _repeat_state == RepeatState.IDLE or direction != _direction:
 			_direction = direction
+			_repeat_state = RepeatState.INITIAL_DELAY
 			_repeat_left = REPEAT_DELAY
 			_navigate(direction)
 		else:
-			_repeat_left -= delta
-			if _repeat_left <= 0.0:
-				_repeat_left = REPEAT_INTERVAL
-				_navigate(direction)
+			_advance_repeat(delta)
 	_update_hint(gameplay)
 	_update_highlight()
 
 func _active_scope() -> Control:
+	_focus_owner = _resolve_focus_owner()
+	return (ui.host.ui_root as Control) if _focus_owner == FocusOwner.ROOT else _focus_target
+
+func _resolve_focus_owner() -> FocusOwner:
 	# A popup or help overlay owns focus, not the still-visible menu behind it.
 	for script in ["PopupManager", "HelpUUIManager"]:
 		for id in ui.script_components.get(script, []):
 			var panel := ui.bridge.node(id) as Control
 			if panel != null and panel.is_visible_in_tree():
-				return panel
+				_focus_target = panel
+				return FocusOwner.POPUP if script == "PopupManager" else FocusOwner.HELP
 	for script in ui.PANEL_SCRIPTS:
 		if ui.script_components.has(script):
 			var panel := ui.bridge.node(ui._panel(script)) as Control
 			if panel != null and panel.is_visible_in_tree():
-				return panel
-	return ui.host.ui_root as Control
+				_focus_target = panel
+				return FocusOwner.PANEL
+	return FocusOwner.ROOT
 
 func _focus_first() -> void:
 	var focused := get_viewport().gui_get_focus_owner()
@@ -163,21 +177,21 @@ func _controller_event(event: InputEvent) -> void:
 	if event.is_action_pressed(&"controller_back"):
 		_close_current()
 	elif event.is_action_pressed(&"controller_pause"):
-		if _menu_open:
+		if _navigation_state == NavigationState.MENU:
 			_close_current()
 		else:
 			ui.open_options()
 	elif event.is_action_pressed(&"controller_inventory"):
-		if not _menu_open:
+		if _navigation_state == NavigationState.GAMEPLAY:
 			ui.open_inventory()
 	elif event.is_action_pressed(&"controller_accept"):
-		if _menu_open:
+		if _navigation_state == NavigationState.MENU:
 			var focused := get_viewport().gui_get_focus_owner()
 			if focused is BaseButton and _candidates.has(focused) and not focused.disabled:
 				focused.pressed.emit()
 			elif focused is ScrollContainer:
 				_focus_next(focused, 1)
-	elif not _menu_open:
+	elif _navigation_state == NavigationState.GAMEPLAY:
 		if event.is_action_pressed(&"controller_previous"):
 			GameInput.selected_consumable = posmod(GameInput.selected_consumable - 1, ITEM_NAMES.size())
 		elif event.is_action_pressed(&"controller_next"):
@@ -186,20 +200,30 @@ func _controller_event(event: InputEvent) -> void:
 			ui.host.player.use_item(GameInput.selected_consumable)
 	sync_state()
 
-func _close_current() -> void:
+func _dismiss_owner() -> DismissOwner:
+	# Back dismisses one priority owner; Escape independently broadcasts to panels.
 	for id in ui.script_components.get("PopupManager", []):
 		if ui._visible(id):
-			ui.bridge.set_active(id, false)
-			return
+			_dismiss_reference = str(id)
+			return DismissOwner.POPUP
 	if ui.script_components.has("MainMenuManager"):
-		var help: Variant = ui._properties("MainMenuManager").get("helpUI", {})
-		if ui._visible(help):
-			ui.closeInstructions()
-		return
+		return DismissOwner.MAIN_MENU
 	for script in ui.PANEL_SCRIPTS:
 		if ui.script_components.has(script) and ui._visible(ui._panel(script)):
-			ui._close_panel(script)
-			return
+			_dismiss_script = script
+			return DismissOwner.PANEL
+	return DismissOwner.NONE
+
+func _close_current() -> void:
+	match _dismiss_owner():
+		DismissOwner.POPUP:
+			ui.bridge.set_active(_dismiss_reference, false)
+		DismissOwner.MAIN_MENU:
+			var help: Variant = ui._properties("MainMenuManager").get("helpUI", {})
+			if ui._visible(help):
+				ui.closeInstructions()
+		DismissOwner.PANEL:
+			ui._close_panel(_dismiss_script)
 
 func _navigate(direction: Vector2) -> void:
 	var focused := get_viewport().gui_get_focus_owner()
@@ -280,15 +304,32 @@ func _update_hint(gameplay: bool) -> void:
 
 func _update_highlight() -> void:
 	var focused := get_viewport().gui_get_focus_owner()
-	_highlight.visible = GameInput.controller_active and _menu_open and focused != null and _candidates.has(focused)
+	_highlight.visible = GameInput.controller_active and _navigation_state == NavigationState.MENU and focused != null and _candidates.has(focused)
 	if _highlight.visible:
 		var rect: Rect2 = ui.host.ui_root.get_global_transform().affine_inverse() * focused.get_global_rect()
 		_highlight.position = rect.position - Vector2.ONE * 4
 		_highlight.size = rect.size + Vector2.ONE * 8
 
-func _connection_changed() -> void:
+func _advance_repeat(delta: float) -> void:
+	_repeat_left -= delta
+	if _repeat_left > 0.0:
+		return
+	match _repeat_state:
+		RepeatState.INITIAL_DELAY:
+			_repeat_state = RepeatState.REPEATING
+			_repeat_left = REPEAT_INTERVAL
+			_navigate(_direction)
+		RepeatState.REPEATING:
+			_repeat_left = REPEAT_INTERVAL
+			_navigate(_direction)
+
+func _reset_repeat() -> void:
+	_repeat_state = RepeatState.IDLE
 	_direction = Vector2.ZERO
 	_repeat_left = REPEAT_DELAY
+
+func _connection_changed() -> void:
+	_reset_repeat()
 	sync_state()
 
 func _exit_tree() -> void:

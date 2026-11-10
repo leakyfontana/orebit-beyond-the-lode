@@ -1,14 +1,29 @@
 class_name TerrainView
 extends Node2D
 
+enum ColliderValidity { INVALID, CURRENT }
+enum ColliderResidency { OUTSIDE_WINDOW, MISSING, RESIDENT }
+
 const FUEL_STATION_TILES := ["Shop125", "Shop126", "Shop127", "Shop128", "Shop129", "Shop130"]
+# Preserve the old observable invalid-center value without storing it as state.
+const LEGACY_INVALID_CENTER := Vector2i(-1000, -1000)
 
 var world: WorldData
 var data: GameData
 var tile_layer: TileMapLayer
 var colliders: Dictionary = {}
 var tile_coordinates: Dictionary
-var physics_center := Vector2i(-1000, -1000)
+var _physics_center := Vector2i.ZERO
+var physics_center: Vector2i:
+	get:
+		return LEGACY_INVALID_CENTER if collider_validity == ColliderValidity.INVALID else _physics_center
+	set(value):
+		if value == LEGACY_INVALID_CENTER:
+			_invalidate_colliders()
+		else:
+			_physics_center = value
+			collider_validity = ColliderValidity.CURRENT
+var collider_validity := ColliderValidity.INVALID
 var physics_body: StaticBody2D
 var tile_shape := RectangleShape2D.new()
 
@@ -43,29 +58,43 @@ func configure(world_data: WorldData, state: GameData, scene_bridge: SceneBridge
 func follow(position_unity: Vector2) -> void:
 	var center := Vector2i(floori(position_unity.x), ceili(-position_unity.y))
 	if center != physics_center:
-		physics_center = center
-		_update_colliders()
+		_publish_physics_center(center)
 
 func refresh(cells: Array) -> void:
 	for cell in cells:
-		if colliders.has(cell):
-			colliders[cell].queue_free()
-			colliders.erase(cell)
+		_retire_collider(cell)
 		_update_tile(cell)
-	physics_center = Vector2i(-1000, -1000)
+	_invalidate_colliders()
+
+func _invalidate_colliders() -> void:
+	collider_validity = ColliderValidity.INVALID
+
+func _publish_physics_center(center: Vector2i) -> void:
+	_physics_center = center
+	collider_validity = ColliderValidity.CURRENT
+	_update_colliders()
+
+func collider_residency(cell: Vector2i) -> ColliderResidency:
+	if absi(cell.x - physics_center.x) > 12 or absi(cell.y - physics_center.y) > 12:
+		return ColliderResidency.OUTSIDE_WINDOW
+	return ColliderResidency.RESIDENT if colliders.has(cell) else ColliderResidency.MISSING
+
+func _retire_collider(cell: Vector2i) -> void:
+	if colliders.has(cell):
+		colliders[cell].queue_free()
+		colliders.erase(cell)
 
 func _solid(cell: Vector2i) -> bool:
 	return world.getBlockData(cell.x, cell.y).get("layer", "Traversable") != "Traversable"
 
 func _update_colliders() -> void:
 	for cell in colliders.keys():
-		if absi(cell.x - physics_center.x) > 12 or absi(cell.y - physics_center.y) > 12:
-			colliders[cell].queue_free()
-			colliders.erase(cell)
+		if collider_residency(cell) == ColliderResidency.OUTSIDE_WINDOW:
+			_retire_collider(cell)
 	for x in range(maxi(world.surface_left(), physics_center.x - 12), mini(data.earthWidth, physics_center.x + 13)):
 		for y in range(maxi(0, physics_center.y - 12), mini(data.earthHeight, physics_center.y + 13)):
 			var cell := Vector2i(x, y)
-			if not colliders.has(cell) and _solid(cell):
+			if collider_residency(cell) == ColliderResidency.MISSING and _solid(cell):
 				var shape := CollisionShape2D.new()
 				shape.shape = tile_shape
 				shape.position = Vector2(x + 0.5, y - 0.5)

@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 from collections import OrderedDict
 from dataclasses import dataclass, field
+from enum import Enum, auto
 import gzip
 import hashlib
 import json
@@ -77,6 +78,51 @@ def unique_object(pairs):
     return result
 
 
+class TransitionOutcome(Enum):
+    RUNNING = auto()
+    TERMINATED = auto()
+    TRUNCATED = auto()
+
+    @classmethod
+    def validate(cls, record, mode):
+        terminated, truncated, reason = record["terminated"], record["truncated"], record["reason"]
+        if type(terminated) is not bool or type(truncated) is not bool or not isinstance(reason, str) or reason not in REASONS or (terminated and truncated):
+            invalid()
+        outcome = cls.TERMINATED if terminated else cls.TRUNCATED if truncated else cls.RUNNING
+        terminal = (mode == "private" and reason == "death") or (mode == "pvp" and reason == "round_end")
+        if (outcome is cls.TERMINATED and not terminal) or (reason == "round_end" and outcome is not cls.TERMINATED):
+            invalid()
+        if (outcome is cls.RUNNING) != (reason == "running"):
+            invalid()
+        return outcome
+
+
+class ChainState(Enum):
+    CHECKPOINT = auto()
+    CONTINUING = auto()
+    TERMINAL = auto()
+
+
+@dataclass
+class TransitionChain:
+    checkpoint: dict
+    state: ChainState = ChainState.CHECKPOINT
+    previous: dict | None = None
+
+    def validate_link(self, record):
+        if self.state is ChainState.CHECKPOINT:
+            if any(record[key] != self.checkpoint[key] for key in ("sequence", "tick", "observation")):
+                invalid()
+        elif self.state is ChainState.TERMINAL:
+            invalid()
+        elif record["sequence"] != self.previous["sequence"] + 1 or record["tick"] != self.previous["next_tick"] or record["observation"] != self.previous["next_observation"]:
+            invalid()
+
+    def advance(self, record, outcome):
+        self.previous = record
+        self.state = ChainState.CONTINUING if outcome is TransitionOutcome.RUNNING else ChainState.TERMINAL
+
+
 def _records(raw, session_id, chunk_index):
     if not isinstance(session_id, str) or not HEX32.fullmatch(session_id):
         invalid()
@@ -109,7 +155,7 @@ def _records(raw, session_id, chunk_index):
     number(checkpoint["sequence"], 0, 1e15, True)
     number(checkpoint["tick"], 0, 1e15, True)
     observation(checkpoint["observation"])
-    previous = None
+    chain = TransitionChain(checkpoint)
     for record in records[1:]:
         keys(record, ("type", "sequence", "tick", "next_tick", "observation", "action", "next_observation", "reward_components", "terminated", "truncated", "reason", "events"))
         if record["type"] != "transition":
@@ -120,11 +166,7 @@ def _records(raw, session_id, chunk_index):
             invalid()
         observation(record["observation"])
         observation(record["next_observation"])
-        if previous is None:
-            if any(record[key] != checkpoint[key] for key in ("sequence", "tick", "observation")):
-                invalid()
-        elif previous["terminated"] or previous["truncated"] or record["sequence"] != previous["sequence"] + 1 or record["tick"] != previous["next_tick"] or record["observation"] != previous["next_observation"]:
-            invalid()
+        chain.validate_link(record)
         action = record["action"]
         keys(action, ("movement", "commands"))
         if not isinstance(action["movement"], list) or len(action["movement"]) != 2 or not isinstance(action["commands"], list) or len(action["commands"]) > 64:
@@ -141,14 +183,7 @@ def _records(raw, session_id, chunk_index):
         keys(record["reward_components"], ("money", "hp", "fuel"))
         for component in record["reward_components"].values():
             number(component)
-        if type(record["terminated"]) is not bool or type(record["truncated"]) is not bool or not isinstance(record["reason"], str) or record["reason"] not in REASONS or (record["terminated"] and record["truncated"]):
-            invalid()
-        terminal = ((manifest["mode"] == "private" and record["reason"] == "death")
-                    or (manifest["mode"] == "pvp" and record["reason"] == "round_end"))
-        if (record["terminated"] and not terminal) or (record["reason"] == "round_end" and not record["terminated"]):
-            invalid()
-        if (record["terminated"] or record["truncated"]) == (record["reason"] == "running"):
-            invalid()
+        outcome = TransitionOutcome.validate(record, manifest["mode"])
         if not isinstance(record["events"], list) or len(record["events"]) > 128:
             invalid()
         for event in record["events"]:
@@ -170,7 +205,7 @@ def _records(raw, session_id, chunk_index):
                     number(event[name], 0, 1e15, True)
             if kind in ("gap", "server_gap") and event["first_sequence"] > event["last_sequence"]:
                 invalid()
-        previous = record
+        chain.advance(record, outcome)
     return records
 
 
@@ -201,6 +236,30 @@ def decode_chunk(body, session_id, chunk_index):
     return _records(decompress_chunk(body), session_id, chunk_index)
 
 
+class CapabilityState(Enum):
+    ACTIVE = auto()
+    EXPIRED = auto()
+    MISSING = auto()
+
+    @classmethod
+    def at(cls, capability, now):
+        # Registry insertion/removal are issuance/pruning; expiry is clock-derived.
+        if capability is None:
+            return cls.MISSING
+        return cls.EXPIRED if capability.expires <= now else cls.ACTIVE
+
+
+class QuotaWindowState(Enum):
+    ELAPSED = auto()
+    ACCEPTING = auto()
+    EXCEEDED = auto()
+
+
+class AuthorityPreparationState(Enum):
+    RESERVABLE = auto()
+    GAP = auto()
+
+
 @dataclass
 class Capability:
     token_hash: bytes
@@ -210,6 +269,146 @@ class Capability:
     server_sequence: int = 0
     window: float = 0
     requests: int = 0
+
+    def quota_state_at(self, now):
+        if now - self.window >= 60:
+            return QuotaWindowState.ELAPSED
+        return QuotaWindowState.EXCEEDED if self.requests > 120 else QuotaWindowState.ACCEPTING
+
+    def charge(self, now):
+        if self.quota_state_at(now) is QuotaWindowState.ELAPSED:
+            self.window, self.requests = now, 0
+        self.requests += 1
+        if self.quota_state_at(now) is QuotaWindowState.EXCEEDED:
+            raise CaptureError("capture_rate_limited", "Capture request quota exceeded.", 429)
+
+    def authority_state(self, size):
+        return AuthorityPreparationState.GAP if self.stored_bytes + size > MAX_SESSION_BYTES else AuthorityPreparationState.RESERVABLE
+
+    def reserve_authority(self, encoded):
+        # A rejected byte reservation still consumes its authority sequence.
+        self.server_sequence += 1
+        if self.authority_state(len(encoded)) is AuthorityPreparationState.GAP:
+            return self.server_sequence, None
+        self.stored_bytes += len(encoded)
+        return self.server_sequence, encoded
+
+
+class ChunkWriteState(Enum):
+    CANDIDATE = auto()
+    ACCEPTED = auto()
+    DUPLICATE = auto()
+    CONFLICT = auto()
+    CHUNK_LIMIT = auto()
+    RESERVED = auto()
+    WRITING = auto()
+    COMMITTED = auto()
+    REFUNDED = auto()
+
+
+@dataclass
+class ChunkWrite:
+    capability: Capability
+    index: int
+    incoming_hash: bytes
+    state: ChunkWriteState = ChunkWriteState.CANDIDATE
+    size: int = 0
+
+    def admit(self):
+        assert self.state is ChunkWriteState.CANDIDATE
+        if self.index in self.capability.chunks:
+            self.state = ChunkWriteState.DUPLICATE if secrets.compare_digest(self.capability.chunks[self.index], self.incoming_hash) else ChunkWriteState.CONFLICT
+        elif len(self.capability.chunks) >= MAX_CHUNKS:
+            self.state = ChunkWriteState.CHUNK_LIMIT
+        else:
+            self.state = ChunkWriteState.ACCEPTED
+        if self.state is ChunkWriteState.CONFLICT:
+            raise CaptureError("capture_conflict", "This chunk index already contains different bytes.", 409)
+        if self.state is ChunkWriteState.CHUNK_LIMIT:
+            raise CaptureError("capture_quota", "Capture session chunk quota exceeded.", 429)
+
+    def reserve(self, size):
+        assert self.state is ChunkWriteState.ACCEPTED
+        if self.capability.stored_bytes + size > MAX_SESSION_BYTES:
+            raise CaptureError("capture_quota", "Capture session byte quota exceeded.", 429)
+        self.size = size
+        self.capability.stored_bytes += size
+        self.state = ChunkWriteState.RESERVED
+
+    def begin_write(self):
+        assert self.state is ChunkWriteState.RESERVED
+        self.state = ChunkWriteState.WRITING
+
+    def refund(self):
+        assert self.state is ChunkWriteState.WRITING
+        self.capability.stored_bytes -= self.size
+        self.state = ChunkWriteState.REFUNDED
+
+    def commit(self):
+        assert self.state is ChunkWriteState.WRITING
+        self.capability.chunks[self.index] = self.incoming_hash
+        self.state = ChunkWriteState.COMMITTED
+
+
+class PublishState(Enum):
+    PENDING = auto()
+    FILE_SYNCED = auto()
+    RENAMED = auto()
+    DURABLE = auto()
+
+
+class DescriptorState(Enum):
+    CLOSED = auto()
+    OWNED = auto()
+    STREAM = auto()
+
+
+@dataclass
+class AtomicPublish:
+    directory: Path
+    filename: str
+    temporary: Path = field(init=False)
+    state: PublishState = PublishState.PENDING
+    descriptor_state: DescriptorState = DescriptorState.CLOSED
+    fd: int = -1
+
+    def __post_init__(self):
+        self.temporary = self.directory / (".pending-" + secrets.token_hex(16))
+
+    def write(self, body):
+        assert self.state is PublishState.PENDING and self.descriptor_state is DescriptorState.CLOSED
+        self.fd = os.open(self.temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        self.descriptor_state = DescriptorState.OWNED
+        try:
+            with os.fdopen(self.fd, "wb") as output:
+                self.descriptor_state = DescriptorState.STREAM
+                output.write(body)
+                output.flush()
+                os.fsync(output.fileno())
+        finally:
+            if self.descriptor_state is DescriptorState.STREAM:
+                self.descriptor_state = DescriptorState.CLOSED
+        self.state = PublishState.FILE_SYNCED
+
+    def publish(self):
+        assert self.state is PublishState.FILE_SYNCED
+        os.replace(self.temporary, self.directory / self.filename)
+        self.state = PublishState.RENAMED
+
+    def sync_directory(self):
+        assert self.state is PublishState.RENAMED
+        directory_fd = os.open(self.directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+        self.state = PublishState.DURABLE
+
+    def cleanup(self):
+        if self.descriptor_state is DescriptorState.OWNED:
+            os.close(self.fd)
+            self.descriptor_state = DescriptorState.CLOSED
+        self.temporary.unlink(missing_ok=True)
 
 
 class CaptureStore:
@@ -237,7 +436,7 @@ class CaptureStore:
     def _prune(self):
         now = time.monotonic()
         for key in list(self.sessions):
-            if self.sessions[key].expires <= now:
+            if CapabilityState.at(self.sessions[key], now) is CapabilityState.EXPIRED:
                 del self.sessions[key]
 
     def disk_guard(self, incoming):
@@ -267,45 +466,27 @@ class CaptureStore:
             if not isinstance(session, str) or not HEX32.fullmatch(session) or not isinstance(token, str) or not re.fullmatch(r"[A-Za-z0-9_-]{20,200}", token):
                 raise CaptureError("capture_unauthorized", "A valid capture capability is required.", 401)
             capability = self.sessions.get(session)
-            if capability is None or capability.expires <= time.monotonic() or not secrets.compare_digest(capability.token_hash, hashlib.sha256(token.encode()).digest()):
+            if CapabilityState.at(capability, time.monotonic()) is not CapabilityState.ACTIVE or not secrets.compare_digest(capability.token_hash, hashlib.sha256(token.encode()).digest()):
                 raise CaptureError("capture_unauthorized", "A valid capture capability is required.", 401)
             return capability
 
     def charge(self, session, token):
         with self.lock:
             capability = self.authenticate(session, token)
-            now = time.monotonic()
-            if now - capability.window >= 60:
-                capability.window, capability.requests = now, 0
-            capability.requests += 1
-            if capability.requests > 120:
-                raise CaptureError("capture_rate_limited", "Capture request quota exceeded.", 429)
+            capability.charge(time.monotonic())
 
     def _persist(self, directory, filename, body):
         self._directory(self.root)
         self._directory(self.root / directory.relative_to(self.root).parts[0])
         self._directory(directory)
         self.disk_guard(len(body) + 4096)
-        target = directory / filename
-        temporary = directory / (".pending-" + secrets.token_hex(16))
-        fd = None
+        publication = AtomicPublish(directory, filename)
         try:
-            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
-            with os.fdopen(fd, "wb") as output:
-                fd = None
-                output.write(body)
-                output.flush()
-                os.fsync(output.fileno())
-            os.replace(temporary, target)
-            directory_fd = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
+            publication.write(body)
+            publication.publish()
+            publication.sync_directory()
         finally:
-            if fd is not None:
-                os.close(fd)
-            temporary.unlink(missing_ok=True)
+            publication.cleanup()
 
     def ingest(self, session, token, index, body):
         # Serialize uploads, not game packets: validation and fsync never hold
@@ -315,29 +496,25 @@ class CaptureStore:
                 capability = self.authenticate(session, token)
                 if type(index) is not int or not 0 <= index <= 99999999:
                     invalid()
-                incoming_hash = hashlib.sha256(body).digest()
-                if index in capability.chunks:
-                    if secrets.compare_digest(capability.chunks[index], incoming_hash):
-                        return {"status": "stored", "chunk_index": index, "duplicate": True}
-                    raise CaptureError("capture_conflict", "This chunk index already contains different bytes.", 409)
-                if len(capability.chunks) >= MAX_CHUNKS:
-                    raise CaptureError("capture_quota", "Capture session chunk quota exceeded.", 429)
+                transaction = ChunkWrite(capability, index, hashlib.sha256(body).digest())
+                transaction.admit()
+                if transaction.state is ChunkWriteState.DUPLICATE:
+                    return {"status": "stored", "chunk_index": index, "duplicate": True}
             encoded = gzip.compress(canonical(decode_chunk(body, session, index)), compresslevel=6, mtime=0)
             with self.lock:
-                if capability.stored_bytes + len(encoded) > MAX_SESSION_BYTES:
-                    raise CaptureError("capture_quota", "Capture session byte quota exceeded.", 429)
-                capability.stored_bytes += len(encoded)
+                transaction.reserve(len(encoded))
             try:
                 with self.disk_lock:
+                    transaction.begin_write()
                     self._persist(self.root / session, f"{index:08d}.jsonl.gz", encoded)
             except (OSError, CaptureError) as error:
                 with self.lock:
-                    capability.stored_bytes -= len(encoded)
+                    transaction.refund()
                 if isinstance(error, CaptureError):
                     raise
                 raise CaptureError("capture_unavailable", "Capture storage is temporarily unavailable.", 503) from None
             with self.lock:
-                capability.chunks[index] = incoming_hash
+                transaction.commit()
             return {"status": "stored", "chunk_index": index, "duplicate": False}
 
     def prepare_authority(self, session, message, request_context=None):
@@ -345,7 +522,7 @@ class CaptureStore:
         with self.lock:
             capability = self.sessions.get(session)
             packet = message.get("type")
-            if capability is None or capability.expires <= time.monotonic() or packet not in PACKETS:
+            if CapabilityState.at(capability, time.monotonic()) is not CapabilityState.ACTIVE or packet not in PACKETS:
                 return None
             data = {}
             for key in ("x", "y", "state_revision", "motion_seq", "seed", "round", "tick"):
@@ -385,11 +562,7 @@ class CaptureStore:
             if type(motion_seq) is int and 0 <= motion_seq <= 1e15:
                 record["motion_seq"] = motion_seq
             encoded = canonical([record])
-            capability.server_sequence += 1
-            if capability.stored_bytes + len(encoded) > MAX_SESSION_BYTES:
-                return capability.server_sequence, None
-            capability.stored_bytes += len(encoded)
-            return capability.server_sequence, encoded
+            return capability.reserve_authority(encoded)
 
     def persist_authority(self, session, first_sequence, last_sequence, raw):
         with self.disk_lock:

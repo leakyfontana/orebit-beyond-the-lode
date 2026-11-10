@@ -32,14 +32,68 @@ const CONTROLLER_ACTIONS: Array[StringName] = [
 	&"controller_inventory", &"controller_pause", &"controller_accept", &"controller_back",
 ]
 
+enum DeviceMode { POINTER, CONTROLLER }
+enum MovementOwner { KEYBOARD, TOUCH, CONTROLLER, UNAVAILABLE }
+enum FocusState { FOCUSED, UNFOCUSED }
+enum GameplayState { UNAVAILABLE, AVAILABLE }
+enum MovementState { READY, WAITING_FOR_NEUTRAL }
+enum ButtonState { HELD, BLOCKED_UNTIL_RELEASE, RELEASED }
+enum ConsumableCursor { FIRST, SECOND, THIRD, FOURTH, FIFTH, SIXTH }
+
 static var _allow_mouse_steering: bool = not (OS.has_feature("mobile") or OS.has_feature("web_ios") or OS.has_feature("web_android")) and not OS.get_cmdline_user_args().has("--touch-controls")
-static var controller_active := false
-static var selected_consumable := 0
-static var _focused := true
-static var _gameplay_available := false
-static var _movement_ready := true
-static var _held_buttons: Dictionary = {}
-static var _blocked_buttons: Dictionary = {}
+static var device_mode := DeviceMode.POINTER
+static var consumable_cursor := ConsumableCursor.FIRST
+static var focus_state := FocusState.FOCUSED
+static var gameplay_state := GameplayState.UNAVAILABLE
+static var movement_state := MovementState.READY
+static var _button_states: Dictionary = {}
+static var _movement_vector := Vector2.ZERO
+
+static var controller_active: bool:
+	get:
+		return device_mode == DeviceMode.CONTROLLER
+	set(value):
+		device_mode = DeviceMode.CONTROLLER if value else DeviceMode.POINTER
+
+static var _focused: bool:
+	get:
+		return focus_state == FocusState.FOCUSED
+	set(value):
+		focus_state = FocusState.FOCUSED if value else FocusState.UNFOCUSED
+
+static var _gameplay_available: bool:
+	get:
+		return gameplay_state == GameplayState.AVAILABLE
+	set(value):
+		gameplay_state = GameplayState.AVAILABLE if value else GameplayState.UNAVAILABLE
+
+static var _movement_ready: bool:
+	get:
+		return movement_state == MovementState.READY
+	set(value):
+		movement_state = MovementState.READY if value else MovementState.WAITING_FOR_NEUTRAL
+
+static var selected_consumable: int:
+	get:
+		return consumable_cursor
+	set(value):
+		consumable_cursor = value as ConsumableCursor
+
+# Diagnostic views only; the event path owns the single button-state map.
+static var _held_buttons: Dictionary:
+	get:
+		var buttons: Dictionary = {}
+		for key in _button_states:
+			buttons[key] = true
+		return buttons
+
+static var _blocked_buttons: Dictionary:
+	get:
+		var buttons: Dictionary = {}
+		for key in _button_states:
+			if _button_states[key] == ButtonState.BLOCKED_UNTIL_RELEASE:
+				buttons[key] = true
+		return buttons
 
 static func axis_raw(axis_name: String) -> float:
 	var axes := _movement_axes()
@@ -51,6 +105,14 @@ static func axis_raw(axis_name: String) -> float:
 	return 0.0
 
 static func _movement_axes() -> Vector2:
+	match _resolve_movement_owner():
+		MovementOwner.KEYBOARD, MovementOwner.TOUCH:
+			return _movement_vector
+		MovementOwner.CONTROLLER:
+			return controller_direction()
+	return Vector2.ZERO
+
+static func _resolve_movement_owner() -> MovementOwner:
 	var left := _direction_pressed(&"move_left", KEY_LEFT, KEY_A)
 	var right := _direction_pressed(&"move_right", KEY_RIGHT, KEY_D)
 	var up := _direction_pressed(&"move_up", KEY_UP, KEY_W)
@@ -58,16 +120,18 @@ static func _movement_axes() -> Vector2:
 	# Held keyboard controls take precedence as a complete digital vector,
 	# retaining opposite-key cancellation and source down-before-side diagonals.
 	if left or right or up or down:
-		return Vector2(int(right) - int(left), int(up) - int(down))
+		_movement_vector = Vector2(int(right) - int(left), int(up) - int(down))
+		return MovementOwner.KEYBOARD
 	var touch := Vector2(
 		Input.get_action_strength(&"touch_move_right") - Input.get_action_strength(&"touch_move_left"),
 		Input.get_action_strength(&"touch_move_up") - Input.get_action_strength(&"touch_move_down")
 	)
 	if touch != Vector2.ZERO:
-		return _sectors(touch)
+		_movement_vector = _sectors(touch)
+		return MovementOwner.TOUCH
 	if not _focused or not _gameplay_available or not _movement_ready:
-		return Vector2.ZERO
-	return controller_direction()
+		return MovementOwner.UNAVAILABLE
+	return MovementOwner.CONTROLLER
 
 static func _sectors(value: Vector2) -> Vector2:
 	var threshold := maxf(absf(value.x), absf(value.y)) * TOUCH_DIAGONAL_RATIO
@@ -102,14 +166,15 @@ static func mouse_steering_allowed() -> bool:
 	return _allow_mouse_steering and not controller_active
 
 static func cancel_controller_controls() -> void:
-	_movement_ready = false
-	for key in _held_buttons:
-		_blocked_buttons[key] = true
+	movement_state = MovementState.WAITING_FOR_NEUTRAL
+	for key in _button_states:
+		_button_states[key] = ButtonState.BLOCKED_UNTIL_RELEASE
 
 static func set_gameplay_available(available: bool) -> void:
-	if available != _gameplay_available:
+	var next := GameplayState.AVAILABLE if available else GameplayState.UNAVAILABLE
+	if next != gameplay_state:
 		cancel_controller_controls()
-		_gameplay_available = available
+		gameplay_state = next
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -124,13 +189,13 @@ func _ready() -> void:
 
 func _process(_delta: float) -> void:
 	if _focused and _controller_raw().length() <= CONTROLLER_DEADZONE:
-		_movement_ready = true
+		movement_state = MovementState.READY
 
 func _input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and not event.canceled and event.device != InputEvent.DEVICE_ID_EMULATION:
-		controller_active = false
+		device_mode = DeviceMode.POINTER
 	elif event is InputEventMouseMotion and event.device != InputEvent.DEVICE_ID_EMULATION and event.relative.length_squared() > 0.0:
-		controller_active = false
+		device_mode = DeviceMode.POINTER
 	if not (event is InputEventJoypadButton or event is InputEventJoypadMotion):
 		return
 	# Own joypad events before GUI defaults (notably built-in ui_accept's B mapping).
@@ -139,45 +204,43 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventJoypadButton:
 		var key := Vector2i(event.device, event.button_index)
 		if not event.pressed:
-			_held_buttons.erase(key)
-			_blocked_buttons.erase(key)
+			_button_states.erase(key)
 			controller_event.emit(event)
 			return
-		if _held_buttons.has(key):
+		match _button_states.get(key, ButtonState.RELEASED):
+			ButtonState.HELD, ButtonState.BLOCKED_UNTIL_RELEASE:
+				return
+		_button_states[key] = ButtonState.HELD
+		if not _focused:
 			return
-		_held_buttons[key] = true
-		if not _focused or _blocked_buttons.has(key):
-			return
-		controller_active = true
+		device_mode = DeviceMode.CONTROLLER
 	elif not _focused:
 		return
 	elif absf(event.axis_value) > CONTROLLER_DEADZONE:
-		controller_active = true
+		device_mode = DeviceMode.CONTROLLER
 	controller_event.emit(event)
 
 func _joy_connection_changed(device: int, connected: bool) -> void:
 	cancel_controller_controls()
 	if not connected:
-		for key in _held_buttons.keys():
+		for key in _button_states.keys():
 			if key.x == device:
-				_held_buttons.erase(key)
-				_blocked_buttons.erase(key)
+				_button_states.erase(key)
 		for action in CONTROLLER_ACTIONS:
 			Input.action_release(action)
 		if Input.get_connected_joypads().is_empty():
-			controller_active = false
+			device_mode = DeviceMode.POINTER
 	controller_connection_changed.emit()
 
 func _notification(what: int) -> void:
 	match what:
 		NOTIFICATION_APPLICATION_FOCUS_OUT, NOTIFICATION_WM_WINDOW_FOCUS_OUT, NOTIFICATION_APPLICATION_PAUSED:
-			_focused = false
+			focus_state = FocusState.UNFOCUSED
 			cancel_controller_controls()
 		NOTIFICATION_APPLICATION_FOCUS_IN, NOTIFICATION_WM_WINDOW_FOCUS_IN, NOTIFICATION_APPLICATION_RESUMED:
-			_focused = true
+			focus_state = FocusState.FOCUSED
 
 func _exit_tree() -> void:
 	cancel_controller_controls()
-	_held_buttons.clear()
-	_blocked_buttons.clear()
-	_gameplay_available = false
+	_button_states.clear()
+	gameplay_state = GameplayState.UNAVAILABLE

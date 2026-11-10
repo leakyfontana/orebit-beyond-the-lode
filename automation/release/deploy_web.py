@@ -6,6 +6,7 @@ Candidates are not successful publication receipts. The service validates the tr
 push run and exact ZIP before invoking the scoped atomic deployment helper.
 """
 import argparse
+from enum import Enum
 import hashlib
 import json
 import os
@@ -19,7 +20,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from remote_web_release import MAX_ARCHIVE, digest, inspect_archive, public_verify, require, valid_identity
+from remote_web_release import (MAX_ARCHIVE, ResultStatus, digest, inspect_archive,
+                                public_verify, require, result_status, valid_identity)
 from version_policy import validate_remote_version
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -27,6 +29,64 @@ REPOSITORY = 'leakyfontana/orebit-beyond-the-lode'
 SITE = 'https://play.arcmonkeyswelding.com'
 STATUS_PATH = '/__orebit_deployment__/'
 USER_AGENT = 'OrebitReleaseVerifier/1.0'
+
+
+class ReleaseState(Enum):
+    ABSENT = 'absent'
+    DRAFT = 'draft'
+    PUBLIC = 'public'
+
+
+def release_state(release):
+    if release is None:
+        return ReleaseState.ABSENT
+    return ReleaseState.DRAFT if release['draft'] else ReleaseState.PUBLIC
+
+
+class AssetAdmission(Enum):
+    EXISTING = 'existing'
+    DRAFT_UPLOAD = 'draft-upload'
+    PUBLIC_MISSING = 'public-missing'
+
+
+def asset_admission(release, path):
+    if any(item['name'] == path.name for item in release.get('assets', [])):
+        return AssetAdmission.EXISTING
+    return (AssetAdmission.DRAFT_UPLOAD if release_state(release) is ReleaseState.DRAFT
+            else AssetAdmission.PUBLIC_MISSING)
+
+
+class StatusPollState(Enum):
+    WAITING = 'waiting'
+    SUCCEEDED = 'succeeded'
+    FAILED = 'failed'
+    TIMED_OUT = 'timed-out'
+
+
+class DeploymentStatusPoll:
+    def __init__(self, header, run_id, rollback, timeout):
+        self.header = header
+        self.run_id = run_id
+        self.wanted = ({ResultStatus.ROLLED_BACK} if rollback
+                       else {ResultStatus.DEPLOYED, ResultStatus.VERIFIED_EXISTING})
+        self.deadline = time.monotonic() + timeout
+        self.state = StatusPollState.WAITING
+        self.result = None
+
+    def expire(self):
+        if time.monotonic() >= self.deadline:
+            self.state = StatusPollState.TIMED_OUT
+
+    def receive(self, result):
+        if result is None:
+            return
+        header = self.header
+        require(result.get('schema') == 1 and result.get('commit') == header['commit'] and result.get('version') == header['version'] and result.get('run_id') == self.run_id and result.get('site', '').rstrip('/') == SITE, 'Deployment status identity differs')
+        require(result.get('archive_sha256') == header['artifact']['sha256'], 'Deployment status artifact hash differs')
+        self.result = result
+        self.state = (StatusPollState.SUCCEEDED
+                      if result_status(result) in self.wanted and result.get('public_checks')
+                      else StatusPollState.FAILED)
 
 
 def repository_path(value):
@@ -113,7 +173,7 @@ def validate_asset(release, path):
     if asset.get('digest'):
         require(asset['digest'] == 'sha256:' + expected, 'Immutable candidate asset digest differs')
     else:
-        if release['draft']:
+        if release_state(release) is ReleaseState.DRAFT:
             with tempfile.NamedTemporaryFile(prefix='orebit-draft-asset-') as downloaded:
                 subprocess.run(['gh', 'api', f'repos/{REPOSITORY}/releases/assets/{asset["id"]}', '-H', 'Accept: application/octet-stream'], cwd=ROOT, stdout=downloaded, stderr=subprocess.PIPE, check=True)
                 downloaded.flush()
@@ -147,6 +207,26 @@ def find_release(tag):
     raise ValueError('Release inventory exceeds safe candidate lookup limit')
 
 
+def create_candidate_draft(tag, commit, version):
+    return json.loads(gh('api', '--method', 'POST', f'repos/{REPOSITORY}/releases', '-f', 'tag_name=' + tag, '-f', 'target_commitish=' + commit, '-f', 'name=Orebit deployment candidate ' + version, '-f', 'body=Pending Web deployment verification; not a successful publication or announcement receipt.', '-F', 'prerelease=true', '-F', 'draft=true'))
+
+
+def admit_candidate_asset(release, tag, path):
+    admission = asset_admission(release, path)
+    if admission is AssetAdmission.EXISTING:
+        validate_asset(release, path)
+        return release
+    require(admission is AssetAdmission.DRAFT_UPLOAD,
+            'Published candidate is immutable; refusing to repair missing assets')
+    gh('release', 'upload', tag, '--repo', REPOSITORY, str(path))
+    return json.loads(gh('api', f'repos/{REPOSITORY}/releases/{release["id"]}'))
+
+
+def make_candidate_public(release, tag):
+    if release_state(release) is ReleaseState.DRAFT:
+        gh('release', 'edit', tag, '--repo', REPOSITORY, '--draft=false')
+
+
 def publish_candidate(archive, header, run_id):
     commit, version = header['commit'], header['version']
     latest = git('ls-remote', 'origin', 'refs/heads/main').split()
@@ -156,34 +236,29 @@ def publish_candidate(archive, header, run_id):
     request_path = ROOT / 'dist/deployment-request.json'
     request_path.write_text(json.dumps(request, indent=2, sort_keys=True) + '\n')
     release = find_release(tag)
-    if release is None:
-        release = json.loads(gh('api', '--method', 'POST', f'repos/{REPOSITORY}/releases', '-f', 'tag_name=' + tag, '-f', 'target_commitish=' + commit, '-f', 'name=Orebit deployment candidate ' + version, '-f', 'body=Pending Web deployment verification; not a successful publication or announcement receipt.', '-F', 'prerelease=true', '-F', 'draft=true'))
+    if release_state(release) is ReleaseState.ABSENT:
+        release = create_candidate_draft(tag, commit, version)
     require(release['target_commitish'] == commit and release.get('prerelease'), 'Candidate release identity differs')
     for path in (archive, request_path):
-        if any(item['name'] == path.name for item in release.get('assets', [])):
-            validate_asset(release, path)
-        else:
-            require(release['draft'], 'Published candidate is immutable; refusing to repair missing assets')
-            gh('release', 'upload', tag, '--repo', REPOSITORY, str(path))
-            release = json.loads(gh('api', f'repos/{REPOSITORY}/releases/{release["id"]}'))
-    if release['draft']:
-        gh('release', 'edit', tag, '--repo', REPOSITORY, '--draft=false')
+        release = admit_candidate_asset(release, tag, path)
+    make_candidate_public(release, tag)
     return request
 
 
 def wait_status(header, run_id, rollback, timeout):
     name = ('rollback-' if rollback else '') + header['commit'] + '.json'
     url = SITE + STATUS_PATH + name
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        result = fetch_json(url + '?check=' + str(time.time_ns()), missing_ok=True)
-        if result is not None:
-            require(result.get('schema') == 1 and result.get('commit') == header['commit'] and result.get('version') == header['version'] and result.get('run_id') == run_id and result.get('site', '').rstrip('/') == SITE, 'Deployment status identity differs')
-            require(result.get('archive_sha256') == header['artifact']['sha256'], 'Deployment status artifact hash differs')
-            wanted = ('rolled-back',) if rollback else ('deployed', 'verified-existing')
-            require(result.get('status') in wanted and result.get('public_checks'), 'Outbound deployment failed: ' + str(result.get('error', result.get('status'))))
-            return result
-        time.sleep(min(5, max(0, deadline - time.monotonic())))
+    poll = DeploymentStatusPoll(header, run_id, rollback, timeout)
+    while poll.state is StatusPollState.WAITING:
+        poll.expire()
+        if poll.state is StatusPollState.TIMED_OUT:
+            break
+        poll.receive(fetch_json(url + '?check=' + str(time.time_ns()), missing_ok=True))
+        if poll.state is StatusPollState.SUCCEEDED:
+            return poll.result
+        if poll.state is StatusPollState.FAILED:
+            raise ValueError('Outbound deployment failed: ' + str(poll.result.get('error', poll.result.get('status'))))
+        time.sleep(min(5, max(0, poll.deadline - time.monotonic())))
     raise TimeoutError('Timed out waiting for the outbound game deployment service')
 
 
@@ -193,7 +268,7 @@ def request_rollback(header, run_id):
     path = ROOT / 'dist/rollback-request.json'
     path.write_text(json.dumps(request, indent=2, sort_keys=True) + '\n')
     release = json.loads(gh('api', f'repos/{REPOSITORY}/releases/tags/{tag}'))
-    if any(item['name'] == path.name for item in release.get('assets', [])):
+    if asset_admission(release, path) is AssetAdmission.EXISTING:
         validate_asset(release, path)
     else:
         gh('release', 'upload', tag, '--repo', REPOSITORY, str(path))
@@ -215,7 +290,7 @@ def main():
             build = fetch_json(SITE + '/build.json')
             require(isinstance(build.get('commit'), str) and re.fullmatch(r'[0-9a-f]{40}', build['commit']) and isinstance(build.get('version'), str), 'Invalid deployed build identity')
             status = fetch_json(SITE + STATUS_PATH + build['commit'] + '.json')
-            require(status.get('status') in ('deployed', 'verified-existing') and status.get('commit') == build['commit'], 'No verified publication status for current Web build')
+            require(result_status(status) in {ResultStatus.DEPLOYED, ResultStatus.VERIFIED_EXISTING} and status.get('commit') == build['commit'], 'No verified publication status for current Web build')
             print(json.dumps({'schema': 1, 'status': 'verified-current', 'mutated': False, 'commit': build['commit'], 'version': build['version'], 'site': SITE, 'verification': 'public-build-identity-and-deployment-status'}))
             return 0
         archive, header = load_web_manifest(manifest)
@@ -237,7 +312,7 @@ def main():
             publish_candidate(archive, header, run_id)
         result = wait_status(header, run_id, args.rollback, args.timeout)
         if before and before.get('commit') == header['commit'] and not args.rollback:
-            result = {**result, 'status': 'verified-existing', 'original_deployment_mutated': result.get('mutated'), 'mutated': False}
+            result = {**result, 'status': ResultStatus.VERIFIED_EXISTING.value, 'original_deployment_mutated': result.get('mutated'), 'mutated': False}
         print(json.dumps(result, sort_keys=True))
         return 0
     except (OSError, ValueError, RuntimeError, KeyError, subprocess.SubprocessError, json.JSONDecodeError) as error:

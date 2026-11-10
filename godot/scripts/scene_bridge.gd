@@ -3,6 +3,17 @@ extends Node
 
 signal invoked(target_id: String, method: String, argument: Variant)
 
+enum AssemblyPhase { EMPTY, ASSEMBLING, AWAITING_LAYOUT, FINISHING_LAYOUT, READY }
+enum TextLayoutPhase { DIRTY, CLEAN, WRAPPING, WRAPPING_DIRTY }
+enum ScrollLayoutPhase { IDLE, REFRESHING }
+enum ContentPointer { IDLE, MOUSE, TOUCH, TOUCH_WITH_MOUSE }
+enum BarDragPhase { IDLE, DRAGGING }
+enum BarAction { NONE, BEGIN, MOVE }
+enum FadePhase { STEADY, FADING }
+enum Appearance { NORMAL, HIGHLIGHTED, PRESSED }
+const APPEARANCE_KEYS: Array[String] = ["Normal", "Highlighted", "Pressed"]
+
+var assembly_phase: AssemblyPhase = AssemblyPhase.EMPTY
 var manifest: Dictionary
 var scene: Dictionary
 var nodes: Dictionary = {}
@@ -11,7 +22,7 @@ var texts: Dictionary = {}
 var sliders: Dictionary = {}
 var textures: Dictionary = {}
 var buttons: Dictionary = {}
-var button_tweens: Dictionary = {}
+var _appearance_states: Dictionary = {}
 var _component_cache: Dictionary = {}
 var _scroll_states: Dictionary = {}
 var _source_text_layouts: Dictionary = {}
@@ -31,6 +42,7 @@ func build(which: String, world_parent: Node2D, ui_parent: Control) -> void:
 	instantiate_native(world_parent, ui_parent)
 
 func instantiate_native(world_parent: Node2D, ui_parent: Control) -> void:
+	assembly_phase = AssemblyPhase.ASSEMBLING
 	_component_cache.clear()
 	_scroll_states.clear()
 	var packed := load(str(scene.native_scene_path)) as PackedScene
@@ -52,12 +64,20 @@ func instantiate_native(world_parent: Node2D, ui_parent: Control) -> void:
 			if not p.has("m_OnClick"):
 				continue
 			var button: Button = buttons[id]
-			button.mouse_entered.connect(_button_appearance.bind(p, "Highlighted"))
-			button.mouse_exited.connect(_button_appearance.bind(p, "Normal"))
-			button.button_down.connect(_button_appearance.bind(p, "Pressed"))
-			button.button_up.connect(_button_appearance.bind(p, "Highlighted"))
+			button.mouse_entered.connect(_button_appearance.bind(p, Appearance.HIGHLIGHTED))
+			button.mouse_exited.connect(_button_appearance.bind(p, Appearance.NORMAL))
+			button.button_down.connect(_button_appearance.bind(p, Appearance.PRESSED))
+			button.button_up.connect(_button_appearance.bind(p, Appearance.HIGHLIGHTED))
 			button.pressed.connect(_invoke_calls.bind(p.m_OnClick.get("m_PersistentCalls", {}).get("m_Calls", [])))
-	call_deferred("_finish_layout")
+	_defer_layout_finish()
+
+func _defer_layout_finish() -> void:
+	if assembly_phase == AssemblyPhase.ASSEMBLING:
+		assembly_phase = AssemblyPhase.AWAITING_LAYOUT
+		call_deferred("_finish_layout")
+
+func is_layout_ready() -> bool:
+	return assembly_phase == AssemblyPhase.READY
 
 func _clear_scene_ownership(target: Node) -> void:
 	target.owner = null
@@ -116,8 +136,7 @@ func set_text(reference: Variant, value: String) -> void:
 	var id := component_owner(reference)
 	if texts.has(id):
 		if _source_text_layouts.has(id):
-			_source_text_layouts[id].raw = value
-			_source_text_layouts[id].width = -1.0
+			_invalidate_source_text(_source_text_layouts[id], value)
 			_wrap_source_text(id)
 		else:
 			texts[id].text = value
@@ -224,7 +243,7 @@ func _install_source_text_layouts() -> void:
 			continue
 		var state: Dictionary = label.get_meta("source_text_layout").duplicate()
 		state.merge({
-			"raw": label.text, "width": -1.0, "updating": false,
+			"raw": label.text, "width": 0.0, "phase": TextLayoutPhase.DIRTY,
 			"native_autowrap": label.autowrap_mode, "native_clip": label.clip_text,
 		})
 		_source_text_layouts[id] = state
@@ -235,13 +254,30 @@ func _install_source_text_layouts() -> void:
 		label.resized.connect(_wrap_source_text.bind(id))
 		_wrap_source_text(id)
 
+func _invalidate_source_text(state: Dictionary, raw: String) -> void:
+	state.raw = raw
+	if state.phase == TextLayoutPhase.WRAPPING or state.phase == TextLayoutPhase.WRAPPING_DIRTY:
+		state.phase = TextLayoutPhase.WRAPPING_DIRTY
+	else:
+		state.phase = TextLayoutPhase.DIRTY
+
+func _begin_text_layout(state: Dictionary, width: float) -> bool:
+	if state.phase == TextLayoutPhase.WRAPPING or state.phase == TextLayoutPhase.WRAPPING_DIRTY or width <= 0.0:
+		return false
+	if state.phase == TextLayoutPhase.CLEAN and state.width == width:
+		return false
+	state.phase = TextLayoutPhase.WRAPPING
+	state.width = width
+	return true
+
+func _finish_text_layout(state: Dictionary) -> void:
+	state.phase = TextLayoutPhase.DIRTY if state.phase == TextLayoutPhase.WRAPPING_DIRTY else TextLayoutPhase.CLEAN
+
 func _wrap_source_text(id: String) -> void:
 	var state: Dictionary = _source_text_layouts[id]
 	var label: Label = texts[id]
-	if state.updating or state.width == label.size.x or label.size.x <= 0.0:
+	if not _begin_text_layout(state, label.size.x):
 		return
-	state.updating = true
-	state.width = label.size.x
 	var raw: String = state.raw
 	var characters: Dictionary = state.metrics.characters
 	var pairs: Dictionary = state.metrics.pairs
@@ -258,7 +294,7 @@ func _wrap_source_text(id: String) -> void:
 			label.autowrap_mode = state.native_autowrap
 			label.clip_text = state.native_clip
 			label.text = raw
-			state.updating = false
+			_finish_text_layout(state)
 			return
 	label.autowrap_mode = TextServer.AUTOWRAP_OFF
 	label.clip_text = true
@@ -308,9 +344,12 @@ func _wrap_source_text(id: String) -> void:
 		index += 1
 	lines.append(raw.substr(line_start))
 	label.text = "\n".join(lines)
-	state.updating = false
+	_finish_text_layout(state)
 
 func _finish_layout() -> void:
+	if assembly_phase != AssemblyPhase.AWAITING_LAYOUT:
+		return
+	assembly_phase = AssemblyPhase.FINISHING_LAYOUT
 	for id in scene.game_objects:
 		var candidate: Variant = nodes.get(id)
 		if not is_instance_valid(candidate):
@@ -321,24 +360,29 @@ func _finish_layout() -> void:
 		for component in components(id):
 			var p: Dictionary = component.get("properties", {})
 			if p.has("m_OnClick"):
-				_button_appearance(p, "Normal", true)
+				_button_appearance(p, Appearance.NORMAL, true)
 			if p.has("m_ShowMaskGraphic") and not bool(p.m_ShowMaskGraphic) and graphics.has(id):
 				graphics[id].visible = false
 			if p.has("m_MinValue") and sliders.has(id):
 				var slider: Slider = sliders[id]
 				slider.value_changed.connect(_slider_visuals.bind(p))
 				slider.gui_input.connect(_slider_keyboard.bind(slider, p))
-				slider.mouse_entered.connect(_button_appearance.bind(p, "Highlighted"))
-				slider.mouse_exited.connect(_button_appearance.bind(p, "Normal"))
-				slider.drag_started.connect(_button_appearance.bind(p, "Pressed"))
+				slider.mouse_entered.connect(_button_appearance.bind(p, Appearance.HIGHLIGHTED))
+				slider.mouse_exited.connect(_button_appearance.bind(p, Appearance.NORMAL))
+				slider.drag_started.connect(_button_appearance.bind(p, Appearance.PRESSED))
 				slider.drag_ended.connect(_slider_drag_ended.bind(p))
 				_slider_visuals(slider.value, p)
-				_button_appearance(p, "Normal", true)
+				_button_appearance(p, Appearance.NORMAL, true)
 			if p.has("m_Content") and p.has("m_Viewport"):
 				_install_scroll(target, p)
+	_complete_layout_finish()
+
+func _complete_layout_finish() -> void:
+	if assembly_phase == AssemblyPhase.FINISHING_LAYOUT:
+		assembly_phase = AssemblyPhase.READY
 
 func _slider_drag_ended(_changed: bool, p: Dictionary) -> void:
-	_button_appearance(p, "Highlighted")
+	_button_appearance(p, Appearance.HIGHLIGHTED)
 
 func _slider_keyboard(event: InputEvent, slider: Slider, p: Dictionary) -> void:
 	if not slider.editable:
@@ -397,7 +441,14 @@ func _install_scroll(target: Control, p: Dictionary) -> void:
 		body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		scroll.add_child(body)
 		content.reparent(body, false)
-	var state := {"target": target, "viewport": viewport_control, "content": content, "scroll": scroll, "p": p, "updating": false, "drag": false, "touch": -1}
+	var state := {
+		"target": target, "viewport": viewport_control, "content": content, "scroll": scroll, "p": p,
+		"layout_phase": ScrollLayoutPhase.IDLE, "pointer": ContentPointer.IDLE, "touch_index": 0,
+		"bar_drags": [
+			{"phase": BarDragPhase.IDLE, "position": 0.0, "value": 0.0, "travel": 0.0},
+			{"phase": BarDragPhase.IDLE, "position": 0.0, "value": 0.0, "travel": 0.0},
+		],
+	}
 	_scroll_states[component_owner(p.m_Content)] = state
 	scroll.gui_input.connect(_scroll_input.bind(state))
 	target.resized.connect(_refresh_scroll.bind(state))
@@ -415,10 +466,19 @@ func _install_scroll(target: Control, p: Dictionary) -> void:
 		native_bar.changed.connect(_scroll_range_changed.bind(state))
 	_refresh_scroll(state)
 
+func _begin_scroll_layout(state: Dictionary) -> bool:
+	if state.layout_phase == ScrollLayoutPhase.REFRESHING:
+		return false
+	state.layout_phase = ScrollLayoutPhase.REFRESHING
+	return true
+
+func _finish_scroll_layout(state: Dictionary) -> void:
+	state.layout_phase = ScrollLayoutPhase.IDLE
+	_scroll_value_changed(0, state)
+
 func _refresh_scroll(state: Dictionary) -> void:
-	if state.updating:
+	if not _begin_scroll_layout(state):
 		return
-	state.updating = true
 	var target: Control = state.target
 	var viewport_control: Control = state.viewport
 	var content: Control = state.content
@@ -471,8 +531,7 @@ func _refresh_scroll(state: Dictionary) -> void:
 				bar.offset_right = available.x - target.size.x
 			else:
 				bar.offset_bottom = available.y - target.size.y
-	state.updating = false
-	_scroll_value_changed(0, state)
+	_finish_scroll_layout(state)
 
 func _scroll_range_changed(state: Dictionary) -> void:
 	_scroll_value_changed(0, state)
@@ -487,7 +546,7 @@ func _scroll_value_changed(_value: float, state: Dictionary) -> void:
 			var bar_properties: Dictionary = component.get("properties", {})
 			if not bar_properties.has("m_HandleRect"):
 				continue
-			_button_appearance(bar_properties, "Normal", true)
+			_button_appearance(bar_properties, Appearance.NORMAL, true)
 			var handle := node(bar_properties.m_HandleRect) as Control
 			if handle == null:
 				continue
@@ -496,21 +555,37 @@ func _scroll_value_changed(_value: float, state: Dictionary) -> void:
 			handle.set_anchor(SIDE_LEFT if axis == 0 else SIDE_TOP, start, true)
 			handle.set_anchor(SIDE_RIGHT if axis == 0 else SIDE_BOTTOM, start + fraction, true)
 
+func _touch_owns_content(state: Dictionary) -> bool:
+	return state.pointer == ContentPointer.TOUCH or state.pointer == ContentPointer.TOUCH_WITH_MOUSE
+
+func _set_content_mouse_drag(state: Dictionary, pressed: bool) -> void:
+	state.pointer = ContentPointer.MOUSE if pressed else ContentPointer.IDLE
+
+func _set_content_touch(state: Dictionary, index: int, pressed: bool) -> void:
+	var mouse_held: bool = state.pointer == ContentPointer.MOUSE or state.pointer == ContentPointer.TOUCH_WITH_MOUSE
+	if pressed:
+		state.touch_index = index
+		state.pointer = ContentPointer.TOUCH_WITH_MOUSE if mouse_held else ContentPointer.TOUCH
+	else:
+		# Preserve ScrollRect's endpoint handling: any touch release ends its
+		# current touch, while a mouse press predating touch remains held.
+		state.pointer = ContentPointer.MOUSE if mouse_held else ContentPointer.IDLE
+
 func _scroll_input(event: InputEvent, state: Dictionary) -> void:
 	var scroll: ScrollContainer = state.scroll
 	# Touch also emits emulated mouse input; only the real pointer may drag.
-	if state.touch >= 0 and (event is InputEventMouseMotion or event is InputEventMouseButton):
+	if _touch_owns_content(state) and (event is InputEventMouseMotion or event is InputEventMouseButton):
 		scroll.accept_event()
 		return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
-		state.drag = event.pressed
+		_set_content_mouse_drag(state, event.pressed)
 		scroll.accept_event()
-	elif event is InputEventMouseMotion and state.drag:
+	elif event is InputEventMouseMotion and state.pointer == ContentPointer.MOUSE:
 		_drag_scroll(event.relative, state)
 	elif event is InputEventScreenTouch:
-		state.touch = event.index if event.pressed else -1
+		_set_content_touch(state, event.index, event.pressed)
 		scroll.accept_event()
-	elif event is InputEventScreenDrag and event.index == state.touch:
+	elif event is InputEventScreenDrag and _touch_owns_content(state) and event.index == state.touch_index:
 		_drag_scroll(event.relative, state)
 	if event is InputEventMouseButton and event.pressed and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
 		var axis := 1 if bool(state.p.get("m_Vertical", true)) else 0
@@ -527,29 +602,37 @@ func _drag_scroll(relative: Vector2, state: Dictionary) -> void:
 		scroll.scroll_vertical -= roundi(relative.y)
 	scroll.accept_event()
 
+func _end_bar_drag(drag: Dictionary) -> void:
+	drag.phase = BarDragPhase.IDLE
+
+func _begin_bar_drag(drag: Dictionary, position: float, value: float, travel: float) -> void:
+	drag.position = position
+	drag.value = value
+	drag.travel = travel
+	drag.phase = BarDragPhase.DRAGGING
+
 func _scrollbar_input(event: InputEvent, state: Dictionary, axis: int) -> void:
 	var source_bar := node(state.p.get("m_HorizontalScrollbar" if axis == 0 else "m_VerticalScrollbar", {})) as Control
 	var scroll: ScrollContainer = state.scroll
 	var native_bar: ScrollBar = scroll.get_h_scroll_bar() if axis == 0 else scroll.get_v_scroll_bar()
 	var position := Vector2.ZERO
-	var begin := false
-	var move := false
-	var drag_key := "bar_drag_" + str(axis)
+	var action: BarAction = BarAction.NONE
+	var drag: Dictionary = state.bar_drags[axis]
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
-		begin = event.pressed
+		action = BarAction.BEGIN if event.pressed else BarAction.NONE
 		if not event.pressed:
-			state.erase(drag_key)
+			_end_bar_drag(drag)
 		position = event.position
-	elif event is InputEventMouseMotion and state.has(drag_key):
-		move = true
+	elif event is InputEventMouseMotion and drag.phase == BarDragPhase.DRAGGING:
+		action = BarAction.MOVE
 		position = event.position
 	elif event is InputEventScreenTouch:
-		begin = event.pressed
+		action = BarAction.BEGIN if event.pressed else BarAction.NONE
 		if not event.pressed:
-			state.erase(drag_key)
+			_end_bar_drag(drag)
 		position = event.position
-	elif event is InputEventScreenDrag and state.has(drag_key):
-		move = true
+	elif event is InputEventScreenDrag and drag.phase == BarDragPhase.DRAGGING:
+		action = BarAction.MOVE
 		position = event.position
 	elif event is InputEventKey and event.pressed:
 		if event.keycode in [KEY_UP, KEY_LEFT]:
@@ -557,7 +640,7 @@ func _scrollbar_input(event: InputEvent, state: Dictionary, axis: int) -> void:
 		elif event.keycode in [KEY_DOWN, KEY_RIGHT]:
 			native_bar.value += native_bar.step
 		source_bar.accept_event()
-	if begin:
+	if action == BarAction.BEGIN:
 		for component in components(component_owner(state.p.get("m_HorizontalScrollbar" if axis == 0 else "m_VerticalScrollbar", {}))):
 			var p: Dictionary = component.get("properties", {})
 			if not p.has("m_HandleRect"):
@@ -569,38 +652,56 @@ func _scrollbar_input(event: InputEvent, state: Dictionary, axis: int) -> void:
 			if position[axis] >= handle_position[axis] and position[axis] <= handle_position[axis] + handle.size[axis]:
 				var fraction: float = native_bar.page / native_bar.max_value if native_bar.max_value > 0 else 1.0
 				var travel: float = (handle.get_parent() as Control).size[axis] * (1.0 - fraction)
-				state[drag_key] = {"position": position[axis], "value": native_bar.value, "travel": travel}
+				_begin_bar_drag(drag, position[axis], native_bar.value, travel)
 			else:
 				native_bar.value += native_bar.page * (-1.0 if position[axis] < handle_position[axis] else 1.0)
 		source_bar.grab_focus()
 		source_bar.accept_event()
-	elif move:
-		var drag: Dictionary = state[drag_key]
+	elif action == BarAction.MOVE:
 		if float(drag.travel) > 0:
 			native_bar.value = float(drag.value) + (position[axis] - float(drag.position)) / float(drag.travel) * maxf(0, native_bar.max_value - native_bar.page)
 		source_bar.accept_event()
 
-func _button_appearance(p: Dictionary, state: String, immediate: bool = false) -> void:
+func _interrupt_appearance_fade(state: Dictionary) -> void:
+	if state.phase == FadePhase.FADING:
+		if state.tween.is_valid():
+			state.tween.kill()
+		state.tween = null
+		state.phase = FadePhase.STEADY
+
+func _finish_appearance_fade(id: String) -> void:
+	var state: Dictionary = _appearance_states[id]
+	if state.phase == FadePhase.FADING:
+		state.tween = null
+		state.phase = FadePhase.STEADY
+
+func _begin_appearance_fade(id: String, state: Dictionary, graphic: CanvasItem, color: Color, duration: float) -> void:
+	var tween := create_tween()
+	tween.set_ignore_time_scale(true)
+	tween.tween_property(graphic, "modulate", color, duration)
+	state.tween = tween
+	state.phase = FadePhase.FADING
+	tween.finished.connect(_finish_appearance_fade.bind(id))
+
+func _button_appearance(p: Dictionary, appearance: Appearance, immediate: bool = false) -> void:
 	var id := component_owner(p.get("m_TargetGraphic", {}))
 	var graphic: CanvasItem = graphics.get(id, texts.get(id))
 	if graphic == null:
 		return
 	if int(p.get("m_Transition", 1)) == 1:
+		if not _appearance_states.has(id):
+			_appearance_states[id] = {"phase": FadePhase.STEADY, "tween": null}
+		var state: Dictionary = _appearance_states[id]
 		var colors: Dictionary = p.get("m_Colors", {})
-		var color := _color(colors.get("m_" + state + "Color", {}))
+		var color := _color(colors.get("m_" + APPEARANCE_KEYS[appearance] + "Color", {}))
 		color *= float(colors.get("m_ColorMultiplier", 1))
 		var duration := float(colors.get("m_FadeDuration", 0))
-		if button_tweens.has(id) and button_tweens[id].is_valid():
-			button_tweens[id].kill()
+		_interrupt_appearance_fade(state)
 		if immediate or duration <= 0:
 			graphic.modulate = color
 		else:
-			var tween := create_tween()
-			tween.set_ignore_time_scale(true)
-			tween.tween_property(graphic, "modulate", color, duration)
-			button_tweens[id] = tween
+			_begin_appearance_fade(id, state, graphic, color, duration)
 	elif int(p.get("m_Transition", 1)) == 2 and graphic is TextureRect:
-		var reference: Dictionary = p.get("m_SpriteState", {}).get("m_" + state + "Sprite", {})
+		var reference: Dictionary = p.get("m_SpriteState", {}).get("m_" + APPEARANCE_KEYS[appearance] + "Sprite", {})
 		if reference_id(reference) != "0":
 			graphic.texture = sprite(reference)
-

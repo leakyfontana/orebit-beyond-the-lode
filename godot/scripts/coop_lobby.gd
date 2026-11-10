@@ -1,6 +1,13 @@
 class_name CoopLobby
 extends CanvasLayer
 
+enum Visibility { MODAL, HUD }
+enum Page { MODE, LOBBY, PASSWORD, SERVER }
+enum PauseReturn { RUNNING, PAUSED }
+enum ConnectionAdmission { OFFLINE, CONNECTING, CONNECTED }
+enum Account { ANONYMOUS, AUTHENTICATED }
+enum AuthKind { LOGIN, SIGNUP }
+
 const ACCENT := Color("4fd348")
 const INK := Color("091307")
 const TEXT := Color("dcedd4")
@@ -10,8 +17,13 @@ const MENU_ROW_HEIGHT := 44.0
 
 var host: Node
 var client: CoopClient
-var modal := true
-var _paused_before_lobby := false
+var visibility: Visibility = Visibility.MODAL
+var modal: bool:
+	get:
+		return visibility == Visibility.MODAL
+	set(value):
+		visibility = Visibility.MODAL if value else Visibility.HUD
+var _pause_return: PauseReturn = PauseReturn.RUNNING
 var _root: Control
 var _shade: ColorRect
 var _panel: PanelContainer
@@ -36,8 +48,8 @@ var _header_ink_rects: Dictionary = {}
 var _header_source_root: Control
 var _header_offsets: Dictionary = {}
 var _message := ""
-var _page := "mode"
-var _auth_kind := "login"
+var _page: Page = Page.MODE
+var _auth_kind: AuthKind = AuthKind.LOGIN
 var _username_draft := ""
 var _lobby_state := ""
 var _actions: Array[Button] = []
@@ -442,12 +454,12 @@ func _field(label_text: String, value: String, control_name: String, secret: boo
 	_focus_controls.append(field)
 	return field
 
-func _open_page(page: String) -> void:
+func _open_page(page: Page) -> void:
 	leaderboard.close()
 	if not modal:
-		_paused_before_lobby = host.paused
+		_pause_return = PauseReturn.PAUSED if host.paused else PauseReturn.RUNNING
 	_page = page
-	modal = true
+	visibility = Visibility.MODAL
 	host.paused = true
 	_shade.show()
 	_panel.show()
@@ -471,7 +483,7 @@ func _finish_page() -> void:
 		_focus_initial.call_deferred()
 
 func show_mode() -> void:
-	_open_page("mode")
+	_open_page(Page.MODE)
 	_label("Choose mode")
 	_label("Gameplay is recorded and uploaded for bot training. No chat, credentials or account IDs.", true)
 	var choices := _row()
@@ -495,7 +507,7 @@ func _choose_server(mode: String) -> void:
 	show_lobby()
 
 func show_lobby() -> void:
-	_open_page("lobby")
+	_open_page(Page.LOBBY)
 	_lobby_state = _state_key()
 	_label("Vulcan" if client.mode == "vulcan" else ("PvP ($1M)" if client.mode == "pvp" else "Co-op"))
 	if client.mode == "vulcan":
@@ -509,7 +521,7 @@ func show_lobby() -> void:
 	elif client.connected:
 		_button("Resume", hide_lobby, "ReturnToWorld", true)
 		_button("Leave", _leave, "LeaveServer")
-	elif not client.token.is_empty():
+	elif _account() == Account.AUTHENTICATED:
 		_button("Join", _join, "JoinServer", true)
 		_button("Sign out", _sign_out, "SignOut")
 	else:
@@ -525,7 +537,7 @@ func show_lobby() -> void:
 func _show_password() -> void:
 	if _busy():
 		return
-	_open_page("password")
+	_open_page(Page.PASSWORD)
 	_auth_heading = _label("")
 	_username = _field("Username", _username_draft, "AuthUsername")
 	_username.text_submitted.connect(func(_text: String): _password.grab_focus())
@@ -533,14 +545,14 @@ func _show_password() -> void:
 	_password = _field("Password", "", "AuthPassword", true, password_row)
 	_password.placeholder_text = "Password (8+ characters)"
 	_password.virtual_keyboard_type = LineEdit.KEYBOARD_TYPE_PASSWORD
-	_password.text_submitted.connect(func(_text: String): _native_auth(_auth_kind))
+	_password.text_submitted.connect(func(_text: String): _native_auth(_auth_wire_kind()))
 	_password_reveal = _button("Show", _toggle_password, "RevealPassword", false, password_row)
 	_password_reveal.toggle_mode = true
 	_password_reveal.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	_password_reveal.autowrap_mode = TextServer.AUTOWRAP_OFF
 	_password_reveal.accessibility_name = "Show password"
 	_password_reveal.tooltip_text = "Show password"
-	_auth_submit = _button("", func(): _native_auth(_auth_kind), "SubmitPassword", true)
+	_auth_submit = _button("", func(): _native_auth(_auth_wire_kind()), "SubmitPassword", true)
 	_page_navigation = _row()
 	_auth_toggle = _button("", _toggle_auth_kind, "SwitchPasswordMode", false, _page_navigation)
 	_button("Back", show_lobby, "PasswordBack", false, _page_navigation)
@@ -548,17 +560,20 @@ func _show_password() -> void:
 	_finish_page()
 
 func _update_password_mode() -> void:
-	_auth_heading.text = "Sign in" if _auth_kind == "login" else "Create account"
-	_auth_submit.text = "Sign in" if _auth_kind == "login" else "Create account"
-	_auth_toggle.text = "Sign up" if _auth_kind == "login" else "Sign in"
+	_auth_heading.text = "Sign in" if _auth_kind == AuthKind.LOGIN else "Create account"
+	_auth_submit.text = "Sign in" if _auth_kind == AuthKind.LOGIN else "Create account"
+	_auth_toggle.text = "Sign up" if _auth_kind == AuthKind.LOGIN else "Sign in"
 
 func _toggle_auth_kind() -> void:
 	if _busy():
 		return
-	_auth_kind = "signup" if _auth_kind == "login" else "login"
+	_auth_kind = AuthKind.SIGNUP if _auth_kind == AuthKind.LOGIN else AuthKind.LOGIN
 	_message = ""
 	_update_password_mode()
 	_update_status()
+
+func _auth_wire_kind() -> String:
+	return "login" if _auth_kind == AuthKind.LOGIN else "signup"
 
 func _toggle_password() -> void:
 	if is_instance_valid(_password):
@@ -571,7 +586,7 @@ func _toggle_password() -> void:
 func _show_server() -> void:
 	if _busy() or client.connected:
 		return
-	_open_page("server")
+	_open_page(Page.SERVER)
 	_label("PvP server" if client.mode == "pvp" else "Co-op server")
 	_label("Switching servers signs you out; progress stays on the old server.", true)
 	_url = _field("Server HTTPS address", client.base_url, "ServerAddress")
@@ -607,10 +622,10 @@ func hide_lobby(reset_pause: bool = false) -> void:
 		return
 	if reset_pause:
 		_message = ""
-	modal = false
+	visibility = Visibility.HUD
 	_shade.hide()
 	_panel.hide()
-	host.paused = client.recovering or (false if reset_pause else _paused_before_lobby)
+	host.paused = client.recovering or (false if reset_pause else _pause_return == PauseReturn.PAUSED)
 	refresh_hud()
 
 func refresh_hud() -> void:
@@ -641,12 +656,12 @@ func _back() -> void:
 		client.cancel_auth(false)
 	elif _busy():
 		return
-	if client.recovering and _page == "mode":
+	if client.recovering and _page == Page.MODE:
 		show_lobby()
 		return
-	if _page == "password" or _page == "server":
+	if _page == Page.PASSWORD or _page == Page.SERVER:
 		show_lobby()
-	elif _page == "mode" or client.connected:
+	elif _page == Page.MODE or client.connected:
 		hide_lobby()
 	else:
 		show_mode()
@@ -712,8 +727,18 @@ func _sign_out() -> void:
 func _busy() -> bool:
 	return client.auth_busy or client.session_checking or (client.connecting and not client.recovering)
 
+func _connection_admission() -> ConnectionAdmission:
+	if client.connected:
+		return ConnectionAdmission.CONNECTED
+	if client.connecting:
+		return ConnectionAdmission.CONNECTING
+	return ConnectionAdmission.OFFLINE
+
+func _account() -> Account:
+	return Account.ANONYMOUS if client.token.is_empty() else Account.AUTHENTICATED
+
 func _state_key() -> String:
-	return str(client.connected) + ":" + str(client.recovering) + ":" + str(not client.token.is_empty())
+	return str(_connection_admission() == ConnectionAdmission.CONNECTED) + ":" + str(client.recovering) + ":" + str(_account())
 
 func _refresh_identity() -> void:
 	_message = ""
@@ -721,17 +746,17 @@ func _refresh_identity() -> void:
 	refresh_hud()
 
 func _auth_state_changed() -> void:
-	if _page == "lobby" and _lobby_state != _state_key():
+	if _page == Page.LOBBY and _lobby_state != _state_key():
 		show_lobby()
 		return
-	if _page == "password" and not client.token.is_empty() and not client.auth_busy and not client.session_checking:
+	if _page == Page.PASSWORD and _account() == Account.AUTHENTICATED and not client.auth_busy and not client.session_checking:
 		show_lobby()
 		return
 	if is_instance_valid(_identity):
-		_identity.text = client.username if not client.token.is_empty() else ("Guest" if client.connected else "")
+		_identity.text = client.username if _account() == Account.AUTHENTICATED else ("Guest" if client.connected else "")
 		_identity.visible = not _identity.text.is_empty()
 	for button in _actions:
-		button.disabled = _busy() and not (_page == "mode" and client.session_checking)
+		button.disabled = _busy() and not (_page == Page.MODE and client.session_checking)
 	for field in _fields:
 		field.editable = not _busy()
 	if is_instance_valid(_cancel_button):
@@ -837,7 +862,7 @@ func _controller_event(event: InputEvent) -> void:
 		elif focused == _username and is_instance_valid(_password):
 			_password.grab_focus()
 		elif focused == _password:
-			_native_auth(_auth_kind)
+			_native_auth(_auth_wire_kind())
 		else:
 			_focus_initial()
 

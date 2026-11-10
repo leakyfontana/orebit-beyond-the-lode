@@ -13,6 +13,7 @@ Serialize publishers for this archive in CI: Drive has no atomic name lock.
 import argparse
 import configparser
 from dataclasses import dataclass
+from enum import Enum, auto
 import hashlib
 import json
 import os
@@ -103,6 +104,67 @@ def upload_for(path, name=None):
     require(path.is_file(), "Not a regular file: " + str(path))
     sha256, size = digest_file(path)
     return Upload(path, name or path.name, sha256, size)
+
+
+class RemoteEntryState(Enum):
+    MISSING = auto()
+    EXISTING = auto()
+    VERIFIED = auto()
+    CONFLICT = auto()
+
+
+def remote_entry_state(item, directory=False):
+    if item is None:
+        return RemoteEntryState.MISSING
+    valid_kind = ((item.get("mimeType") == FOLDER_MIME) if directory else
+                  not item.get("mimeType", "").startswith("application/vnd.google-apps."))
+    return RemoteEntryState.EXISTING if valid_kind else RemoteEntryState.CONFLICT
+
+
+class ImmutableRemoteFile:
+    """One immutable inventory entry, including missing entries in partial versions."""
+
+    def __init__(self, drive, folder, upload, item):
+        self.drive = drive
+        self.folder = folder
+        self.upload = upload
+        self.item = item
+        self.state = remote_entry_state(item)
+
+    def verify_existing(self):
+        if self.state is RemoteEntryState.MISSING:
+            return
+        if self.state is RemoteEntryState.VERIFIED:
+            return
+        try:
+            self.drive.verify_bytes(self.folder, self.item, self.upload)
+        except PublicationError:
+            self.state = RemoteEntryState.CONFLICT
+            raise
+        self.state = RemoteEntryState.VERIFIED
+
+    def reconcile(self):
+        upload = self.upload
+        if self.state is RemoteEntryState.MISSING:
+            require(digest_file(upload.path) == (upload.sha256, upload.size),
+                    "Local file changed since validation: " + str(upload.path))
+            # Drive has no atomic create-if-absent; preserve both immutable flags
+            # and the duplicate-name check in the fresh listing after upload.
+            self.drive.run("copyto", str(upload.path), self.drive.remote + ":" + upload.name,
+                           "--ignore-existing", "--immutable", "--checksum", folder=self.folder)
+            self.item = self.drive.children(self.folder).get(upload.name)
+            self.state = remote_entry_state(self.item)
+        require(self.state is not RemoteEntryState.MISSING, "Uploaded file missing from Drive: " + upload.name)
+        self.verify_existing()
+        self.drive.verify_public(self.folder, [self.item], upload)
+        return self.evidence()
+
+    def evidence(self):
+        require(self.state is RemoteEntryState.VERIFIED, "Immutable file has not passed download verification")
+        item, upload = self.item, self.upload
+        return {"id": item["id"], "name": upload.name, "path": str(upload.path.relative_to(ROOT)),
+                "url": item.get("webViewLink") or "https://drive.google.com/file/d/" + item["id"] + "/view",
+                "sha256": upload.sha256, "size": upload.size, "verification": "download-sha256"}
 
 
 def validate_manifest(path):
@@ -265,7 +327,7 @@ class Drive:
 
     def folder(self, parent, name):
         children = self.children(parent)
-        if name not in children:
+        if remote_entry_state(children.get(name), directory=True) is RemoteEntryState.MISSING:
             self.run("mkdir", self.remote + ":" + name, folder=parent)
             children = self.children(parent)
         require(name in children, "Created folder missing from Drive listing: " + name)
@@ -273,46 +335,77 @@ class Drive:
         return children[name]
 
     def publish_file(self, folder, upload):
-        children = self.children(folder)
-        if upload.name not in children:
-            require(digest_file(upload.path) == (upload.sha256, upload.size),
-                    "Local file changed since validation: " + str(upload.path))
-            # Never update an existing ID, even if another publisher races us.
-            # Check again afterwards: Drive permits duplicate names and rclone
-            # cannot provide an atomic create-if-absent operation.
-            self.run("copyto", str(upload.path), self.remote + ":" + upload.name,
-                     "--ignore-existing", "--immutable", "--checksum", folder=folder)
-            children = self.children(folder)
-        require(upload.name in children, "Uploaded file missing from Drive: " + upload.name)
-        item = children[upload.name]
-        self.verify_bytes(folder, item, upload)
-        self.verify_public(folder, [item], upload)
-        return {"id": item["id"], "name": upload.name, "path": str(upload.path.relative_to(ROOT)),
-                "url": item.get("webViewLink") or "https://drive.google.com/file/d/" + item["id"] + "/view",
-                "sha256": upload.sha256, "size": upload.size, "verification": "download-sha256"}
+        item = self.children(folder).get(upload.name)
+        return ImmutableRemoteFile(self, folder, upload, item).reconcile()
 
 
 def preflight_version(drive, root_children, version, uploads, release):
-    if version not in root_children:
+    if remote_entry_state(root_children.get(version), directory=True) is RemoteEntryState.MISSING:
         return
     version_item = root_children[version]
     drive.check_kind(version_item, True)
     children = drive.children(version_item["id"])
     require(set(children) <= set(PLATFORMS.values()) | {"release.json"},
             "Unexpected content in immutable version folder")
-    if "release.json" in children:
-        drive.verify_bytes(version_item["id"], children["release.json"], release)
+    ImmutableRemoteFile(drive, version_item["id"], release, children.get("release.json")).verify_existing()
     for platform, files in uploads.items():
         folder = children.get(PLATFORMS[platform])
-        if folder is None:
+        if remote_entry_state(folder, directory=True) is RemoteEntryState.MISSING:
             continue
         drive.check_kind(folder, True)
         existing = drive.children(folder["id"])
         require(set(existing) <= {file.name for file in files},
                 "Unexpected content in immutable platform folder: " + platform)
         for file in files:
-            if file.name in existing:
-                drive.verify_bytes(folder["id"], existing[file.name], file)
+            ImmutableRemoteFile(drive, folder["id"], file, existing.get(file.name)).verify_existing()
+
+
+class PublicationState(Enum):
+    PLATFORM_FILES_PENDING = auto()
+    AGGREGATE_PENDING = auto()
+    EVIDENCE_PENDING = auto()
+
+
+class PublicationEvidence:
+    """The aggregate marker is gated by all four platforms' verified evidence."""
+
+    def __init__(self, result):
+        self.result = result
+
+    @property
+    def state(self):
+        if len(self.result["platforms"]) < len(PLATFORMS):
+            return PublicationState.PLATFORM_FILES_PENDING
+        return (PublicationState.EVIDENCE_PENDING if "manifest" in self.result
+                else PublicationState.AGGREGATE_PENDING)
+
+    def record_platform(self, platform, folder, files):
+        require(self.state is PublicationState.PLATFORM_FILES_PENDING,
+                "Platform evidence is already complete")
+        self.result["platforms"].append({"platform": platform, "folder": {"id": folder["id"],
+                                        "url": "https://drive.google.com/drive/folders/" + folder["id"]},
+                                        "files": files})
+
+    def commit_marker(self, drive, folder, release):
+        require(self.state is PublicationState.AGGREGATE_PENDING,
+                "Aggregate marker requires all platform download evidence")
+        self.result["manifest"] = drive.publish_file(folder, release)
+
+    def write(self, output_path):
+        require(self.state is PublicationState.EVIDENCE_PENDING,
+                "Publication evidence requires a verified aggregate marker")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=output_path.parent,
+                                         prefix=".drive-publication-", delete=False) as output:
+            temporary_path = Path(output.name)
+            try:
+                json.dump(self.result, output, indent=2, sort_keys=True)
+                output.write("\n")
+                output.flush()
+                os.fsync(output.fileno())
+                os.replace(temporary_path, output_path)
+            finally:
+                temporary_path.unlink(missing_ok=True)
 
 
 def main():
@@ -347,27 +440,15 @@ def main():
                   "remote": args.remote, "root": {"id": args.root_id, "url": root_url},
                   "folder": {"id": version["id"], "url": "https://drive.google.com/drive/folders/" + version["id"]},
                   "platforms": []}
+        publication = PublicationEvidence(result)
         for platform in PLATFORMS:
             folder = drive.folder(version["id"], PLATFORMS[platform])
             drive.verify_public(version["id"], [folder])
             files = [drive.publish_file(folder["id"], file) for file in uploads[platform]]
-            result["platforms"].append({"platform": platform, "folder": {"id": folder["id"],
-                                        "url": "https://drive.google.com/drive/folders/" + folder["id"]},
-                                        "files": files})
+            publication.record_platform(platform, folder, files)
         # The aggregate is the completion marker and is published last.
-        result["manifest"] = drive.publish_file(version["id"], release)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=output_path.parent,
-                                         prefix=".drive-publication-", delete=False) as output:
-            temporary_path = Path(output.name)
-            try:
-                json.dump(result, output, indent=2, sort_keys=True)
-                output.write("\n")
-                output.flush()
-                os.fsync(output.fileno())
-                os.replace(temporary_path, output_path)
-            finally:
-                temporary_path.unlink(missing_ok=True)
+        publication.commit_marker(drive, version["id"], release)
+        publication.write(output_path)
         print(json.dumps({"published": True, "output": str(output_path.relative_to(ROOT)),
                           "commit": manifest["commit"], "version": manifest["version"]}))
         return 0

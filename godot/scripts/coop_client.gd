@@ -9,6 +9,25 @@ signal connection_lost(message: String)
 signal recovery_started
 signal world_event(event: Dictionary)
 
+enum ConnectionState { DISCONNECTED, CONNECTING, CONNECTED, CONNECTED_CONNECTING }
+enum JoinPublication { NOT_SENT, SENT }
+enum RecoveryState { IDLE, RECOVERING }
+enum RecoveryStep { INACTIVE, WAITING, DUE, CANCELLED, EXPIRED }
+enum HttpOperation { IDLE, NATIVE, DISCORD_START, DISCORD_POLL, SESSION }
+enum SessionCheck { IDLE, CHECKING }
+enum JoinIntent { NONE, AFTER_SESSION_CHECK }
+enum AuthNavigation { STAYING, LEAVING }
+enum AuthorizationState { IDLE, POLLING, NAVIGATING }
+enum TransferState { IDLE, AWAITING_RESULT }
+enum RoundState { ACTIVE, LOADING }
+enum PendingState { EMPTY, AWAITING_ACKNOWLEDGMENT }
+enum MotionReply { STALE, OUTSTANDING }
+enum RevisionRelation { STALE, CURRENT, NEWER }
+enum SnapshotAdmission { BLOCKED, READY }
+enum WorldMode { COOP, PVP, VULCAN, OTHER }
+enum IdentityState { ANONYMOUS, AUTHENTICATED }
+enum ClockState { FIRST_SAMPLE, RUNNING }
+
 const DEFAULT_URL := "https://play.arcmonkeyswelding.com/coop"
 const SESSION_FILE := "user://orebit_coop_session.json"
 const VULCAN_SESSION_FILE := "user://orebit_vulcan_session.json"
@@ -20,24 +39,23 @@ var world_id := "public"
 var token := ""
 var username := ""
 var expires_at := 0
-var session_checking := false
+var session_check: SessionCheck = SessionCheck.IDLE
 var auth_busy: bool:
 	get:
-		return session_checking or not _http_kind.is_empty() or not _poll_token.is_empty()
+		return session_checking or _http_operation != HttpOperation.IDLE or authorization_state() != AuthorizationState.IDLE
 var player_id := ""
-var connected := false
-var connecting := false
-var recovering := false
+var connection_state: ConnectionState = ConnectionState.DISCONNECTED
+var recovery_state: RecoveryState = RecoveryState.IDLE
 var peers: Dictionary = {}
 var host: Node
 var state_revision := 0
 var _socket: WebSocketPeer
 var _http: HTTPRequest
-var _http_kind := ""
+var _http_operation: HttpOperation = HttpOperation.IDLE
 var _poll_token := ""
 var _poll_after := 0.0
 var _state_after := 0.0
-var _join_sent := false
+var join_publication: JoinPublication = JoinPublication.NOT_SENT
 var _connect_started_usec := 0
 var _join_context: Dictionary = {}
 var _recovery_deadline_usec := 0
@@ -46,23 +64,117 @@ var _recovery_attempt := 0
 var _sequence := 0
 var _pending_mines: Dictionary = {}
 var _economic_baseline: Dictionary = {}
-var transfer_pending := false
+var transfer_state: TransferState = TransferState.IDLE
 var _transfer_elapsed := 0.0
 var startup_mode := ""
 var mode := "coop"
 var _last_usec := 0
 var _auth_expires_at := 0
-var _auth_navigating := false
+var auth_navigation: AuthNavigation = AuthNavigation.STAYING
 var _session_expiry_after := 0.0
-var _join_after_session_check := false
+var join_intent: JoinIntent = JoinIntent.NONE
 const ANDROID_AUTH_RETURN := "org.motherloadrecoded.game://auth/discord"
 var pvp_sequence := 0
 var _pvp_blasts: Dictionary = {}
 var _motion_sequence := 0
 var _last_motion_ack := 0
 var round_id := ""
-var _round_loading := false
+var round_state: RoundState = RoundState.ACTIVE
 var _round_events: Array[Dictionary] = []
+
+var connected: bool:
+	get: return connection_state == ConnectionState.CONNECTED or connection_state == ConnectionState.CONNECTED_CONNECTING
+	set(value):
+		if value:
+			connection_state = ConnectionState.CONNECTED_CONNECTING if connecting else ConnectionState.CONNECTED
+		else:
+			connection_state = ConnectionState.CONNECTING if connecting else ConnectionState.DISCONNECTED
+
+var connecting: bool:
+	get: return connection_state == ConnectionState.CONNECTING or connection_state == ConnectionState.CONNECTED_CONNECTING
+	set(value):
+		if value:
+			connection_state = ConnectionState.CONNECTED_CONNECTING if connected else ConnectionState.CONNECTING
+		else:
+			connection_state = ConnectionState.CONNECTED if connected else ConnectionState.DISCONNECTED
+
+var recovering: bool:
+	get: return recovery_state == RecoveryState.RECOVERING
+	set(value): recovery_state = RecoveryState.RECOVERING if value else RecoveryState.IDLE
+
+var session_checking: bool:
+	get: return session_check == SessionCheck.CHECKING
+	set(value): session_check = SessionCheck.CHECKING if value else SessionCheck.IDLE
+
+var transfer_pending: bool:
+	get: return transfer_state == TransferState.AWAITING_RESULT
+	set(value): transfer_state = TransferState.AWAITING_RESULT if value else TransferState.IDLE
+
+var _join_sent: bool:
+	get: return join_publication == JoinPublication.SENT
+	set(value): join_publication = JoinPublication.SENT if value else JoinPublication.NOT_SENT
+
+var _auth_navigating: bool:
+	get: return auth_navigation == AuthNavigation.LEAVING
+	set(value): auth_navigation = AuthNavigation.LEAVING if value else AuthNavigation.STAYING
+
+var _join_after_session_check: bool:
+	get: return join_intent == JoinIntent.AFTER_SESSION_CHECK
+	set(value): join_intent = JoinIntent.AFTER_SESSION_CHECK if value else JoinIntent.NONE
+
+var _round_loading: bool:
+	get: return round_state == RoundState.LOADING
+	set(value): round_state = RoundState.LOADING if value else RoundState.ACTIVE
+
+func authorization_state() -> AuthorizationState:
+	if _poll_token.is_empty():
+		return AuthorizationState.IDLE
+	return AuthorizationState.NAVIGATING if _auth_navigating else AuthorizationState.POLLING
+
+func identity_state() -> IdentityState:
+	return IdentityState.ANONYMOUS if token.is_empty() else IdentityState.AUTHENTICATED
+
+func world_mode() -> WorldMode:
+	match mode:
+		"coop": return WorldMode.COOP
+		"pvp": return WorldMode.PVP
+		"vulcan": return WorldMode.VULCAN
+	return WorldMode.OTHER
+
+func mining_state() -> PendingState:
+	return PendingState.EMPTY if _pending_mines.is_empty() else PendingState.AWAITING_ACKNOWLEDGMENT
+
+func mine_state(cell: Vector2i) -> PendingState:
+	return PendingState.AWAITING_ACKNOWLEDGMENT if _pending_mines.has(cell) else PendingState.EMPTY
+
+func blast_state(request: String) -> PendingState:
+	return PendingState.AWAITING_ACKNOWLEDGMENT if _pvp_blasts.has(request) else PendingState.EMPTY
+
+func motion_reply_state(sequence: int) -> MotionReply:
+	return MotionReply.STALE if sequence <= _last_motion_ack or sequence > _motion_sequence else MotionReply.OUTSTANDING
+
+func revision_relation(event: Dictionary) -> RevisionRelation:
+	var revision := int(event.get("state_revision", 0))
+	if revision > state_revision:
+		return RevisionRelation.NEWER
+	return RevisionRelation.CURRENT if revision == state_revision else RevisionRelation.STALE
+
+func snapshot_admission() -> SnapshotAdmission:
+	if not _round_loading and not has_pending_actions() and connected and host.is_coop and host.scene_name == "Game" and host.player != null and host.player.data == host.data:
+		return SnapshotAdmission.READY
+	return SnapshotAdmission.BLOCKED
+
+func recovery_step(now: int) -> RecoveryStep:
+	if not recovering:
+		return RecoveryStep.INACTIVE
+	if not _recovery_context_matches():
+		return RecoveryStep.CANCELLED
+	if now >= _recovery_deadline_usec:
+		return RecoveryStep.EXPIRED
+	return RecoveryStep.DUE if _socket == null and now >= _recovery_after_usec else RecoveryStep.WAITING
+
+func clock_state() -> ClockState:
+	return ClockState.RUNNING if _last_usec > 0 else ClockState.FIRST_SAMPLE
 
 func configure(main_host: Node) -> void:
 	host = main_host
@@ -183,7 +295,7 @@ func set_endpoint(endpoint: String) -> void:
 		_store_session()
 
 func authenticate(kind: String, user: String, password: String) -> void:
-	_request("/api/auth/" + kind, {"username": user, "password": password}, "native")
+	_request("/api/auth/" + kind, {"username": user, "password": password}, HttpOperation.NATIVE)
 
 func discord_login() -> void:
 	if auth_busy:
@@ -197,7 +309,7 @@ func discord_login() -> void:
 		payload.return_url = str(JavaScriptBridge.eval("(() => { const url = new URL(location.href); url.searchParams.delete('orebit_auth'); url.searchParams.set('mode', " + JSON.stringify(mode) + "); url.hash = ''; return url.href; })()"))
 	elif OS.get_name() == "Android":
 		payload.return_url = ANDROID_AUTH_RETURN
-	_request("/api/auth/discord/start", payload, "discord_start")
+	_request("/api/auth/discord/start", payload, HttpOperation.DISCORD_START)
 
 func logout() -> void:
 	if connected or connecting or recovering:
@@ -226,9 +338,9 @@ func logout() -> void:
 	status_changed.emit("Signed out. You can sign in again or play anonymously.")
 
 func cancel_auth(show_message: bool = true) -> void:
-	if not _http_kind.is_empty():
+	if _http_operation != HttpOperation.IDLE:
 		_http.cancel_request()
-		_http_kind = ""
+		_http_operation = HttpOperation.IDLE
 	session_checking = false
 	_join_after_session_check = false
 	_clear_pending_auth()
@@ -253,7 +365,7 @@ func _validate_session() -> void:
 		auth_state_changed.emit()
 		return
 	session_checking = true
-	_request("/api/auth/session", {}, "session", HTTPClient.METHOD_GET, true)
+	_request("/api/auth/session", {}, HttpOperation.SESSION, HTTPClient.METHOD_GET, true)
 
 func _expire_session() -> void:
 	token = ""
@@ -278,11 +390,11 @@ func _store_session() -> void:
 		if OS.has_feature("web"):
 			JavaScriptBridge.force_fs_sync()
 
-func _request(path: String, payload: Dictionary, kind: String, method: HTTPClient.Method = HTTPClient.METHOD_POST, authorized: bool = false) -> void:
-	if not _http_kind.is_empty():
+func _request(path: String, payload: Dictionary, kind: HttpOperation, method: HTTPClient.Method = HTTPClient.METHOD_POST, authorized: bool = false) -> void:
+	if _http_operation != HttpOperation.IDLE:
 		status_changed.emit("An account request is already in progress.")
 		return
-	_http_kind = kind
+	_http_operation = kind
 	var headers := PackedStringArray(["Content-Type: application/json"])
 	if authorized:
 		headers.append("Authorization: Bearer " + token)
@@ -291,41 +403,41 @@ func _request(path: String, payload: Dictionary, kind: String, method: HTTPClien
 		path += "?mode=vulcan"
 	var result := _http.request(base_url.trim_suffix("/") + path, headers, method, "" if method == HTTPClient.METHOD_GET else JSON.stringify(payload))
 	if result != OK:
-		_http_kind = ""
+		_http_operation = HttpOperation.IDLE
 		session_checking = false
 		status_changed.emit("Unable to contact account service: " + error_string(result))
 	else:
-		status_changed.emit("Checking saved sign-in…" if kind == "session" else ("Waiting for Discord…" if kind == "discord_poll" else "Contacting account service…"))
+		status_changed.emit("Checking saved sign-in…" if kind == HttpOperation.SESSION else ("Waiting for Discord…" if kind == HttpOperation.DISCORD_POLL else "Contacting account service…"))
 	auth_state_changed.emit()
 
 func _http_completed(result: int, code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
-	var kind := _http_kind
-	_http_kind = ""
+	var kind := _http_operation
+	_http_operation = HttpOperation.IDLE
 	session_checking = false
-	if kind == "session" and code == 401:
+	if kind == HttpOperation.SESSION and code == 401:
 		_expire_session()
 		return
 	if result != HTTPRequest.RESULT_SUCCESS:
-		if kind != "session":
+		if kind != HttpOperation.SESSION:
 			_clear_pending_auth()
 		auth_state_changed.emit()
-		status_changed.emit("Account service unavailable. Your saved sign-in has not been removed." if kind == "session" else "Account service unavailable. Anonymous play is still available.")
+		status_changed.emit("Account service unavailable. Your saved sign-in has not been removed." if kind == HttpOperation.SESSION else "Account service unavailable. Anonymous play is still available.")
 		return
 	var parsed: Variant = JSON.parse_string(body.get_string_from_utf8())
 	if not parsed is Dictionary:
-		if kind != "session":
+		if kind != HttpOperation.SESSION:
 			_clear_pending_auth()
 		auth_state_changed.emit()
 		status_changed.emit("The account service returned an unreadable response.")
 		return
 	var response: Dictionary = parsed
 	if code < 200 or code >= 300:
-		if kind != "session":
+		if kind != HttpOperation.SESSION:
 			_clear_pending_auth()
 		auth_state_changed.emit()
 		status_changed.emit(str(response.get("message", response.get("error", "Account request failed (%d)." % code))))
 		return
-	if kind == "session":
+	if kind == HttpOperation.SESSION:
 		expires_at = int(response.get("expires_at", 0))
 		var user: Dictionary = response.get("user", {})
 		username = str(user.get("name", username))
@@ -337,7 +449,7 @@ func _http_completed(result: int, code: int, _headers: PackedStringArray, body: 
 		auth_state_changed.emit()
 		status_changed.emit("Saved session restored.")
 		return
-	if kind == "discord_start":
+	if kind == HttpOperation.DISCORD_START:
 		_poll_token = str(response.get("poll_token", ""))
 		_auth_expires_at = int(response.get("expires_at", 0))
 		_poll_after = 2.0
@@ -368,7 +480,7 @@ func _http_completed(result: int, code: int, _headers: PackedStringArray, body: 
 		auth_state_changed.emit()
 		status_changed.emit("Complete sign-in in Discord. You will return to Orebit automatically.")
 		return
-	if kind == "discord_poll" and response.get("status", "") == "pending":
+	if kind == HttpOperation.DISCORD_POLL and response.get("status", "") == "pending":
 		_poll_after = 2.0
 		auth_state_changed.emit()
 		return
@@ -387,7 +499,7 @@ func _http_completed(result: int, code: int, _headers: PackedStringArray, body: 
 	identity_changed.emit()
 	auth_state_changed.emit()
 	status_changed.emit("Join to restore your server progress.")
-	if kind == "discord_poll" and not OS.has_feature("web") and OS.get_name() != "Android":
+	if kind == HttpOperation.DISCORD_POLL and not OS.has_feature("web") and OS.get_name() != "Android":
 		DisplayServer.window_move_to_foreground()
 
 func join_world() -> void:
@@ -486,11 +598,11 @@ func leave_world() -> void:
 	_round_events.clear()
 
 func send_state() -> void:
-	if not _round_loading and not has_pending_actions() and connected and host.is_coop and host.scene_name == "Game" and host.player != null and host.player.data == host.data:
-		if mode == "pvp" and not host.player_alive:
+	if snapshot_admission() == SnapshotAdmission.READY:
+		if world_mode() == WorldMode.PVP and not host.player_alive:
 			return
 		var message := {"type": "state", "state": host.coop_state(), "state_revision": state_revision}
-		if mode == "pvp":
+		if world_mode() == WorldMode.PVP:
 			_motion_sequence += 1
 			message.motion_seq = _motion_sequence
 		_send(message)
@@ -500,7 +612,7 @@ func _reset_motion_history() -> void:
 
 func _acknowledge_motion(event: Dictionary) -> void:
 	var sequence := int(event.get("motion_seq", 0))
-	if sequence <= _last_motion_ack or sequence > _motion_sequence:
+	if motion_reply_state(sequence) == MotionReply.STALE:
 		return
 	_last_motion_ack = sequence
 	var requested: Array = event.get("requested_position", [])
@@ -518,7 +630,7 @@ func _acknowledge_motion(event: Dictionary) -> void:
 		_last_motion_ack = _motion_sequence
 
 func pvp_action(kind: String, fields: Dictionary = {}) -> String:
-	if connected and mode == "pvp" and not _round_loading:
+	if connected and world_mode() == WorldMode.PVP and not _round_loading:
 		pvp_sequence += 1
 		var message := fields.duplicate()
 		message.type = kind
@@ -530,7 +642,7 @@ func pvp_action(kind: String, fields: Dictionary = {}) -> String:
 	return ""
 
 func has_pending_actions() -> bool:
-	return not _pending_mines.is_empty() or transfer_pending
+	return mining_state() == PendingState.AWAITING_ACKNOWLEDGMENT or transfer_pending
 
 func transfer_money(recipient_id: String, amount: int) -> bool:
 	if _round_loading or not connected or has_pending_actions() or recipient_id == player_id or not peers.has(recipient_id) or amount <= 0 or amount > host.data.player_money:
@@ -545,9 +657,9 @@ func mine(x: int, y: int, method: String = "drill") -> bool:
 	if _round_loading or not connected or transfer_pending:
 		return false
 	var cell := Vector2i(x, y)
-	if _pending_mines.has(cell):
+	if mine_state(cell) == PendingState.AWAITING_ACKNOWLEDGMENT:
 		return true
-	if _pending_mines.is_empty():
+	if mining_state() == PendingState.EMPTY:
 		send_state()
 	_sequence += 1
 	_pending_mines[cell] = 0.0
@@ -604,7 +716,7 @@ func link_capture() -> void:
 
 func _process(delta: float) -> void:
 	var now := Time.get_ticks_usec()
-	delta = float(now - _last_usec) / 1000000.0 if _last_usec > 0 else 0.0
+	delta = float(now - _last_usec) / 1000000.0 if clock_state() == ClockState.RUNNING else 0.0
 	_last_usec = now
 	if not token.is_empty() and expires_at > 0:
 		_session_expiry_after -= delta
@@ -612,25 +724,26 @@ func _process(delta: float) -> void:
 			_session_expiry_after = 1.0
 			if expires_at <= int(Time.get_unix_time_from_system()):
 				_expire_session()
-	if not _poll_token.is_empty() and _auth_expires_at <= int(Time.get_unix_time_from_system()):
+	if authorization_state() != AuthorizationState.IDLE and _auth_expires_at <= int(Time.get_unix_time_from_system()):
 		_clear_pending_auth()
 		_store_session()
 		auth_state_changed.emit()
 		status_changed.emit("Discord sign-in expired. Try again.")
-	if not _auth_navigating and not _poll_token.is_empty() and _http_kind.is_empty():
+	if authorization_state() == AuthorizationState.POLLING and _http_operation == HttpOperation.IDLE:
 		_poll_after -= delta
 		if _poll_after <= 0.0:
-			_request("/api/auth/discord/poll", {"poll_token": _poll_token}, "discord_poll")
+			_request("/api/auth/discord/poll", {"poll_token": _poll_token}, HttpOperation.DISCORD_POLL)
 	if recovering:
-		if not _recovery_context_matches():
-			_fail("Reconnection cancelled because the account, server, world or mode changed.")
-			return
-		if now >= _recovery_deadline_usec:
-			_fail("Could not reconnect to the server. Progress already confirmed by the server is retained; unconfirmed actions were not retried. Your private save is unchanged.")
-			return
-		if _socket == null and now >= _recovery_after_usec:
-			if _open_socket() != OK:
-				_schedule_recovery(now)
+		match recovery_step(now):
+			RecoveryStep.CANCELLED:
+				_fail("Reconnection cancelled because the account, server, world or mode changed.")
+				return
+			RecoveryStep.EXPIRED:
+				_fail("Could not reconnect to the server. Progress already confirmed by the server is retained; unconfirmed actions were not retried. Your private save is unchanged.")
+				return
+			RecoveryStep.DUE:
+				if _open_socket() != OK:
+					_schedule_recovery(now)
 	if _socket == null:
 		return
 	_socket.poll()
@@ -745,7 +858,7 @@ func _receive(event: Dictionary) -> void:
 			world_event.emit(event)
 		"blast_result":
 			var request := str(event.get("request_id", ""))
-			if _pvp_blasts.has(request):
+			if blast_state(request) == PendingState.AWAITING_ACKNOWLEDGMENT:
 				var item: String = _pvp_blasts[request]
 				_pvp_blasts.erase(request)
 				if bool(event.get("accepted", false)):
@@ -811,23 +924,23 @@ func _receive(event: Dictionary) -> void:
 				_pending_mines.erase(Vector2i(int(event.x), int(event.y)))
 				# Feedback belongs to a newly applied reward, not a replayed reply.
 				event.reward_applied = false
-				if bool(event.get("accepted", false)) and int(event.get("state_revision", 0)) > state_revision:
+				if bool(event.get("accepted", false)) and revision_relation(event) == RevisionRelation.NEWER:
 					state_revision = int(event.state_revision)
 					event.state = _reconcile_economic_state(event.get("state", {}))
 					event.reward_applied = true
 				elif bool(event.get("accepted", false)):
 					event.state = host.data.coop_snapshot()
 			world_event.emit(event)
-			if own and _pending_mines.is_empty():
+			if own and mining_state() == PendingState.EMPTY:
 				send_state()
 		"state_ack":
 			if mode == "pvp":
 				_acknowledge_motion(event)
-			if int(event.get("state_revision", 0)) == state_revision:
+			if revision_relation(event) == RevisionRelation.CURRENT:
 				_economic_baseline = event.get("state", {}).duplicate(true)
 		"transfer_result":
 			transfer_pending = false
-			if bool(event.get("accepted", false)) and int(event.get("state_revision", 0)) > state_revision:
+			if bool(event.get("accepted", false)) and revision_relation(event) == RevisionRelation.NEWER:
 				state_revision = int(event.state_revision)
 				event.state = _reconcile_economic_state(event.get("state", {}))
 			world_event.emit(event)
@@ -851,7 +964,7 @@ func _receive(event: Dictionary) -> void:
 					_pvp_blasts.clear()
 				world_event.emit(event)
 				return
-			if int(event.get("state_revision", 0)) > state_revision:
+			if revision_relation(event) == RevisionRelation.NEWER:
 				state_revision = int(event.state_revision)
 				event.state = _reconcile_economic_state(event.get("state", {}))
 				world_event.emit(event)

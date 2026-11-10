@@ -4,6 +4,20 @@ Godot port derived from [Motherload Recoded](https://nemael.itch.io/motherload-r
 The original Unity source remains under `Assets/`; the runtime project is `godot/`.
 Beta builds are not a claim of original-game parity acceptance.
 
+## Explicit control states · 0.10.1
+
+Gameplay, UI/input/audio, multiplayer sessions, authority/capture, publication,
+deployment and announcement delivery use owner-local enums or tagged states.
+Independent lifecycles remain orthogonal; timers, revisions, request IDs and
+native handles are transition payloads, not duplicate mutable flags.
+
+Established GDScript properties project those states. Wire/save/database schemas,
+retry policies and production ordering remain unchanged, including connection
+recovery, PvP rounds/combat/hull indicators and Vulcan. The release retains stock
+Godot 4.7.2 and its existing camera, animation and physics behavior; private SDK,
+rendering and source-reference experiments are not adopted. Local/private intake
+and reference harnesses remain outside the public game repository.
+
 ## Branching and release delivery
 
 - `main` is deployable. Use short-lived branches and pull requests.

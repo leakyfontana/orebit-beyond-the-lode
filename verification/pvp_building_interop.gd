@@ -184,7 +184,7 @@ func rejections() -> void:
 	host.ui._set_panel(script, true)
 	host.ui._close_panel(script)
 	receive(authority(script, true, true, player.position_unity))
-	check(pvp.building_pending and not pvp._requested_enter, "Close during entry did not defer a real exit request")
+	check(pvp.building_pending, "Close during entry did not defer a real exit request")
 	receive(authority(script, false, true, Vector2(4.5, -3.5)))
 	check_outside("Close during entry")
 

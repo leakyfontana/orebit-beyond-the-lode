@@ -8,6 +8,13 @@ signal state_exited(name: String, behaviors: Array)
 const SetResource = preload("res://scripts/native_animation_set.gd")
 const BOUNDARY_EPSILON := 0.000000001
 
+enum Lifecycle { UNBOUND, BINDING, EMPTY, READY, RUNNING, TORN_DOWN }
+enum TransitionOpportunity { CLOSED, AVAILABLE, CONSUMED }
+enum GateState { ARMED_CLOSED, ARMED_OPEN, SPENT_CLOSED, SPENT_OPEN }
+enum TriggerState { READY, PENDING }
+enum CallbackPhase { IDLE, MIXING, DISPATCHING }
+enum PoseOwner { MIXER, ENDPOINT }
+
 ## Texture/pivot/PPU are one discrete sprite pose. Godot blends numeric tracks,
 ## but textures are not interpolatable. Filter the non-dominant native pose so
 ## all three native property tracks switch together at the original midpoint.
@@ -40,7 +47,8 @@ var state_time: float:
 ## Referenced directly by baked native advance_expression strings.
 var native_parameters: Dictionary = {}
 var native_gates: Dictionary = {}
-var native_transition_available: bool = false
+var native_transition_available: bool:
+	get: return transition_opportunity == TransitionOpportunity.AVAILABLE
 var native_playback: AnimationNodeStateMachinePlayback:
 	get: return _playback
 
@@ -50,40 +58,42 @@ var _player: AnimationPlayer
 var _tree: BoundTree
 var _playback: AnimationNodeStateMachinePlayback
 var _opened_gates: Array[StringName] = []
-var _started: bool = false
+var lifecycle := Lifecycle.UNBOUND
+var transition_opportunity := TransitionOpportunity.CLOSED
+var callback_phase := CallbackPhase.IDLE
+var pose_owner := PoseOwner.MIXER
 var _elapsed: float = 0.0
 var _event_methods: Array[String] = []
 var _event_arguments: Array = []
 var _endpoint_animation: StringName
-var _used_gates: Dictionary = {}
+var _gate_states: Dictionary = {}
+var _trigger_states: Dictionary = {}
 
 func bind_controller(controller_id: String, actor_root: Node, bridge: SceneBridge) -> void:
 	assert(actor_root != null and bridge != null, "NativeAnimator requires actor and SceneBridge")
 	if get_parent() == null:
 		actor_root.add_child(self)
-	if is_instance_valid(_tree):
-		_tree.active = false
-		_tree.free()
-	if is_instance_valid(_player):
-		_player.free()
-	_playback = null
-	_started = false
+	teardown()
+	lifecycle = Lifecycle.BINDING
 	_elapsed = 0.0
 	_root = actor_root
 	_set = load("res://animations/controllers/%s.tres" % controller_id) as NativeAnimationSet
 	assert(_set != null and _set.schema_version == 1, "Missing/outdated baked native controller: " + controller_id)
 	native_parameters.clear()
 	native_gates.clear()
-	native_transition_available = false
+	transition_opportunity = TransitionOpportunity.CLOSED
 	_opened_gates.clear()
 	_event_methods.clear()
 	_event_arguments.clear()
-	_endpoint_animation = &""
-	for key in _set.parameters:
-		native_parameters[key] = _set.parameters[key].default
+	pose_owner = PoseOwner.MIXER
+	callback_phase = CallbackPhase.IDLE
+	_gate_states.clear()
+	_trigger_states.clear()
+	reset_parameters()
 	for gate in _set.gates:
-		native_gates[gate] = false
+		_set_gate_state(gate, GateState.ARMED_CLOSED)
 	if _set.empty:
+		lifecycle = Lifecycle.EMPTY
 		return # The published HullUI controller really contains no states.
 	var library := AnimationLibrary.new()
 	for animation_name in _set.library.get_animation_list():
@@ -199,6 +209,42 @@ func bind_controller(controller_id: String, actor_root: Node, bridge: SceneBridg
 	_playback = _tree.get("parameters/playback") as AnimationNodeStateMachinePlayback
 	_playback.state_started.connect(_state_started)
 	_playback.state_finished.connect(_state_finished)
+	lifecycle = Lifecycle.READY
+
+func teardown() -> void:
+	transition_opportunity = TransitionOpportunity.CLOSED
+	lifecycle = Lifecycle.TORN_DOWN
+	callback_phase = CallbackPhase.IDLE
+	pose_owner = PoseOwner.MIXER
+	if is_instance_valid(_tree):
+		_tree.active = false
+		_tree.free()
+	if is_instance_valid(_player):
+		_player.free()
+	_tree = null
+	_player = null
+	_playback = null
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE:
+		lifecycle = Lifecycle.TORN_DOWN
+		transition_opportunity = TransitionOpportunity.CLOSED
+		callback_phase = CallbackPhase.IDLE
+
+func _set_gate_state(name: StringName, state: GateState) -> void:
+	_gate_states[name] = state
+	# Baked stock-controller expressions consume this boolean projection.
+	native_gates[name] = state == GateState.ARMED_OPEN or state == GateState.SPENT_OPEN
+
+func _consume_trigger(name: StringName) -> void:
+	_trigger_states[name] = TriggerState.READY
+	native_parameters[name] = false
+
+func reset_parameters() -> void:
+	for key in _set.parameters:
+		native_parameters[key] = _set.parameters[key].default
+		if int(_set.parameters[key].type) == 9:
+			_trigger_states[key] = TriggerState.PENDING if bool(native_parameters[key]) else TriggerState.READY
 
 func condition(name: StringName, enabled: bool) -> void:
 	assert(_set.parameters.has(name) and int(_set.parameters[name].type) == 4, "Not a native bool condition: " + str(name))
@@ -215,15 +261,19 @@ func parameter(name: StringName, value: Variant) -> void:
 
 func pulse(name: StringName) -> void:
 	assert(_set.parameters.has(name) and int(_set.parameters[name].type) == 9, "Not a native trigger: " + str(name))
-	native_parameters[name] = true
+	_trigger_states[name] = TriggerState.PENDING
+	native_parameters[name] = _trigger_states[name] == TriggerState.PENDING
+
+func _can_advance() -> bool:
+	return (lifecycle == Lifecycle.READY or lifecycle == Lifecycle.RUNNING) and is_instance_valid(_root) and not _root.is_queued_for_deletion()
 
 func advance(delta: float) -> void:
 	assert(delta >= 0.0, "Native animation cannot advance negative time")
-	if _playback == null or not is_instance_valid(_root) or _root.is_queued_for_deletion():
+	if not _can_advance():
 		return
-	native_transition_available = delta > 0.0
-	if not _started:
-		_started = true
+	transition_opportunity = TransitionOpportunity.AVAILABLE if delta > 0.0 else TransitionOpportunity.CLOSED
+	if lifecycle == Lifecycle.READY:
+		lifecycle = Lifecycle.RUNNING
 		_playback.start(_set.default_node)
 	_advance_tree(0.0)
 	var remaining := delta
@@ -243,7 +293,8 @@ func advance(delta: float) -> void:
 			return
 		_advance_tree(0.0) # Native method gates become eligible at this exact time.
 		for gate in _opened_gates:
-			native_gates[gate] = false
+			var state: GateState = _gate_states[gate]
+			_set_gate_state(gate, GateState.SPENT_CLOSED if state == GateState.SPENT_OPEN or state == GateState.SPENT_CLOSED else GateState.ARMED_CLOSED)
 		_opened_gates.clear()
 
 func _boundary_wait(node: StringName, position: float, maximum: float) -> float:
@@ -255,11 +306,11 @@ func _boundary_wait(node: StringName, position: float, maximum: float) -> float:
 	return maximum
 
 func _native_gate(name: StringName, once: bool) -> void:
-	if once and _used_gates.has(name):
+	var state: GateState = _gate_states[name]
+	var spent := state == GateState.SPENT_CLOSED or state == GateState.SPENT_OPEN
+	if once and spent:
 		return
-	if once:
-		_used_gates[name] = true
-	native_gates[name] = true
+	_set_gate_state(name, GateState.SPENT_OPEN if once or spent else GateState.ARMED_OPEN)
 	_opened_gates.append(name)
 
 func _native_event(method: String, argument: Variant) -> void:
@@ -271,19 +322,22 @@ func _native_endpoint(animation: StringName) -> void:
 	if _playback.get_fading_from_node() != &"" and _playback.get_fading_position() < _playback.get_fading_length() * 0.5:
 		dominant = _playback.get_fading_from_node()
 	if _player.get_animation(animation).get_meta("source_state") == _set.states[dominant].source_state:
+		pose_owner = PoseOwner.ENDPOINT
 		_endpoint_animation = animation
 
 func _advance_tree(delta: float) -> void:
 	if delta > 0.0:
-		_endpoint_animation = &""
+		pose_owner = PoseOwner.MIXER
+	callback_phase = CallbackPhase.MIXING
 	_tree.advance(delta)
-	if _endpoint_animation != &"":
+	if pose_owner == PoseOwner.ENDPOINT:
 		# A baked single-pose native animation preserves loop-end event poses.
 		_player.play(_endpoint_animation)
 		_player.seek(0.0, true, true)
 		_player.stop(true)
 	# Immediate native method tracks run during mixing, before property apply.
 	# Dispatch gameplay only after the native mixer has written the keyed pose.
+	callback_phase = CallbackPhase.DISPATCHING
 	var index := 0
 	while index < _event_methods.size():
 		animation_event.emit(_event_methods[index], _event_arguments[index])
@@ -292,20 +346,20 @@ func _advance_tree(delta: float) -> void:
 			break
 	_event_methods.clear()
 	_event_arguments.clear()
+	callback_phase = CallbackPhase.IDLE
 
 func _state_started(node: StringName) -> void:
 	_elapsed = 0.0
-	_endpoint_animation = &""
-	_used_gates.clear()
-	for gate in native_gates:
-		native_gates[gate] = false
+	pose_owner = PoseOwner.MIXER
+	for gate in _gate_states:
+		_set_gate_state(gate, GateState.ARMED_CLOSED)
 	var definition: Dictionary = _set.states.get(str(node), {})
 	if not str(definition.incoming).is_empty():
 		# Native recursive traversal must not take another source transition in
 		# this Update, even when opposite source thresholds overlap.
-		native_transition_available = false
+		transition_opportunity = TransitionOpportunity.CONSUMED
 	for trigger in definition.get("triggers", []):
-		native_parameters[trigger] = false
+		_consume_trigger(trigger)
 	state_entered.emit(str(definition.get("name", "")), definition.get("behaviors", []))
 
 func _state_finished(node: StringName) -> void:

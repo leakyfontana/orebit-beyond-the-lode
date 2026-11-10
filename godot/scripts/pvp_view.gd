@@ -1,11 +1,36 @@
 class_name PvpView
 extends Node
 
+enum BuildingLocation { EXTERIOR, INTERIOR }
+enum BuildingRequest { IDLE, QUEUED, IN_FLIGHT }
+enum BuildingDirection { ENTER, EXIT }
+enum CloseIntent { NONE, AFTER_ENTRY }
+enum Recovery { HIDDEN, DEATH_ANIMATION, COUNTDOWN }
+enum RespawnWait { COUNTING_DOWN, AWAITING_SERVER }
+enum ReplicaKind { BAG, HAZARD, IMPACT }
+enum ImpactPhase { BREAKING, BLINKING, EXPIRED }
+
+const REPLICA_WIRE_KINDS := {
+	ReplicaKind.BAG: "bags",
+	ReplicaKind.HAZARD: "falling",
+	ReplicaKind.IMPACT: "impacts",
+}
+
+class Replica:
+	var kind: ReplicaKind
+	var sprite: Sprite2D
+	var started_at := 0.0
+	var expires_at := 0.0
+
+	func _init(replica_kind: ReplicaKind, visual: Sprite2D) -> void:
+		kind = replica_kind
+		sprite = visual
+
 const HullIndicator = preload("res://scripts/pvp_hull_indicator.gd")
 
 var host: Node
 var network: CoopClient
-var objects: Dictionary = {}
+var _replicas: Dictionary = {}
 var respawn_at := 0.0
 var server_time := 0.0
 var last_hull := -1.0
@@ -20,12 +45,27 @@ var _respawn_detail: Label
 var _respawn_footer: Label
 var _respawn_progress: ProgressBar
 var _last_respawn_seconds := -1
-var building := ""
-var building_pending := false
+var building_location: BuildingLocation = BuildingLocation.EXTERIOR
+var _building_script := ""
+var building_request: BuildingRequest = BuildingRequest.IDLE
+var building: String:
+	get:
+		return _building_script if building_location == BuildingLocation.INTERIOR else ""
+	set(value):
+		_building_script = value
+		building_location = BuildingLocation.EXTERIOR if value.is_empty() else BuildingLocation.INTERIOR
+var building_pending: bool:
+	get:
+		return building_request != BuildingRequest.IDLE
+	set(value):
+		if not value:
+			building_request = BuildingRequest.IDLE
+		else:
+			building_request = BuildingRequest.QUEUED if building_request_id.is_empty() else BuildingRequest.IN_FLIGHT
 var building_request_id := ""
 var _requested_building := ""
-var _requested_enter := false
-var _close_requested := false
+var _requested_direction: BuildingDirection = BuildingDirection.ENTER
+var _close_intent: CloseIntent = CloseIntent.NONE
 var _local_hull: PvpHullIndicator
 var _peer_hulls: Dictionary = {}
 var _retired_hull_ids: Array[String] = []
@@ -40,11 +80,12 @@ func configure(main_host: Node, client: CoopClient) -> void:
 	_build_respawn_overlay()
 
 func scene_loaded(snapshot: Dictionary) -> void:
-	objects.clear()
+	_replicas.clear()
 	_clear_hull_indicators()
 	_local_hull_current = 10.0
 	_local_hull_maximum = 10.0
-	building = ""
+	building_location = BuildingLocation.EXTERIOR
+	_building_script = ""
 	_clear_building_request()
 	apply_state(snapshot.get("state", {}))
 	apply_event(snapshot)
@@ -72,22 +113,15 @@ func apply_state(state: Dictionary, full: bool = true) -> void:
 		# Entry may win a race with a local exhaustion report. Interior
 		# authority suspends fuel death, not life or the fuel balance: outside,
 		# an unrefueled tank is exhausted normally by the next fixed update.
-		host.player._pvp_fuel_death_pending = false
-		host.player._pvp_fuel_death_sent = false
-	if building != next_building:
-		network._reset_motion_history()
-		# Ordinary hull ticks must never rewind a moving living player. Only
-		# leaving an authoritative interior corrects an existing life's pose.
-		if alive and was_alive and not building.is_empty() and next_building.is_empty():
-			host.player.position_unity = position
-		building = next_building
+		host.player.clear_fuel_death()
+	_accept_building_authority(next_building, alive, was_alive, position)
 	if not alive:
 		host.coop.lobby.leaderboard.close()
 		_clear_building_request()
 		if was_alive:
 			host.ui.sync_building_panel("")
 			for panel in host.ui.PANEL_SCRIPTS:
-				if bool(host.ui.panel_active.get(panel, false)):
+				if host.ui.is_panel_visible(panel):
 					host.ui._set_panel(panel, false)
 			host.player.exitShop()
 	host.player.apply_pvp_life(alive, position)
@@ -97,12 +131,24 @@ func apply_state(state: Dictionary, full: bool = true) -> void:
 	host.ui.updateAllUI()
 	_update_respawn_overlay()
 
+func _accept_building_authority(script: String, alive: bool, was_alive: bool, position: Vector2) -> void:
+	var next_location := BuildingLocation.EXTERIOR if script.is_empty() else BuildingLocation.INTERIOR
+	if building_location == next_location and _building_script == script:
+		return
+	network._reset_motion_history()
+	# Ordinary hull ticks must never rewind a moving living player. Only
+	# leaving an authoritative interior corrects an existing life's pose.
+	if alive and was_alive and building_location == BuildingLocation.INTERIOR and next_location == BuildingLocation.EXTERIOR:
+		host.player.position_unity = position
+	building_location = next_location
+	_building_script = script
+
 func _clear_building_request() -> void:
-	building_pending = false
+	building_request = BuildingRequest.IDLE
 	building_request_id = ""
 	_requested_building = ""
-	_requested_enter = false
-	_close_requested = false
+	_requested_direction = BuildingDirection.ENTER
+	_close_intent = CloseIntent.NONE
 
 func request_building(script: String, enter: bool) -> void:
 	if not host.ui.SHOP_SCRIPTS.has(script):
@@ -111,32 +157,37 @@ func request_building(script: String, enter: bool) -> void:
 		host.ui.sync_building_panel(building)
 		return
 	if building_pending:
-		if not enter and _requested_enter and script == _requested_building:
-			_close_requested = true
+		if not enter and _requested_direction == BuildingDirection.ENTER and script == _requested_building:
+			_close_intent = CloseIntent.AFTER_ENTRY
 		_refresh_building()
 		return
-	if (enter and building == script) or (not enter and building.is_empty()):
+	if (enter and building_location == BuildingLocation.INTERIOR and _building_script == script) or (not enter and building_location == BuildingLocation.EXTERIOR):
 		_refresh_building()
 		return
-	building_pending = true
-	_requested_building = script
-	_requested_enter = enter
+	_queue_building_request(script, BuildingDirection.ENTER if enter else BuildingDirection.EXIT)
 	_submit_building()
 	_refresh_building()
 
+func _queue_building_request(script: String, direction: BuildingDirection) -> void:
+	building_request = BuildingRequest.QUEUED
+	_requested_building = script
+	_requested_direction = direction
+
 func _submit_building() -> void:
-	if not building_pending or not building_request_id.is_empty() or network.has_pending_actions():
+	if building_request != BuildingRequest.QUEUED or network.has_pending_actions():
 		return
 	# Flush the current position/purchases before either authority transition.
 	network.send_state()
-	building_request_id = network.pvp_action("building", {"building": _requested_building, "enter": _requested_enter})
+	building_request_id = network.pvp_action("building", {"building": _requested_building, "enter": _requested_direction == BuildingDirection.ENTER})
+	if not building_request_id.is_empty():
+		building_request = BuildingRequest.IN_FLIGHT
 
 func building_result(event: Dictionary) -> void:
-	if not building_pending or building_request_id.is_empty() or str(event.get("request_id", "")) != building_request_id:
+	if building_request != BuildingRequest.IN_FLIGHT or str(event.get("request_id", "")) != building_request_id:
 		return
-	if str(event.get("building", "")) != _requested_building or bool(event.get("enter", false)) != _requested_enter:
+	if str(event.get("building", "")) != _requested_building or bool(event.get("enter", false)) != (_requested_direction == BuildingDirection.ENTER):
 		return
-	var close_after_entry := _close_requested and _requested_enter and bool(event.get("accepted", false))
+	var close_after_entry := _close_intent == CloseIntent.AFTER_ENTRY and _requested_direction == BuildingDirection.ENTER and bool(event.get("accepted", false))
 	var script := _requested_building
 	_clear_building_request()
 	# The preceding state_sync owns life, position and economy. Never apply
@@ -144,17 +195,20 @@ func building_result(event: Dictionary) -> void:
 	_refresh_building()
 	if not bool(event.get("accepted", false)):
 		network.status_changed.emit(str(event.get("message", "Unable to use this building.")))
-	if close_after_entry and building == script:
+	if close_after_entry and building_location == BuildingLocation.INTERIOR and _building_script == script:
 		request_building(script, false)
 
+func _building_is_protected() -> bool:
+	return host.player_alive and (building_pending or building_location == BuildingLocation.INTERIOR)
+
 func _refresh_building() -> void:
-	var protected: bool = host.player_alive and (building_pending or not building.is_empty())
+	var protected := _building_is_protected()
 	var panel := building
-	if protected and panel.is_empty() and building_pending:
+	if protected and building_location == BuildingLocation.EXTERIOR and building_pending:
 		panel = _requested_building
 	var panels_match := true
 	for script in host.ui.SHOP_SCRIPTS:
-		if bool(host.ui.panel_active.get(script, false)) != (script == panel):
+		if host.ui.is_panel_visible(script) != (script == panel):
 			panels_match = false
 	if not panels_match:
 		host.ui.sync_building_panel(panel)
@@ -185,69 +239,83 @@ func apply_event(event: Dictionary) -> void:
 	if not changed.is_empty():
 		host.refresh_tiles(changed)
 	var present: Dictionary = {}
-	for kind in ["bags", "falling", "impacts"]:
-		for record in event.get(kind, []):
+	for kind in REPLICA_WIRE_KINDS:
+		var wire_kind: String = REPLICA_WIRE_KINDS[kind]
+		for record in event.get(wire_kind, []):
 			# Local presentation can reach expiry before the next server tick.
 			# Do not resurrect that residue on the sheet's intact first frame.
-			if kind == "impacts" and float(record.expires_at) <= server_time:
+			if kind == ReplicaKind.IMPACT and float(record.expires_at) <= server_time:
 				continue
-			var key: String = kind + str(record.id)
+			var key: String = wire_kind + str(record.id)
 			present[key] = true
-			if not objects.has(key):
-				var sprite := Sprite2D.new()
-				sprite.name = "MoneyBag" if kind == "bags" else ("HazardImpact" if kind == "impacts" else "FallingHazard")
-				sprite.z_index = 15
-				sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-				sprite.scale = Vector2.ONE / 50.0
-				if kind == "bags":
-					sprite.texture = load("res://assets/money_bag.png")
-				elif kind == "impacts":
-					sprite.texture = load("res://assets/rock_breaking.png" if int(record.tile) <= 27 else "res://assets/lava_splash.png")
-					sprite.hframes = 8
-					sprite.set_meta("started_at", float(record.started_at))
-					sprite.set_meta("expires_at", float(record.expires_at))
-				else:
-					var tile_number := int(record.tile)
-					var filename := ("Rock" + str(tile_number - 24)) if tile_number <= 27 else ("Lava" + str(tile_number - 27))
-					var source := host.terrain.tile_layer.tile_set.get_source(0) as TileSetAtlasSource
-					var texture := AtlasTexture.new()
-					texture.atlas = source.texture
-					texture.region = Rect2(source.get_tile_texture_region(host.terrain.tile_coordinates[filename]))
-					sprite.texture = texture
-				host.world_root.add_child(sprite)
-				objects[key] = sprite
-			objects[key].position = Vector2(float(record.x), -float(record.y))
-			if kind == "impacts":
-				_update_impact_pose(objects[key])
-	for key in objects.keys():
+			if not _replicas.has(key):
+				_add_replica(key, kind, record)
+			var replica: Replica = _replicas[key]
+			replica.sprite.position = Vector2(float(record.x), -float(record.y))
+			if replica.kind == ReplicaKind.IMPACT:
+				_update_impact_pose(replica)
+	for key in _replicas.keys():
 		if not present.has(key):
-			if is_instance_valid(objects[key]):
-				objects[key].hide()
-				objects[key].queue_free()
-			objects.erase(key)
+			_remove_replica(key)
+
+func _add_replica(key: String, kind: ReplicaKind, record: Dictionary) -> void:
+	var sprite := Sprite2D.new()
+	sprite.name = "MoneyBag" if kind == ReplicaKind.BAG else ("HazardImpact" if kind == ReplicaKind.IMPACT else "FallingHazard")
+	sprite.z_index = 15
+	sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	sprite.scale = Vector2.ONE / 50.0
+	var replica := Replica.new(kind, sprite)
+	match kind:
+		ReplicaKind.BAG:
+			sprite.texture = load("res://assets/money_bag.png")
+		ReplicaKind.IMPACT:
+			sprite.texture = load("res://assets/rock_breaking.png" if int(record.tile) <= 27 else "res://assets/lava_splash.png")
+			sprite.hframes = 8
+			replica.started_at = float(record.started_at)
+			replica.expires_at = float(record.expires_at)
+		ReplicaKind.HAZARD:
+			var tile_number := int(record.tile)
+			var filename := ("Rock" + str(tile_number - 24)) if tile_number <= 27 else ("Lava" + str(tile_number - 27))
+			var source := host.terrain.tile_layer.tile_set.get_source(0) as TileSetAtlasSource
+			var texture := AtlasTexture.new()
+			texture.atlas = source.texture
+			texture.region = Rect2(source.get_tile_texture_region(host.terrain.tile_coordinates[filename]))
+			sprite.texture = texture
+	host.world_root.add_child(sprite)
+	_replicas[key] = replica
+
+func _remove_replica(key: String) -> void:
+	var replica: Replica = _replicas[key]
+	if is_instance_valid(replica.sprite):
+		replica.sprite.hide()
+		replica.sprite.queue_free()
+	_replicas.erase(key)
 
 func tick(delta: float) -> void:
 	server_time += delta
 	_submit_building()
-	for key in objects.keys():
-		var sprite: Sprite2D = objects[key]
-		if not is_instance_valid(sprite) or not sprite.has_meta("started_at"):
+	for key in _replicas.keys():
+		var replica: Replica = _replicas[key]
+		if not is_instance_valid(replica.sprite) or replica.kind != ReplicaKind.IMPACT:
 			continue
-		if server_time >= float(sprite.get_meta("expires_at")):
-			sprite.hide()
-			sprite.queue_free()
-			objects.erase(key)
+		if _impact_phase(replica) == ImpactPhase.EXPIRED:
+			_remove_replica(key)
 			continue
-		_update_impact_pose(sprite)
+		_update_impact_pose(replica)
 	_update_respawn_overlay()
 
-func _update_impact_pose(sprite: Sprite2D) -> void:
-	var age := maxf(0.0, server_time - float(sprite.get_meta("started_at")))
-	sprite.frame = mini(7, floori(age / 0.4 * 8.0))
+func _impact_phase(replica: Replica) -> ImpactPhase:
+	if server_time >= replica.expires_at:
+		return ImpactPhase.EXPIRED
+	return ImpactPhase.BREAKING if server_time - replica.started_at < 0.4 else ImpactPhase.BLINKING
+
+func _update_impact_pose(replica: Replica) -> void:
+	var age := maxf(0.0, server_time - replica.started_at)
+	replica.sprite.frame = mini(7, floori(age / 0.4 * 8.0))
 	# Only visibility changes once the animation has reached its broken pose.
 	var blink_age := maxf(0.0, age - 0.4)
 	var blink_phase := 2.0 * blink_age + 2.5 * blink_age * blink_age
-	sprite.visible = age < 0.4 or fmod(blink_phase, 1.0) < 0.55
+	replica.sprite.visible = _impact_phase(replica) == ImpactPhase.BREAKING or fmod(blink_phase, 1.0) < 0.55
 
 func _process(_delta: float) -> void:
 	if host == null:
@@ -390,15 +458,25 @@ func _resize_respawn_overlay() -> void:
 	_respawn_detail.add_theme_font_size_override("font_size", 14 if compact else 18)
 	_respawn_footer.add_theme_font_size_override("font_size", 12 if compact else 14)
 
+func recovery_state() -> Recovery:
+	if not host.is_coop or not host.data.pvp_mode or host.scene_name != "Game" or host.player_alive or host.coop.lobby.modal:
+		return Recovery.HIDDEN
+	if host.player.pvp_death_animation_active():
+		return Recovery.DEATH_ANIMATION
+	return Recovery.COUNTDOWN
+
+func respawn_wait_state() -> RespawnWait:
+	return RespawnWait.COUNTING_DOWN if respawn_at > server_time else RespawnWait.AWAITING_SERVER
+
 func _update_respawn_overlay() -> void:
-	var show_overlay: bool = host.is_coop and host.data.pvp_mode and host.scene_name == "Game" and not host.player_alive and not host.coop.lobby.modal
-	_respawn_root.visible = show_overlay
-	if not show_overlay:
+	var recovery := recovery_state()
+	_respawn_root.visible = recovery != Recovery.HIDDEN
+	if recovery == Recovery.HIDDEN:
 		_last_respawn_seconds = -1
 		return
 	# Keep input blocked, but do not cover the original opening death sequence.
 	# Its authored transition, not another timer, reveals the remaining countdown.
-	var show_countdown: bool = not host.player.pvp_death_animation_active()
+	var show_countdown := recovery != Recovery.DEATH_ANIMATION
 	_respawn_panel.visible = show_countdown
 	_respawn_shade.visible = show_countdown
 	var remaining := maxf(0, respawn_at - server_time)
@@ -407,6 +485,7 @@ func _update_respawn_overlay() -> void:
 	if seconds == _last_respawn_seconds:
 		return
 	_last_respawn_seconds = seconds
-	_respawn_time.text = "%ds" % seconds if seconds > 0 else "..."
-	_respawn_title.text = "Rebuilding your craft" if seconds > 0 else "Almost ready"
-	_respawn_footer.text = "The world keeps moving while you rebuild." if seconds > 0 else "Waiting for the server to confirm your respawn."
+	var counting_down := respawn_wait_state() == RespawnWait.COUNTING_DOWN
+	_respawn_time.text = "%ds" % seconds if counting_down else "..."
+	_respawn_title.text = "Rebuilding your craft" if counting_down else "Almost ready"
+	_respawn_footer.text = "The world keeps moving while you rebuild." if counting_down else "Waiting for the server to confirm your respawn."

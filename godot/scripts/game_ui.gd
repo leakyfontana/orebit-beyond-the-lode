@@ -21,6 +21,17 @@ const UPGRADE_NAMES: Dictionary = {
 const EFFECT_UNITS: Dictionary = {"Drill": " Ft/s", "Hull": " Health", "Engine": " HorsePower", "Fuel": " US gal", "Radiator": "% Effective", "Cargo": " Cu ft."}
 const EFFECT_MULTIPLIERS: Dictionary = {"Drill": 10, "Hull": 1, "Engine": 25, "Fuel": 1, "Radiator": 100, "Cargo": 1}
 
+enum PanelState { HIDDEN, VISIBLE }
+enum BuildingSync { USER_REQUEST, AUTHORITY_RECONCILIATION }
+enum SlowTextState { REVEALING, COMPLETE, SUSPENDED_REVEALING, SUSPENDED_COMPLETE }
+enum MoneyState { SETTLED, CONVERGING, FROZEN }
+enum FuelSeverity { NORMAL, LOW, VERY_LOW }
+enum UpgradeCategoryState { WELCOME, SELECTED }
+enum UpgradePreviewState { EMPTY, HIDDEN_SELECTION, SHOWN_SELECTION }
+enum ItemSelectionState { EMPTY, SELECTED }
+enum TransmissionState { UNSEEN, SEEN }
+enum TransmissionSession { IDLE, OPEN }
+
 var host: Node
 var bridge: SceneBridge
 var data: GameData
@@ -31,16 +42,71 @@ var slow_text: Dictionary = {}
 var displayed_money: int = 0
 var previous_fuel_percent: int = 0
 var previous_hull_percent: int = 0
-var is_low_fuel_playing: bool = false
-var is_very_low_fuel_playing: bool = false
-var current_category: String = ""
-var current_potential_upgrade: String = ""
-var currently_selected_item: String = ""
-var current_transmission_index: int = 0
+var fuel_severity := FuelSeverity.NORMAL
+var upgrade_category_state := UpgradeCategoryState.WELCOME
+var upgrade_preview_state := UpgradePreviewState.EMPTY
+var item_selection_state := ItemSelectionState.EMPTY
+var _upgrade_category_name: String
+var _upgrade_name: String
+var _item_name: String
+var transmission_session := TransmissionSession.IDLE
+var _transmission_index: int = 0
 var _boss_health: Control
 var _boss_health_offsets := Vector4.ZERO
 var controller_ui: ControllerUI
-var _building_panel_sync := false
+var _building_sync := BuildingSync.USER_REQUEST
+
+var current_category: String:
+	get:
+		return _upgrade_category_name if upgrade_category_state == UpgradeCategoryState.SELECTED else ""
+	set(value):
+		_upgrade_category_name = value
+		upgrade_category_state = UpgradeCategoryState.WELCOME if value.is_empty() else UpgradeCategoryState.SELECTED
+
+var current_potential_upgrade: String:
+	get:
+		return _upgrade_name if upgrade_preview_state != UpgradePreviewState.EMPTY else ""
+	set(value):
+		_upgrade_name = value
+		upgrade_preview_state = UpgradePreviewState.EMPTY if value.is_empty() else UpgradePreviewState.SHOWN_SELECTION
+
+var currently_selected_item: String:
+	get:
+		return _item_name if item_selection_state == ItemSelectionState.SELECTED else ""
+	set(value):
+		_item_name = value
+		item_selection_state = ItemSelectionState.EMPTY if value.is_empty() else ItemSelectionState.SELECTED
+
+var current_transmission_index: int:
+	get:
+		return _transmission_index if transmission_session == TransmissionSession.OPEN else 0
+	set(value):
+		_transmission_index = value
+		transmission_session = TransmissionSession.IDLE if value == 0 else TransmissionSession.OPEN
+
+var is_low_fuel_playing: bool:
+	get:
+		return fuel_severity == FuelSeverity.LOW
+
+var is_very_low_fuel_playing: bool:
+	get:
+		return fuel_severity == FuelSeverity.VERY_LOW
+
+func is_panel_visible(script: String) -> bool:
+	return panel_active.get(script, PanelState.HIDDEN) == PanelState.VISIBLE
+
+
+func _reset_upgrade_selection() -> void:
+	upgrade_category_state = UpgradeCategoryState.WELCOME
+	upgrade_preview_state = UpgradePreviewState.EMPTY
+
+func _money_state() -> MoneyState:
+	if displayed_money == data.player_money:
+		return MoneyState.SETTLED
+	return MoneyState.FROZEN if isFreezingMoneyUIOpen() else MoneyState.CONVERGING
+
+func _transmission_state(index: int) -> TransmissionState:
+	return TransmissionState.SEEN if bool(data.transmissions[index].displayed) else TransmissionState.UNSEEN
 
 func configure(game_host: Node, scene_bridge: SceneBridge, game_data: GameData, game_audio: GameAudio) -> void:
 	host = game_host
@@ -60,7 +126,7 @@ func configure(game_host: Node, scene_bridge: SceneBridge, game_data: GameData, 
 		if script == "SlowTextDisplayer":
 			var p: Dictionary = component.properties
 			slow_text[bridge.component_owner(id)] = {
-				"text": "", "complete": false, "count": 0,
+				"text": "", "phase": SlowTextState.REVEALING, "count": 0,
 				"interval": float(p.get("max_time_until_next_char", 0)),
 				"remaining": float(p.get("max_time_until_next_char", 0)),
 				"underscore": bool(p.get("show_underscore_at_end", false))
@@ -82,7 +148,7 @@ func configure(game_host: Node, scene_bridge: SceneBridge, game_data: GameData, 
 		_install_boss_health_layout()
 	for script in PANEL_SCRIPTS:
 		if script_components.has(script):
-			panel_active[script] = false
+			panel_active[script] = PanelState.HIDDEN
 	_sync_panels()
 	controller_ui = ControllerUI.new()
 	add_child(controller_ui)
@@ -106,6 +172,7 @@ func _layout_close_targets() -> void:
 		button.offset_right = padding.x
 		button.offset_top = -padding.y
 		button.offset_bottom = padding.y
+
 
 func _install_boss_health_layout() -> void:
 	_boss_health = bridge.node(_child(_panel("UIManager"), "BossHealth")) as Control
@@ -193,7 +260,7 @@ func _slow(reference: Variant, value: String) -> void:
 	var state: Dictionary = slow_text[id]
 	state.text = value
 	state.count = 0
-	state.complete = false
+	state.phase = SlowTextState.REVEALING if _visible(id) else SlowTextState.SUSPENDED_REVEALING
 	# The original does not reset its remaining character timer here.
 	_text(id, "" if value.is_empty() else "_")
 
@@ -265,20 +332,28 @@ func tick(delta: float) -> void:
 	_update_slow_text(delta)
 	if script_components.has("UIManager"):
 		updateDepthUI()
-		if displayed_money != data.player_money and not isFreezingMoneyUIOpen():
+		if _money_state() == MoneyState.CONVERGING:
 			var step: int = maxi(1, absi(int(float(data.player_money - displayed_money) / 20.0)))
 			displayed_money = int(move_toward(float(displayed_money), float(data.player_money), float(step)))
 			updateMoneyUI()
 
 func _update_slow_text(delta: float) -> void:
 	for id in slow_text:
-		if not _visible(id):
-			continue
 		var state: Dictionary = slow_text[id]
+		if not _visible(id):
+			if state.phase == SlowTextState.REVEALING:
+				state.phase = SlowTextState.SUSPENDED_REVEALING
+			elif state.phase == SlowTextState.COMPLETE:
+				state.phase = SlowTextState.SUSPENDED_COMPLETE
+			continue
+		if state.phase == SlowTextState.SUSPENDED_REVEALING:
+			state.phase = SlowTextState.REVEALING
+		elif state.phase == SlowTextState.SUSPENDED_COMPLETE:
+			state.phase = SlowTextState.COMPLETE
 		if state.interval == 0.0:
 			_text(id, str(state.text))
-			state.complete = true
-		if state.complete:
+			state.phase = SlowTextState.COMPLETE
+		if state.phase == SlowTextState.COMPLETE:
 			continue
 		state.remaining -= delta
 		if state.remaining < 0.0:
@@ -288,7 +363,7 @@ func _update_slow_text(delta: float) -> void:
 					_text(id, str(state.text))
 					if int(state.count) % 3 == 0:
 						audio.PlaySoundOneShot("ComputerTypeLetter2")
-				state.complete = true
+				state.phase = SlowTextState.COMPLETE
 			else:
 				state.count += 1
 				_text(id, str(state.text).substr(0, int(state.count)) + "_")
@@ -392,6 +467,8 @@ func _dispatch(target_id: String, method: String, argument: Variant) -> void:
 		"TransmissionManager":
 			match method:
 				"openUI":
+					_transmission_index = current_transmission_index
+					transmission_session = TransmissionSession.OPEN
 					host.enterShop()
 					_set_panel(script, true)
 				"closeUI": _close_panel(script)
@@ -429,23 +506,24 @@ func isFreezingMoneyUIOpen() -> bool:
 
 func _sync_panels() -> void:
 	for script in panel_active:
-		var enabled: bool = _visible(_panel(script))
-		if enabled != bool(panel_active[script]):
-			panel_active[script] = enabled
-			_panel_lifecycle(script, enabled)
+		var next := PanelState.VISIBLE if _visible(_panel(script)) else PanelState.HIDDEN
+		if next != panel_active[script]:
+			panel_active[script] = next
+			_panel_lifecycle(script, next)
 
 func _set_panel(script: String, enabled: bool) -> void:
 	bridge.set_active(_panel(script), enabled)
 	_sync_panels()
 
-func _panel_lifecycle(script: String, enabled: bool) -> void:
+func _panel_lifecycle(script: String, state: PanelState) -> void:
 	if not SHOP_SCRIPTS.has(script):
 		return
-	if data.pvp_mode and host.is_coop and not _building_panel_sync:
+	var enabled := state == PanelState.VISIBLE
+	if data.pvp_mode and host.is_coop and _building_sync == BuildingSync.USER_REQUEST:
 		host.coop.pvp.request_building(script, enabled)
-		if not enabled or not bool(panel_active.get(script, false)):
+		if not enabled or not is_panel_visible(script):
 			return
-	if enabled:
+	if state == PanelState.VISIBLE:
 		host.enterShop(SHOP_SCRIPTS.find(script))
 		match script:
 			"UpgradeShopUI": _upgrade_open_display()
@@ -463,11 +541,11 @@ func _panel_lifecycle(script: String, enabled: bool) -> void:
 
 func sync_building_panel(building: String) -> void:
 	# Authority restoration is not a fresh user entry/exit request.
-	_building_panel_sync = true
+	_building_sync = BuildingSync.AUTHORITY_RECONCILIATION
 	for script in SHOP_SCRIPTS:
 		bridge.set_active(_panel(script), script == building)
 	_sync_panels()
-	_building_panel_sync = false
+	_building_sync = BuildingSync.USER_REQUEST
 	if building.is_empty():
 		audio.PlayMusic("MainLevelMusic")
 	else:
@@ -507,12 +585,11 @@ func open_options() -> void:
 
 func _close_panel(script: String) -> void:
 	if SHOP_SCRIPTS.has(script):
-		if data.pvp_mode and host.is_coop and not _building_panel_sync:
+		if data.pvp_mode and host.is_coop and _building_sync == BuildingSync.USER_REQUEST:
 			host.coop.pvp.request_building(script, false)
 			return
 		if script == "UpgradeShopUI":
-			current_category = ""
-			current_potential_upgrade = ""
+			_reset_upgrade_selection()
 		_set_panel(script, false)
 		audio.PlayMusic("MainLevelMusic")
 		data.saveData()
@@ -530,7 +607,7 @@ func _close_panel(script: String) -> void:
 			else:
 				data.player_money += bonus
 			audio.PlaySoundOneShot("Purchase")
-		current_transmission_index = 0
+		transmission_session = TransmissionSession.IDLE
 	# Main-menu instructions have the same broken HelpUUIManager with null player;
 	# its dedicated close button targets MainMenuManager instead. Keep that error
 	# explicit rather than treating it as a valid gameplay pause target.
@@ -610,33 +687,33 @@ func updateFuelUI() -> void:
 		push_error("Original fuel sprite index out of range: " + str(percent))
 		return
 	_resource_image(p.FuelUI, "UI/HUD/FuelSprite/" + str(100 - percent))
-	if percent > 20:
-		if is_low_fuel_playing:
-			audio.StopSound("LowFuelWarning")
-			bridge.set_active(p.low_fuel_text, false)
-			is_low_fuel_playing = false
-		if is_very_low_fuel_playing:
-			audio.StopSound("VeryLowFuelWarning")
-			bridge.set_active(p.very_low_fuel_text, false)
-			is_very_low_fuel_playing = false
-	elif percent > 7:
-		if not is_low_fuel_playing:
+	_transition_fuel_severity(FuelSeverity.NORMAL if percent > 20 else (FuelSeverity.LOW if percent > 7 else FuelSeverity.VERY_LOW), p)
+
+func _transition_fuel_severity(next: FuelSeverity, p: Dictionary) -> void:
+	if next == fuel_severity:
+		return
+	# Keep each branch's original stop/start ordering.
+	match next:
+		FuelSeverity.NORMAL:
+			if fuel_severity == FuelSeverity.LOW:
+				audio.StopSound("LowFuelWarning")
+				bridge.set_active(p.low_fuel_text, false)
+			if fuel_severity == FuelSeverity.VERY_LOW:
+				audio.StopSound("VeryLowFuelWarning")
+				bridge.set_active(p.very_low_fuel_text, false)
+		FuelSeverity.LOW:
 			audio.PlaySound("LowFuelWarning")
 			bridge.set_active(p.low_fuel_text, true)
-			is_low_fuel_playing = true
-		if is_very_low_fuel_playing:
-			audio.StopSound("VeryLowFuelWarning")
-			bridge.set_active(p.very_low_fuel_text, false)
-			is_very_low_fuel_playing = false
-	else:
-		if is_low_fuel_playing:
-			audio.StopSound("LowFuelWarning")
-			bridge.set_active(p.low_fuel_text, false)
-			is_low_fuel_playing = false
-		if not is_very_low_fuel_playing:
+			if fuel_severity == FuelSeverity.VERY_LOW:
+				audio.StopSound("VeryLowFuelWarning")
+				bridge.set_active(p.very_low_fuel_text, false)
+		FuelSeverity.VERY_LOW:
+			if fuel_severity == FuelSeverity.LOW:
+				audio.StopSound("LowFuelWarning")
+				bridge.set_active(p.low_fuel_text, false)
 			audio.PlaySound("VeryLowFuelWarning")
 			bridge.set_active(p.very_low_fuel_text, true)
-			is_very_low_fuel_playing = true
+	fuel_severity = next
 
 func updateHullUI() -> void:
 	var percent: int = maxi(ceili(float(data.player_hp) / float(data.player_max_hp) * 20.0), 0)
@@ -690,14 +767,14 @@ func _upgrade_open_display() -> void:
 	bridge.set_active(p.welcome_ui, true)
 	bridge.set_active(p.upgrade_display, false)
 	bridge.set_active(p.upgrade_grid_area, false)
-	current_category = ""
-	current_potential_upgrade = ""
+	_reset_upgrade_selection()
 	_text(p.current_category_display, current_category)
 	_slow(p.potential_upgrade_name, current_potential_upgrade)
 
 func displayCategory(category: String) -> void:
 	if category != current_category:
-		current_category = category
+		_upgrade_category_name = category
+		upgrade_category_state = UpgradeCategoryState.SELECTED
 		updateCategory()
 		audio.PlaySoundOneShot("SelectUpgradeCategory")
 
@@ -716,18 +793,29 @@ func updateCategory() -> void:
 		bridge.set_active(pictures[index], enabled)
 		if enabled:
 			_resource_image(pictures[index], "UI/upgradesShop/" + current_category + "/" + str(names[index + 1]))
-	_slow(p.potential_upgrade_name, "")
-	_slow(p.potential_upgrade_price, "")
-	_slow(p.potential_upgrade_effect, "")
+	# Category refresh hides the preview but retains its purchase selection.
+	if upgrade_preview_state != UpgradePreviewState.EMPTY:
+		upgrade_preview_state = UpgradePreviewState.HIDDEN_SELECTION
+	_render_upgrade_preview()
 
 func displayPotentialUpgrade(upgrade_index: int) -> void:
-	current_potential_upgrade = UPGRADE_NAMES[current_category][upgrade_index]
-	var p: Dictionary = _properties("UpgradeShopUI")
-	var upgrade: Dictionary = data.upgrades[current_category][current_potential_upgrade]
-	_slow(p.potential_upgrade_name, current_potential_upgrade)
-	_slow(p.potential_upgrade_price, "$" + _grouped(int(upgrade.price)))
-	_slow(p.potential_upgrade_effect, _number(float(upgrade.effect) * float(EFFECT_MULTIPLIERS[current_category])) + str(EFFECT_UNITS[current_category]))
+	_upgrade_name = UPGRADE_NAMES[current_category][upgrade_index]
+	upgrade_preview_state = UpgradePreviewState.SHOWN_SELECTION
+	_render_upgrade_preview()
 	audio.PlaySoundOneShot("SelectUpgrade")
+
+func _render_upgrade_preview() -> void:
+	var p: Dictionary = _properties("UpgradeShopUI")
+	match upgrade_preview_state:
+		UpgradePreviewState.EMPTY, UpgradePreviewState.HIDDEN_SELECTION:
+			_slow(p.potential_upgrade_name, "")
+			_slow(p.potential_upgrade_price, "")
+			_slow(p.potential_upgrade_effect, "")
+		UpgradePreviewState.SHOWN_SELECTION:
+			var upgrade: Dictionary = data.upgrades[current_category][current_potential_upgrade]
+			_slow(p.potential_upgrade_name, current_potential_upgrade)
+			_slow(p.potential_upgrade_price, "$" + _grouped(int(upgrade.price)))
+			_slow(p.potential_upgrade_effect, _number(float(upgrade.effect) * float(EFFECT_MULTIPLIERS[current_category])) + str(EFFECT_UNITS[current_category]))
 
 func buyUpgrade() -> void:
 	if not _can_trade("UpgradeShopUI"):
@@ -810,7 +898,8 @@ func updateHullBarDisplay() -> void:
 	_text(p.hull_display_text, str(data.player_hp) + "/" + str(data.player_max_hp) + " HP")
 
 func updateItemInformationScreen(item_name: String) -> void:
-	currently_selected_item = item_name
+	_item_name = item_name
+	item_selection_state = ItemSelectionState.SELECTED
 	var item: Dictionary = data.items[item_name]
 	var p: Dictionary = _properties("ItemShopManager")
 	_slow(p.item_name_text, item_name)
@@ -908,8 +997,9 @@ func closePopup() -> void:
 
 func displayTransmission(index: int) -> void:
 	var transmission: Dictionary = data.transmissions[index]
-	if not bool(transmission.displayed):
-		current_transmission_index = index
+	if _transmission_state(index) == TransmissionState.UNSEEN:
+		_transmission_index = index
+		transmission_session = TransmissionSession.OPEN
 		updateText(str(transmission.text), str(transmission.signature))
 		updatePortrait(str(transmission.picture_name))
 		transmission.displayed = true

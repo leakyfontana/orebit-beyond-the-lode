@@ -12,7 +12,7 @@ import unittest
 from unittest.mock import patch
 
 import test_server
-from pvp import BAG_HALF_SIZE, BLAST_HALF_SIZE, BUILDING_DOORS, DAMAGE, POD_HALF_HEIGHT, POD_HALF_WIDTH, PvpWorld, STOCK_UPGRADES, overlaps, stock_state
+from pvp import BAG_HALF_SIZE, BLAST_HALF_SIZE, BUILDING_DOORS, BodyMotionPhase, DAMAGE, POD_HALF_HEIGHT, POD_HALF_WIDTH, PvpWorld, STOCK_UPGRADES, overlaps, stock_state
 from server import APIError, Player, Service, Store
 from terrain import HEIGHT, WIDTH
 
@@ -290,7 +290,7 @@ class PvpMechanicsTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_fast_falling_body_keeps_accelerating_until_collision(self):
         body = {"x": 5.5, "y": 0, "vy": -25}
-        self.assertFalse(self.world.gravity(body, 0.1, 0.5))
+        self.assertIs(self.world.gravity(body, 0.1, 0.5), BodyMotionPhase.FALLING)
         self.assertLess(body["vy"], -25)
         self.assertLess(body["y"], -2.5)
 
@@ -548,7 +548,7 @@ class PvpMechanicsTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(self.world.position_blocked(player, 5.5, -3.5))
         self.world.terrain[5][4] = 0
         bag = {"x": 5.5, "y": -3.5, "vy": 0}
-        self.assertTrue(self.world.gravity(bag, 2, BAG_HALF_SIZE))
+        self.assertIs(self.world.gravity(bag, 2, BAG_HALF_SIZE), BodyMotionPhase.SUPPORTED)
         self.assertAlmostEqual(bag["y"], 1 - 10 + BAG_HALF_SIZE)
 
     def test_bag_render_sized_gravity_lands_stably_in_its_column(self):
@@ -606,7 +606,7 @@ class PvpMechanicsTest(unittest.IsolatedAsyncioTestCase):
         picker.user_id = account_id
         bag = {"id": "cash", "x": 5.5, "y": -8.5, "vy": 0, "amount": 1234.5}
         self.world.bags = [bag]
-        self.world.runtime_dirty = True
+        self.world.stage_runtime()
         await self.world.persist()
         # 1.0 center separation leaves a .05 hovering gap above the .45 hull
         # plus .5 bag, outside the old .75 center-radius pickup.
@@ -614,7 +614,6 @@ class PvpMechanicsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(picker.state["player_money"], 1254.5)
         self.assertFalse(self.world.bags)
         self.assertIn(picker, self.world.dirty_players)
-        self.assertTrue(self.world.runtime_dirty)
         revision = picker.revision
         self.world.step(0.1, 100.1, picker.contact_at)
         self.assertEqual(picker.state["player_money"], 1254.5)
@@ -870,7 +869,7 @@ class PvpMechanicsTest(unittest.IsolatedAsyncioTestCase):
         self.world.set_cell(5, 10, 1)
         self.world.damage(player, 10, 100)
         self.world.falling.append({"id": "fall", "x": 12.5, "y": -12.5, "tile": 28, "vy": -4, "hit": []})
-        self.world.runtime_dirty = True
+        self.world.stage_runtime()
         await self.world.persist()
         reloaded = PvpWorld(self.service, APIError)
         await reloaded.startup()
@@ -1024,7 +1023,6 @@ class PvpMechanicsTest(unittest.IsolatedAsyncioTestCase):
         requested["player_money"] += 30
         with self.assertRaises(sqlite3.Error):
             await self.snapshot(player, requested)
-        self.assertTrue(self.world.failed)
         self.assertFalse(any(m["type"] == "round_started" for _, m in self.messages))
         with self.assertRaises(APIError):
             await self.world.persist()

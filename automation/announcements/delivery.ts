@@ -16,12 +16,76 @@ const DEFAULT_STATE = process.env.OREBIT_ANNOUNCEMENTS_STATE_DIR ||
   join(homedir(), "Library/Application Support/Orebit Intake/announcements");
 
 type DeliveryResult = { created: boolean; messageId: string };
-type Intent = { state: "pending" | "sending" | "sent"; payload: string; message_id: string | null };
+enum IntentState {
+  Pending = "pending",
+  Sending = "sending",
+  Sent = "sent",
+}
+
+type PendingIntent = { state: IntentState.Pending; payload: string; message_id: null };
+type SendingIntent = { state: IntentState.Sending; payload: string; message_id: null };
+type Intent = PendingIntent | SendingIntent | { state: IntentState.Sent; payload: string; message_id: string };
+
+enum RequestOutcome {
+  Uncertain,
+  Rejected,
+}
+
+enum QueueState {
+  Idle,
+  Queued,
+}
+
+type DeliveryQueue = { state: QueueState.Idle } | { state: QueueState.Queued; tail: Promise<void> };
+
+enum LeaseState {
+  Released,
+  Open,
+  Held,
+}
+
+type OwnerLease =
+  | { state: LeaseState.Released }
+  | { state: LeaseState.Open | LeaseState.Held; database: Database };
+
+enum RequestState {
+  Ready,
+  Waiting,
+  Exhausted,
+}
+
+type RequestBudget =
+  | { state: RequestState.Ready; attempt: number; waited: number }
+  | { state: RequestState.Waiting; attempt: number; waited: number; delay: number }
+  | { state: RequestState.Exhausted };
+
+function rateLimited(budget: Extract<RequestBudget, { state: RequestState.Ready }>, delay: number): RequestBudget {
+  if (budget.attempt === 3 || delay > 60_000 || budget.waited + delay > 120_000) {
+    return { state: RequestState.Exhausted };
+  }
+  return { state: RequestState.Waiting, attempt: budget.attempt + 1, waited: budget.waited + delay, delay };
+}
+
+enum ReconciliationState {
+  Found,
+  Exhausted,
+}
+
+type Reconciliation =
+  | { state: ReconciliationState.Found; messageId: string }
+  | { state: ReconciliationState.Exhausted };
+
+enum HistoryState {
+  Latest,
+  Before,
+}
+
+type HistoryCursor = { state: HistoryState.Latest } | { state: HistoryState.Before; messageId: string };
 type JsonObject = Record<string, unknown>;
 
 // Only these locally authored, fixed messages cross the public error boundary.
 class DeliveryError extends Error {
-  constructor(message: string, readonly rejected = false) {
+  constructor(message: string, readonly outcome = RequestOutcome.Uncertain) {
     super(message);
     this.name = "AnnouncementDeliveryError";
   }
@@ -122,13 +186,47 @@ function privateFile(path: string, create = true): void {
   }
 }
 
+class DeliveryLease {
+  #lease: OwnerLease = { state: LeaseState.Released };
+
+  constructor(private path: string) {}
+
+  acquire(): void {
+    try {
+      const database = new Database(this.path, { create: false, strict: true });
+      this.#lease = { state: LeaseState.Open, database };
+      database.exec("PRAGMA busy_timeout=0; BEGIN EXCLUSIVE;");
+      this.#lease = { state: LeaseState.Held, database };
+    } catch (error) {
+      if (object(error) && (error.code === "SQLITE_BUSY" || error.code === "SQLITE_LOCKED" || error.errno === 5 || error.errno === 6)) {
+        throw new DeliveryError("Another announcement publisher holds the private delivery lock");
+      }
+      throw new DeliveryError("Announcement delivery lock is unavailable");
+    }
+  }
+
+  release(): void {
+    const lease = this.#lease;
+    if (lease.state === LeaseState.Released) return;
+    try {
+      if (lease.state === LeaseState.Held) lease.database.exec("ROLLBACK");
+    } finally {
+      try {
+        lease.database.close();
+      } finally {
+        this.#lease = { state: LeaseState.Released };
+      }
+    }
+  }
+}
+
 /**
  * Private, single-channel outbox. A pending intent with an uncertain POST is never
  * blindly resent: subsequent calls only reconcile it until its bot marker exists.
  * SQLite's separate OS-backed exclusive lock survives awaits, but releases on exit.
  */
 export class AnnouncementDelivery {
-  static #queue: Promise<void> = Promise.resolve();
+  static #queue: DeliveryQueue = { state: QueueState.Idle };
   readonly #token: string;
   readonly #database: Database;
   readonly #lockPath: string;
@@ -176,7 +274,7 @@ export class AnnouncementDelivery {
     checkKey(key);
     try {
       const row = this.#database.query("SELECT state, message_id FROM announcements WHERE key=?").get(key) as Pick<Intent, "state" | "message_id"> | null;
-      if (row?.state !== "sent") return false;
+      if (row?.state !== IntentState.Sent) return false;
       if (!row.message_id || !SNOWFLAKE.test(row.message_id)) throw new Error();
       return true;
     } catch {
@@ -187,8 +285,7 @@ export class AnnouncementDelivery {
   async publish(key: string, payload: DiscordAnnouncement): Promise<DeliveryResult> {
     checkKey(key);
     const frozen = freezePayload(key, payload);
-    const operation = AnnouncementDelivery.#queue.then(() => this.#lockedPublish(key, frozen));
-    AnnouncementDelivery.#queue = operation.then(() => {}, () => {});
+    const operation = AnnouncementDelivery.#serialize(() => this.#lockedPublish(key, frozen));
     try {
       return await operation;
     } catch (error) {
@@ -197,78 +294,87 @@ export class AnnouncementDelivery {
     }
   }
 
+  static #serialize(deliver: () => Promise<DeliveryResult>): Promise<DeliveryResult> {
+    const predecessor = this.#queue.state === QueueState.Queued ? this.#queue.tail : Promise.resolve();
+    const operation = predecessor.then(deliver);
+    const tail: Promise<void> = operation.then(() => this.#finishQueue(tail), () => this.#finishQueue(tail));
+    this.#queue = { state: QueueState.Queued, tail };
+    return operation;
+  }
+
+  static #finishQueue(tail: Promise<void>): void {
+    if (this.#queue.state === QueueState.Queued && this.#queue.tail === tail) {
+      this.#queue = { state: QueueState.Idle };
+    }
+  }
+
   async #lockedPublish(key: string, frozen: string): Promise<DeliveryResult> {
-    let lock: Database | undefined;
-    let acquired = false;
+    const lease = new DeliveryLease(this.#lockPath);
     try {
-      try {
-        lock = new Database(this.#lockPath, { create: false, strict: true });
-        lock.exec("PRAGMA busy_timeout=0; BEGIN EXCLUSIVE;");
-        acquired = true;
-      } catch (error) {
-        if (object(error) && (error.code === "SQLITE_BUSY" || error.code === "SQLITE_LOCKED" || error.errno === 5 || error.errno === 6)) {
-          throw new DeliveryError("Another announcement publisher holds the private delivery lock");
-        }
-        throw new DeliveryError("Announcement delivery lock is unavailable");
-      }
+      lease.acquire();
       return await this.#deliver(key, frozen);
     } finally {
-      if (lock) {
-        try {
-          if (acquired) lock.exec("ROLLBACK");
-        } finally {
-          lock.close();
-        }
-      }
+      lease.release();
     }
   }
 
   async #deliver(key: string, frozen: string): Promise<DeliveryResult> {
     let intent = this.#database.query("SELECT state, payload, message_id FROM announcements WHERE key=?").get(key) as Intent | null;
-    if (intent?.state === "sent") {
+    if (intent?.state === IntentState.Sent) {
       if (!intent.message_id || !SNOWFLAKE.test(intent.message_id)) throw new DeliveryError("Announcement ledger contains an invalid message identity");
       return { created: false, messageId: intent.message_id };
     }
-    if (!intent) {
-      // This autocommit must be durable before any possible create-message request.
-      this.#database.query("INSERT INTO announcements(key, state, payload) VALUES (?, 'pending', ?)").run(key, frozen);
-      intent = { state: "pending", payload: frozen, message_id: null };
-    }
+    if (!intent) intent = this.#createPending(key, frozen);
     const expectedUrl = storedReleaseUrl(intent.payload);
     await this.#verifyDestination();
     // Also scan for brand-new keys, so a restored/lost ledger cannot create a replay.
     const found = await this.#reconcile(expectedUrl);
-    if (found) return this.#sent(key, found, false);
-    if (intent.state === "sending") {
+    if (found.state === ReconciliationState.Found) return this.#confirmSent(key, found.messageId, false);
+    if (intent.state === IntentState.Sending) {
       throw new DeliveryError("Announcement delivery remains uncertain; pending intent retained without reposting");
     }
-    if (intent.state !== "pending") throw new DeliveryError("Announcement ledger contains an invalid delivery state");
+    if (intent.state !== IntentState.Pending) throw new DeliveryError("Announcement ledger contains an invalid delivery state");
 
     // Persist 'sending' before fetch. A crash even just before fetch is deliberately
     // ambiguous: an absent history marker is not proof an in-flight POST cannot land.
-    this.#database.query("UPDATE announcements SET state='sending' WHERE key=? AND state='pending'").run(key);
+    intent = this.#beginSending(key, intent);
     let message: unknown;
     try {
       message = await this.#request(`/channels/${CHANNEL}/messages`, "POST", intent.payload);
       if (!this.#matchingMessage(message, expectedUrl)) throw new DeliveryError("Discord create-message response could not confirm delivery");
     } catch (error) {
-      if (error instanceof DeliveryError && error.rejected) {
+      if (error instanceof DeliveryError && error.outcome === RequestOutcome.Rejected) {
         // Discord explicitly rejected this request; there was no successful send.
-        this.#database.query("UPDATE announcements SET state='pending' WHERE key=? AND state='sending'").run(key);
+        this.#rejectSending(key);
         throw error;
       }
       // Timeouts, 5xx and malformed success responses may all have created a message.
       // If history is unavailable or still empty, leave 'sending' intact forever
       // rather than eventually trusting Discord's short-lived nonce window.
       const recovered = await this.#reconcile(expectedUrl);
-      if (recovered) return this.#sent(key, recovered, false);
+      if (recovered.state === ReconciliationState.Found) return this.#confirmSent(key, recovered.messageId, false);
       throw new DeliveryError("Announcement delivery remains uncertain; pending intent retained without reposting");
     }
-    return this.#sent(key, (message as JsonObject).id as string, true);
+    return this.#confirmSent(key, (message as JsonObject).id as string, true);
   }
 
-  #sent(key: string, messageId: string, created: boolean): DeliveryResult {
-    this.#database.query("UPDATE announcements SET state='sent', message_id=? WHERE key=?").run(messageId, key);
+  #createPending(key: string, payload: string): PendingIntent {
+    // This autocommit must be durable before any possible create-message request.
+    this.#database.query("INSERT INTO announcements(key, state, payload) VALUES (?, ?, ?)").run(key, IntentState.Pending, payload);
+    return { state: IntentState.Pending, payload, message_id: null };
+  }
+
+  #beginSending(key: string, intent: PendingIntent): SendingIntent {
+    this.#database.query("UPDATE announcements SET state=? WHERE key=? AND state=?").run(IntentState.Sending, key, IntentState.Pending);
+    return { state: IntentState.Sending, payload: intent.payload, message_id: null };
+  }
+
+  #rejectSending(key: string): void {
+    this.#database.query("UPDATE announcements SET state=? WHERE key=? AND state=?").run(IntentState.Pending, key, IntentState.Sending);
+  }
+
+  #confirmSent(key: string, messageId: string, created: boolean): DeliveryResult {
+    this.#database.query("UPDATE announcements SET state=?, message_id=? WHERE key=?").run(IntentState.Sent, messageId, key);
     return { created, messageId };
   }
 
@@ -289,12 +395,13 @@ export class AnnouncementDelivery {
         && embed.url === expectedUrl);
   }
 
-  async #reconcile(expectedUrl: string): Promise<string | null> {
-    let before: string | undefined;
+  async #reconcile(expectedUrl: string): Promise<Reconciliation> {
+    let cursor: HistoryCursor = { state: HistoryState.Latest };
     for (;;) {
+      const before = cursor.state === HistoryState.Before ? cursor.messageId : undefined;
       const page = await this.#request(`/channels/${CHANNEL}/messages?limit=100${before ? `&before=${before}` : ""}`);
       if (!Array.isArray(page) || page.length > 100) throw new DeliveryError("Discord message history response is invalid; pending intent retained");
-      if (page.length === 0) return null;
+      if (page.length === 0) return { state: ReconciliationState.Exhausted };
       let oldest: string | undefined;
       for (const message of page) {
         if (!object(message) || typeof message.id !== "string" || !SNOWFLAKE.test(message.id)
@@ -302,18 +409,28 @@ export class AnnouncementDelivery {
           || (before && BigInt(message.id) >= BigInt(before))) {
           throw new DeliveryError("Discord message history response is invalid; pending intent retained");
         }
-        if (this.#matchingMessage(message, expectedUrl)) return message.id;
+        if (this.#matchingMessage(message, expectedUrl)) return { state: ReconciliationState.Found, messageId: message.id };
         if (!oldest || BigInt(message.id) < BigInt(oldest)) oldest = message.id;
       }
       // Even a short page is followed to exhaustion; never infer absence from a
       // partial page or inspect arbitrary users' text for the release marker.
-      before = oldest!;
+      cursor = { state: HistoryState.Before, messageId: oldest! };
     }
   }
 
   async #request(path: string, method: "GET" | "POST" = "GET", body?: string): Promise<unknown> {
-    let waited = 0;
-    for (let attempt = 0; attempt < 4; attempt++) {
+    let budget: RequestBudget = { state: RequestState.Ready, attempt: 0, waited: 0 };
+    for (;;) {
+      switch (budget.state) {
+        case RequestState.Waiting:
+          await Bun.sleep(budget.delay);
+          budget = { state: RequestState.Ready, attempt: budget.attempt, waited: budget.waited };
+          continue;
+        case RequestState.Exhausted:
+          throw new DeliveryError("Discord HTTP 429 retry bound exceeded; pending intent retained", RequestOutcome.Rejected);
+        case RequestState.Ready:
+          break;
+      }
       let response: Response;
       try {
         response = await fetch(`https://discord.com/api/v10${path}`, {
@@ -335,24 +452,21 @@ export class AnnouncementDelivery {
         try {
           limit = await response.json();
         } catch {
-          throw new DeliveryError("Discord returned HTTP 429 with an invalid rate-limit response", true);
+          throw new DeliveryError("Discord returned HTTP 429 with an invalid rate-limit response", RequestOutcome.Rejected);
         }
         if (!object(limit) || typeof limit.retry_after !== "number" || !Number.isFinite(limit.retry_after) || limit.retry_after < 0) {
-          throw new DeliveryError("Discord returned HTTP 429 with an invalid retry interval", true);
+          throw new DeliveryError("Discord returned HTTP 429 with an invalid retry interval", RequestOutcome.Rejected);
         }
         const delay = Math.ceil(limit.retry_after * 1000);
-        if (attempt === 3 || delay > 60_000 || waited + delay > 120_000) {
-          throw new DeliveryError("Discord HTTP 429 retry bound exceeded; pending intent retained", true);
-        }
-        waited += delay;
-        await Bun.sleep(delay);
+        budget = rateLimited(budget, delay);
         continue;
       }
       if (response.status !== 200) {
         await response.body?.cancel().catch(() => {});
         // 408 and server failures are ambiguous, unlike explicit client rejection.
-        const rejected = response.status >= 400 && response.status < 500 && response.status !== 408;
-        throw new DeliveryError(`Discord returned HTTP ${response.status}; pending intent retained`, rejected);
+        const outcome = response.status >= 400 && response.status < 500 && response.status !== 408
+          ? RequestOutcome.Rejected : RequestOutcome.Uncertain;
+        throw new DeliveryError(`Discord returned HTTP ${response.status}; pending intent retained`, outcome);
       }
       try {
         return await response.json();
@@ -360,6 +474,5 @@ export class AnnouncementDelivery {
         throw new DeliveryError("Discord HTTP 200 response could not be decoded");
       }
     }
-    throw new DeliveryError("Discord rate-limit retry bound exceeded", true);
   }
 }

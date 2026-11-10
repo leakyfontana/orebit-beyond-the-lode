@@ -1,6 +1,9 @@
 class_name GameData
 extends RefCounted
 
+enum WorldAdmission { GENERATE_ON_ENTRY, REUSE_ON_ENTRY }
+enum FuelBootstrap { PRESERVE_LITERAL_FIVE, FILL_TANK }
+
 # Persist exactly the original SaveDataType fields using its data-only NRBF codec.
 # Health, fuel, position, and derived upgrade/cargo values are not saved.
 const BinarySaveCodec = preload("res://scripts/binary_save.gd")
@@ -410,7 +413,12 @@ var vulcan_mode := false
 signal coop_save_requested
 var string_format: Dictionary = {"NumberGroupSeparator": " "}
 var player_money: int = 20
-var level_is_already_generated: bool = false
+var world_admission := WorldAdmission.GENERATE_ON_ENTRY
+var level_is_already_generated: bool:
+	get:
+		return world_admission == WorldAdmission.REUSE_ON_ENTRY
+	set(value):
+		set_world_admission(value)
 var player_horizontal_speed: float = 0.0
 var player_vertical_speed: float = 0.0
 var player_dig_speed: float = 0.0
@@ -459,6 +467,13 @@ var blockHalfwayDugFilename: Dictionary = {
 	Vector2i(2, 0): "Down", Vector2i(2, 1): "Right", Vector2i(2, 2): "Up", Vector2i(2, 3): "Left",
 	Vector2i(3, 0): "Left", Vector2i(3, 1): "Down", Vector2i(3, 2): "Right", Vector2i(3, 3): "Up"
 }
+
+func set_world_admission(reuse_level: bool) -> void:
+	world_admission = WorldAdmission.REUSE_ON_ENTRY if reuse_level else WorldAdmission.GENERATE_ON_ENTRY
+
+func fuel_bootstrap_state() -> FuelBootstrap:
+	# This is a value-derived source sentinel, not a one-shot new-game latch.
+	return FuelBootstrap.PRESERVE_LITERAL_FIVE if player_fuel == 5 else FuelBootstrap.FILL_TANK
 
 func applyShopUpgrades() -> void:
 	player_dig_speed = upgrades["Drill"][current_upgrades["Drill"]].effect
@@ -548,7 +563,7 @@ func initPlayer() -> void:
 	applyShopUpgrades()
 	player_hp = player_max_hp
 	# The literal five survives new games AND loads when it happens to be current fuel.
-	if player_fuel != 5:
+	if fuel_bootstrap_state() == FuelBootstrap.FILL_TANK:
 		player_fuel = player_max_fuel
 	updateCargoWeight()
 
@@ -638,7 +653,7 @@ func loadData() -> bool:
 	my_map = saved.my_map
 	player_cargo = saved.player_cargo
 	transmissions = saved.transmissions
-	level_is_already_generated = true
+	set_world_admission(true)
 	return true
 
 func doesSaveFileExist() -> bool:

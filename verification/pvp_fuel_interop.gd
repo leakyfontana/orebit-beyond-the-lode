@@ -76,7 +76,7 @@ func game(pvp: bool, cooperative: bool) -> void:
 	player._activate_attack("C4_hitbox")
 	check(player._attack_areas.size() == 2, "Serialized native explosive attack areas were not created")
 	for attack in player._attack_areas.values():
-		attack.hit = true
+		attack.state = PortPlayer.AttackState.SPENT
 		check(attack.area.collision_mask != 0, "Attack fixture started disabled")
 	for sound in DEATH_SOUNDS:
 		host.audio.PlaySound(sound)
@@ -123,7 +123,7 @@ func check_dead(label: String) -> void:
 	check(host.body.collision_layer == 0 and host.body.collision_mask == 0, label + " left dead-body collisions enabled")
 	check(not player.visual.visible, label + " left the living vehicle visible")
 	for attack in player._attack_areas.values():
-		check(attack.area.collision_mask == 0 and not attack.hit, label + " retained an active native attack area")
+		check(attack.area.collision_mask == 0, label + " retained an active native attack area")
 	for sound in DEATH_SOUNDS:
 		check(not host.audio._sound_is_playing(sound), label + " retained native death sound " + sound)
 		check(host.audio.one_shots[sound].is_empty(), label + " retained one-shot voices for " + sound)

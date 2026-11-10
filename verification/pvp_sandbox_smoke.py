@@ -107,7 +107,7 @@ async def run():
                             player.movement_credit = 3
                             player.damage_times.clear()
                         world.dirty_players.update(players)
-                        world.runtime_dirty = True
+                        world.stage_runtime()
                         await world.persist()
 
                 async def state(index, **values):
