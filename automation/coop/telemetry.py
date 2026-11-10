@@ -4,6 +4,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
+from enum import Enum, auto
 import hashlib
 import json
 import logging
@@ -179,11 +180,35 @@ class _JSONFormatter(logging.Formatter):
         return json.dumps(payload, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
 
 
+class SinkErrorState(Enum):
+    READY = auto()
+    THROTTLED = auto()
+
+
+class ContextOwnership(Enum):
+    OWNED = auto()
+    RESTORED = auto()
+
+
+class _ContextLease:
+    """Own one ContextVar token, restoring exactly the context it replaced."""
+
+    def __init__(self, fields):
+        self._token = _CONTEXT.set(_safe_fields({**_CONTEXT.get(), **fields}))
+        self.state = ContextOwnership.OWNED
+
+    def restore(self):
+        if self.state is ContextOwnership.OWNED:
+            _CONTEXT.reset(self._token)
+            self.state = ContextOwnership.RESTORED
+
+
 class _RotatingJSONHandler(RotatingFileHandler):
     """Keep file I/O failures visible without recursing into the failed sink."""
     def __init__(self, filename, *, fallback, **kwargs):
         self._fallback = fallback
-        self._last_sink_error = float("-inf")
+        self._sink_error_state = SinkErrorState.READY
+        self._last_sink_error = 0.0
         super().__init__(filename, **kwargs)
 
     def _open(self):
@@ -197,12 +222,21 @@ class _RotatingJSONHandler(RotatingFileHandler):
             os.close(descriptor)
             raise
 
+    def _sink_error_state_at(self, now):
+        if self._sink_error_state is SinkErrorState.THROTTLED and now - self._last_sink_error < 60:
+            return SinkErrorState.THROTTLED
+        return SinkErrorState.READY
+
+    def _begin_sink_error_cooldown(self, now):
+        self._last_sink_error = now
+        self._sink_error_state = SinkErrorState.THROTTLED
+
     def handleError(self, record):
         # emit() holds the handler lock, so this rate limit is shared by threads.
         now = time.monotonic()
-        if now - self._last_sink_error < 60:
+        if self._sink_error_state_at(now) is SinkErrorState.THROTTLED:
             return
-        self._last_sink_error = now
+        self._begin_sink_error_cooldown(now)
         failure = logging.LogRecord("orebit.coop", logging.ERROR, "", 0, "", (), None)
         failure._orebit_event = "log_sink_error"
         failure._orebit_error = sys.exc_info()[1]
@@ -212,11 +246,11 @@ class _RotatingJSONHandler(RotatingFileHandler):
 @contextmanager
 def log_context(**fields):
     """Task-local correlation; asyncio.to_thread also copies this context."""
-    token = _CONTEXT.set(_safe_fields({**_CONTEXT.get(), **fields}))
+    lease = _ContextLease(fields)
     try:
         yield
     finally:
-        _CONTEXT.reset(token)
+        lease.restore()
 
 
 def event(name, *, level=logging.INFO, error=None, **fields):

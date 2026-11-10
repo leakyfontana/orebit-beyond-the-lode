@@ -1,6 +1,12 @@
 class_name GameAudio
 extends Node
 
+# Playback remains owned by the engine; these views never cache playing flags.
+enum PlaybackState { STOPPED, PAUSED, PLAYING }
+enum MusicOwnership { UNOWNED, OWNED }
+enum VoiceOwnership { UNOWNED, OWNED }
+enum PauseCohortState { EMPTY, RETAINED }
+
 var definitions: Dictionary
 var state: GameData
 var sounds: Dictionary = {}
@@ -101,11 +107,18 @@ func _volume(entry: Dictionary, is_music: bool) -> float:
 	volume = rng.single(volume * rng.single(state.music_volume if is_music else state.sound_volume))
 	return clampf(volume, 0.0, 1.0)
 
-func PlayMusic(key: String) -> void:
+func music_ownership_state(key: String) -> MusicOwnership:
+	return MusicOwnership.UNOWNED if _player_playback_state(music[key]) == PlaybackState.STOPPED else MusicOwnership.OWNED
+
+func _claim_music_ownership(key: String) -> void:
+	# A request releases the previous owner even when the new key is absent.
 	StopAllMusic()
 	if music.has(key):
 		_settings(key, true)
 		music[key].play()
+
+func PlayMusic(key: String) -> void:
+	_claim_music_ownership(key)
 
 func PlaySound(key: String) -> void:
 	if sounds.has(key):
@@ -123,13 +136,29 @@ func PlaySoundOneShot(key: String) -> void:
 	voice.volume_db = sounds[key].volume_db
 	voice.pitch_scale = sounds[key].pitch_scale
 	add_child(voice)
-	one_shots[key].append(voice)
-	voice.finished.connect(_finish_one_shot.bind(key, voice))
+	_claim_one_shot(key, voice)
 	voice.play()
 
-func _finish_one_shot(key: String, voice: AudioStreamPlayer) -> void:
+func one_shot_ownership(key: String, voice: AudioStreamPlayer) -> VoiceOwnership:
+	return VoiceOwnership.OWNED if one_shots[key].has(voice) else VoiceOwnership.UNOWNED
+
+func _claim_one_shot(key: String, voice: AudioStreamPlayer) -> void:
+	one_shots[key].append(voice)
+	voice.finished.connect(_finish_one_shot.bind(key, voice))
+
+func _release_one_shot(key: String, voice: AudioStreamPlayer) -> void:
+	if one_shot_ownership(key, voice) == VoiceOwnership.UNOWNED:
+		return
 	one_shots[key].erase(voice)
 	voice.queue_free()
+
+func _finish_one_shot(key: String, voice: AudioStreamPlayer) -> void:
+	_release_one_shot(key, voice)
+
+func _stop_one_shot(key: String, voice: AudioStreamPlayer) -> void:
+	voice.stop()
+	# Godot does not emit finished on stop; release the same ownership here.
+	_release_one_shot(key, voice)
 
 func _set_sound_volume(key: String, volume: float) -> void:
 	sounds[key].volume_linear = volume
@@ -144,14 +173,25 @@ func _set_sound_pitch(key: String, pitch: float) -> void:
 	for voice: AudioStreamPlayer in one_shots[key]:
 		voice.pitch_scale = pitch
 
-func _sound_is_playing(key: String) -> bool:
-	var player: AudioStreamPlayer = sounds[key]
-	if player.playing and not player.stream_paused:
-		return true
+func _player_playback_state(player: AudioStreamPlayer) -> PlaybackState:
+	if player.stream_paused:
+		return PlaybackState.PAUSED
+	return PlaybackState.PLAYING if player.playing else PlaybackState.STOPPED
+
+func sound_playback_state(key: String) -> PlaybackState:
+	var playback := _player_playback_state(sounds[key])
+	if playback == PlaybackState.PLAYING:
+		return playback
 	for voice: AudioStreamPlayer in one_shots[key]:
-		if voice.playing and not voice.stream_paused:
-			return true
-	return false
+		var voice_playback := _player_playback_state(voice)
+		if voice_playback == PlaybackState.PLAYING:
+			return voice_playback
+		if voice_playback == PlaybackState.PAUSED:
+			playback = PlaybackState.PAUSED
+	return playback
+
+func _sound_is_playing(key: String) -> bool:
+	return sound_playback_state(key) == PlaybackState.PLAYING
 
 func _pause_sound(key: String, pause: bool) -> void:
 	sounds[key].stream_paused = pause
@@ -162,31 +202,39 @@ func StopSound(key: String) -> void:
 	if sounds.has(key):
 		sounds[key].stop()
 		sounds[key].stream_paused = false
-		# Godot does not emit finished on stop; release explicitly as well.
-		for voice: AudioStreamPlayer in one_shots[key]:
-			voice.stop()
-			voice.queue_free()
-		one_shots[key].clear()
+		while not one_shots[key].is_empty():
+			_stop_one_shot(key, one_shots[key].back())
 
 func StopAllMusic() -> void:
-	for player in music.values():
-		player.stop()
+	for key in music:
+		if music_ownership_state(key) == MusicOwnership.OWNED:
+			music[key].stop()
 
 func StopAllSounds() -> void:
 	# Source checks isPlaying, so a paused-only source is not stopped here.
 	for key in sounds:
-		if _sound_is_playing(key):
+		if sound_playback_state(key) == PlaybackState.PLAYING:
 			StopSound(key)
 
-func PauseSounds() -> void:
+func pause_cohort_state() -> PauseCohortState:
+	return PauseCohortState.EMPTY if paused.is_empty() else PauseCohortState.RETAINED
+
+func _replace_pause_cohort() -> void:
+	# Repeated pause replaces, rather than extends, the remembered sources.
 	paused.clear()
 	for key in sounds:
-		if _sound_is_playing(key):
+		if sound_playback_state(key) == PlaybackState.PLAYING:
 			_pause_sound(key, true)
 			paused.append(key)
 
+func PauseSounds() -> void:
+	_replace_pause_cohort()
+
 func ResumeSounds() -> void:
-	# The source remembers AudioSources, not the individual voices at pause.
+	if pause_cohort_state() == PauseCohortState.EMPTY:
+		return
+	# Retain the cohort after resume, as the source does. It remembers sources,
+	# not the individual voices that existed when the pause was requested.
 	for key in paused:
 		_pause_sound(key, false)
 

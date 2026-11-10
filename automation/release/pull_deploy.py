@@ -5,6 +5,7 @@ Run as orebit-deploy, with only the installed isolated release helper allowed by
 sudo. All mutable files are confined to the game's private state/status trees.
 """
 import argparse
+from enum import Enum
 import fcntl
 import hashlib
 import importlib.util
@@ -41,6 +42,115 @@ USER_AGENT = 'OrebitReleasePuller/1.0'
 BUILD_JOBS = {'Release macos-arm64', 'Release windows-x86_64', 'Release android-arm64', 'Release web'}
 HEX40 = re.compile(r'[0-9a-f]{40}')
 HEX64 = re.compile(r'[0-9a-f]{64}')
+
+
+class AttemptPhase(str, Enum):
+    PENDING = 'pending'
+    ATTEMPTED = 'attempted'
+    FINISHED = 'finished'
+    REJECTED = 'rejected'
+
+
+def attempt_phase(record):
+    try:
+        return AttemptPhase(record['phase'])
+    except ValueError:
+        return None
+
+
+class RollbackAttemptState(Enum):
+    AVAILABLE = 'available'
+    CONSUMED = 'consumed'
+    FINISHED = 'finished'
+
+
+def rollback_attempt_state(record):
+    if not record.get('rollback_done'):
+        return RollbackAttemptState.AVAILABLE
+    return (RollbackAttemptState.FINISHED if 'rollback_result' in record
+            else RollbackAttemptState.CONSUMED)
+
+
+class PublicResultState(Enum):
+    ABSENT = 'absent'
+    CLAIMED_CURRENT = 'claimed-current'
+    ROLLED_BACK = 'rolled-back'
+    TERMINAL = 'terminal'
+
+
+def public_result_state(record, result):
+    if result is None:
+        return PublicResultState.ABSENT
+    if record.get('rollback_result', {}).get('rolled_back') is True:
+        return PublicResultState.ROLLED_BACK
+    if helper.result_status(result) in {helper.ResultStatus.DEPLOYED, helper.ResultStatus.VERIFIED_EXISTING}:
+        return PublicResultState.CLAIMED_CURRENT
+    return PublicResultState.TERMINAL
+
+
+class WorkflowStatus(str, Enum):
+    QUEUED = 'queued'
+    IN_PROGRESS = 'in_progress'
+    PENDING = 'pending'
+    WAITING = 'waiting'
+    COMPLETED = 'completed'
+
+
+def workflow_status(value):
+    try:
+        return WorkflowStatus(value.get('status'))
+    except ValueError:
+        return None
+
+
+class CandidateAction(Enum):
+    DEPLOY = 'deploy'
+    VERIFY_EXISTING = 'verify-existing'
+
+
+class PollerLeaseState(Enum):
+    CLOSED = 'closed'
+    OPEN = 'open'
+    HELD = 'held'
+    CONTENDED = 'contended'
+
+
+class PollerLease:
+    def __init__(self):
+        self.state = PollerLeaseState.CLOSED
+        self.lock = None
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def acquire(self):
+        require(self.state is PollerLeaseState.CLOSED, 'Poller lease is already open')
+        descriptor = os.open(STATE / '.poll.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        self.lock = os.fdopen(descriptor, 'r+')
+        self.state = PollerLeaseState.OPEN
+        try:
+            fcntl.flock(self.lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            self.state = PollerLeaseState.CONTENDED
+        except BaseException:
+            self.release()
+            raise
+        else:
+            self.state = PollerLeaseState.HELD
+
+    def release(self):
+        if self.state is not PollerLeaseState.CLOSED:
+            self.lock.close()
+            self.lock = None
+        self.state = PollerLeaseState.CLOSED
+
+    def __exit__(self, *_):
+        self.release()
+
+    def run(self, arguments):
+        require(self.state is PollerLeaseState.HELD, 'Poller does not own the singleton lease')
+        return service_loop(arguments)
 
 
 class Pending(Exception):
@@ -136,6 +246,67 @@ def save_record(record):
     atomic_json(STATE / 'records' / (record['commit'] + '.json'), record, 0o600)
 
 
+def queue_candidate(commit):
+    record = {'schema': 1, 'commit': commit, 'phase': AttemptPhase.PENDING.value}
+    save_record(record)
+    return record
+
+
+def begin_attempt(record):
+    require(attempt_phase(record) is AttemptPhase.PENDING, 'Candidate already attempted')
+    record['phase'] = AttemptPhase.ATTEMPTED.value
+    save_record(record)
+
+
+def finish_attempt(record, result):
+    require(attempt_phase(record) is AttemptPhase.ATTEMPTED, 'Candidate has no durable attempt')
+    record['result'] = result
+    record['phase'] = AttemptPhase.FINISHED.value
+    save_record(record)
+
+
+def reject_candidate(record, error):
+    record['phase'] = AttemptPhase.REJECTED.value
+    record['error'] = str(error)
+    if 'request' in record:
+        record['result'] = {'schema': 1, 'status': helper.ResultStatus.FAILED.value,
+                            'mutated': False, 'error': str(error)}
+    save_record(record)
+
+
+def consume_rollback(record):
+    require(rollback_attempt_state(record) is RollbackAttemptState.AVAILABLE,
+            'Rollback already consumed')
+    record['rollback_done'] = True
+    save_record(record)
+
+
+def finish_rollback(record, result):
+    require(rollback_attempt_state(record) is RollbackAttemptState.CONSUMED,
+            'Rollback has no durable attempt')
+    record['rollback_result'] = result
+    save_record(record)
+
+
+def reject_rollback(record, error):
+    record['rollback_done'] = True
+    record['rollback_result'] = {'schema': 1, 'status': helper.ResultStatus.FAILED.value,
+                                 'mutated': False, 'error': str(error)}
+    save_record(record)
+
+
+def invalidate_public_result():
+    return {'schema': 1, 'status': helper.ResultStatus.FAILED.value, 'mutated': False,
+            'superseded': True,
+            'error': 'Previously deployed candidate is no longer verifiably current'}
+
+
+def set_public_result(record, result):
+    if record.get('public_result') != result:
+        record['public_result'] = result
+        save_record(record)
+
+
 def publish(record, result, rollback=False):
     require(result.get('schema') == 1, 'Helper returned unsupported evidence')
     evidence = dict(result)
@@ -158,12 +329,12 @@ def publish(record, result, rollback=False):
 
 def refresh_deployment_status(record):
     result = record.get('public_result', record.get('result'))
-    if result is None:
+    state = public_result_state(record, result)
+    if state is PublicResultState.ABSENT:
         return
-    rollback = record.get('rollback_result', {})
-    if rollback.get('rolled_back') is True:
-        result = rollback
-    elif result.get('status') in {'deployed', 'verified-existing'}:
+    if state is PublicResultState.ROLLED_BACK:
+        result = record['rollback_result']
+    elif state is PublicResultState.CLAIMED_CURRENT:
         try:
             current = helper.link_target('current', required=True)
             build = json.loads((current / 'build.json').read_text())
@@ -173,12 +344,8 @@ def refresh_deployment_status(record):
         except (OSError, ValueError, UnicodeDecodeError):
             matches = False
         if not matches:
-            result = {'schema': 1, 'status': 'failed', 'mutated': False,
-                      'superseded': True,
-                      'error': 'Previously deployed candidate is no longer verifiably current'}
-    if record.get('public_result') != result:
-        record['public_result'] = result
-        save_record(record)
+            result = invalidate_public_result()
+    set_public_result(record, result)
     publish(record, result)
 
 
@@ -264,20 +431,20 @@ def run_identity(request, rollback=False):
             'Candidate workflow run identity differs from trusted main push')
     if rollback:
         return run
-    status = run.get('status')
-    if status == 'completed':
+    status = workflow_status(run)
+    if status is WorkflowStatus.COMPLETED:
         require(run.get('conclusion') == 'success', 'Candidate workflow already failed or was cancelled')
         return run
-    require(status in {'queued', 'in_progress', 'pending', 'waiting'}, 'Unknown candidate workflow status')
-    if status not in {'queued', 'in_progress'}:
+    require(status is not None, 'Unknown candidate workflow status')
+    if status not in {WorkflowStatus.QUEUED, WorkflowStatus.IN_PROGRESS}:
         raise Pending('Candidate workflow is waiting')
     return run
 
 
 def check_ready(request):
     run = run_identity(request)
-    if run['status'] == 'completed':
-        return False
+    if workflow_status(run) is WorkflowStatus.COMPLETED:
+        return CandidateAction.VERIFY_EXISTING
     jobs = []
     for page in range(1, 11):
         payload = fetch_json(API + '/actions/runs/' + str(request['run_id'])
@@ -294,19 +461,19 @@ def check_ready(request):
         if not matches:
             raise Pending('Required release job metadata is not ready')
         require(len(matches) == 1, 'Ambiguous required release job')
-        if matches[0].get('status') != 'completed':
+        if workflow_status(matches[0]) is not WorkflowStatus.COMPLETED:
             raise Pending('Required release job is not completed')
         require(matches[0].get('conclusion') == 'success', 'A required release job did not succeed')
     drive = [step for job in jobs for step in job.get('steps', [])
              if step.get('name') == 'Publish and verify Drive artifacts']
-    if not drive or any(step.get('status') != 'completed' for step in drive):
+    if not drive or any(workflow_status(step) is not WorkflowStatus.COMPLETED for step in drive):
         raise Pending('Drive publication verification is not completed')
     require(len(drive) == 1 and drive[0].get('conclusion') == 'success',
             'Drive publication verification did not succeed')
     main = fetch_json(API + '/branches/main')
     require(main.get('commit', {}).get('sha') == request['commit'],
             'Candidate is no longer the current main SHA; refusing downgrade')
-    return True
+    return CandidateAction.DEPLOY
 
 
 def operation_header(request, operation):
@@ -348,12 +515,12 @@ def download_zip(request):
 
 def invoke_helper(header, archive=None):
     operation = header['operation']
-    if operation == 'deploy':
+    if operation == helper.ReleaseOperation.DEPLOY:
         command = 'deploy ' + header['commit'] + ' ' + header['artifact']['sha256']
-    elif operation == 'rollback':
+    elif operation == helper.ReleaseOperation.ROLLBACK:
         command = 'rollback ' + header['commit']
     else:
-        require(operation == 'verify-current', 'Unsupported fixed helper operation')
+        require(operation == helper.ReleaseOperation.VERIFY_CURRENT, 'Unsupported fixed helper operation')
         command = 'verify'
     arguments = ['/usr/bin/sudo', '-n', '/usr/bin/python3', '-I', '-u', INSTALLED_HELPER,
                  '--original-command', command]
@@ -380,15 +547,15 @@ def invoke_helper(header, archive=None):
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.communicate()
-            return {'schema': 1, 'status': 'failed', 'error': 'Privileged operation did not establish completion',
+            return {'schema': 1, 'status': helper.ResultStatus.FAILED.value, 'error': 'Privileged operation did not establish completion',
                     'deployment_completion': 'not-established'}
     try:
         result = json.loads(stdout)
     except (json.JSONDecodeError, UnicodeDecodeError):
-        return {'schema': 1, 'status': 'failed', 'error': 'Privileged helper returned no valid evidence',
+        return {'schema': 1, 'status': helper.ResultStatus.FAILED.value, 'error': 'Privileged helper returned no valid evidence',
                 'deployment_completion': 'not-established'}
-    if not isinstance(result, dict) or result.get('schema') != 1 or process.returncode and result.get('status') != 'failed':
-        return {'schema': 1, 'status': 'failed', 'error': 'Privileged helper result was inconsistent',
+    if not isinstance(result, dict) or result.get('schema') != 1 or process.returncode and helper.result_status(result) is not helper.ResultStatus.FAILED:
+        return {'schema': 1, 'status': helper.ResultStatus.FAILED.value, 'error': 'Privileged helper result was inconsistent',
                 'deployment_completion': 'not-established'}
     return result
 
@@ -398,37 +565,34 @@ def process_candidate(record):
         record['request'] = validate_request(record)
         save_record(record)
     request = record['request']
-    ready = check_ready(request)
-    if not ready:
+    action = check_ready(request)
+    if action is CandidateAction.VERIFY_EXISTING:
         # A completed-success workflow may be checked, never newly deployed.
-        header = {'operation': 'verify-current', 'site': SITE,
-                  'expected': operation_header(request, 'deploy')}
-        record['phase'] = 'attempted'
-        save_record(record)
+        header = {'operation': helper.ReleaseOperation.VERIFY_CURRENT.value, 'site': SITE,
+                  'expected': operation_header(request, helper.ReleaseOperation.DEPLOY.value)}
+        begin_attempt(record)
         result = invoke_helper(header)
     else:
         archive = download_zip(request)
         try:
             # Downloads can take time; re-check freshness immediately before sudo.
             run = run_identity(request)
-            require(run['status'] in {'queued', 'in_progress'}, 'Workflow completed before new deployment')
+            require(workflow_status(run) in {WorkflowStatus.QUEUED, WorkflowStatus.IN_PROGRESS}, 'Workflow completed before new deployment')
             main = fetch_json(API + '/branches/main')
             require(main.get('commit', {}).get('sha') == request['commit'],
                     'Main advanced during download; refusing deployment downgrade')
             # Persist before sudo so a service restart cannot deploy it twice.
-            record['phase'] = 'attempted'
-            save_record(record)
-            result = invoke_helper(operation_header(request, 'deploy'), archive)
+            begin_attempt(record)
+            result = invoke_helper(operation_header(request, helper.ReleaseOperation.DEPLOY.value), archive)
         finally:
             archive.unlink(missing_ok=True)
-    record['result'] = result
-    record['phase'] = 'finished'
-    save_record(record)
+    finish_attempt(record, result)
     return publish(record, result)
 
 
 def process_rollback(record):
-    if record.get('rollback_done') or record.get('phase') not in {'attempted', 'finished'}:
+    if (rollback_attempt_state(record) is not RollbackAttemptState.AVAILABLE
+            or attempt_phase(record) not in {AttemptPhase.ATTEMPTED, AttemptPhase.FINISHED}):
         return None
     # Retained historical releases cannot be rolled back over the current one.
     # Poll rollback assets only for the live, genuinely mutating candidate.
@@ -452,11 +616,9 @@ def process_rollback(record):
     # A rerun that only verified an accepted SHA must never roll it back.
     require(record.get('result', {}).get('mutated') is True,
             'Rollback refused: this attempt did not record a live cutover')
-    record['rollback_done'] = True
-    save_record(record)
-    result = invoke_helper(operation_header(original, 'rollback'))
-    record['rollback_result'] = result
-    save_record(record)
+    consume_rollback(record)
+    result = invoke_helper(operation_header(original, helper.ReleaseOperation.ROLLBACK.value))
+    finish_rollback(record, result)
     return publish(record, result, rollback=True)
 
 
@@ -483,7 +645,7 @@ def poll_once():
         require(record.get('commit') == path.stem, 'Candidate record identity differs')
         records[path.stem] = record
         # Invalidate stale positive status before any potentially slow HTTPS poll.
-        if record['phase'] in {'finished', 'rejected'} and 'result' in record:
+        if attempt_phase(record) in {AttemptPhase.FINISHED, AttemptPhase.REJECTED} and 'result' in record:
             refresh_deployment_status(record)
     try:
         commits = candidate_links()
@@ -492,37 +654,30 @@ def poll_once():
         events.append({'status': 'pending', 'reason': str(error)})
     for commit in commits:
         if commit not in records:
-            records[commit] = {'schema': 1, 'commit': commit, 'phase': 'pending'}
-            save_record(records[commit])
+            records[commit] = queue_candidate(commit)
     for commit, record in records.items():
-        if record['phase'] == 'attempted' and 'result' not in record:
-            result = {'schema': 1, 'status': 'failed', 'error': 'Service stopped after durable attempt marker',
+        if attempt_phase(record) is AttemptPhase.ATTEMPTED and 'result' not in record:
+            result = {'schema': 1, 'status': helper.ResultStatus.FAILED.value, 'error': 'Service stopped after durable attempt marker',
                       'deployment_completion': 'not-established'}
-            record.update({'phase': 'finished', 'result': result})
-            save_record(record)
+            finish_attempt(record, result)
             publish(record, result)
-        if record['phase'] == 'pending':
+        if attempt_phase(record) is AttemptPhase.PENDING:
             try:
                 result = process_candidate(record)
                 events.append({'commit': commit, 'status': result['status']})
             except Pending as error:
                 events.append({'commit': commit, 'status': 'pending', 'reason': str(error)})
             except Rejected as error:
-                record['phase'] = 'rejected'
-                record['error'] = str(error)
-                if 'request' in record:
-                    record['result'] = {'schema': 1, 'status': 'failed', 'mutated': False, 'error': str(error)}
-                save_record(record)
+                reject_candidate(record, error)
                 if 'result' in record:
                     publish(record, record['result'])
                 events.append({'commit': commit, 'status': 'rejected', 'reason': str(error)})
-        if record.get('rollback_done') and 'rollback_result' not in record:
-            record['rollback_result'] = {
-                'schema': 1, 'status': 'failed',
+        if rollback_attempt_state(record) is RollbackAttemptState.CONSUMED:
+            finish_rollback(record, {
+                'schema': 1, 'status': helper.ResultStatus.FAILED.value,
                 'error': 'Service stopped after durable rollback attempt marker',
-                'deployment_completion': 'not-established'}
-            save_record(record)
-        if record.get('rollback_done') and 'rollback_result' in record:
+                'deployment_completion': 'not-established'})
+        if rollback_attempt_state(record) is RollbackAttemptState.FINISHED:
             if not (STATUS / ('rollback-' + commit + '.json')).exists():
                 publish(record, record['rollback_result'], rollback=True)
         else:
@@ -533,11 +688,9 @@ def poll_once():
             except Pending:
                 pass
             except Rejected as error:
-                record['rollback_done'] = True
-                record['rollback_result'] = {'schema': 1, 'status': 'failed', 'mutated': False, 'error': str(error)}
-                save_record(record)
+                reject_rollback(record, error)
                 publish(record, record['rollback_result'], rollback=True)
-        if record['phase'] in {'finished', 'rejected'} and 'result' in record:
+        if attempt_phase(record) in {AttemptPhase.FINISHED, AttemptPhase.REJECTED} and 'result' in record:
             refresh_deployment_status(record)
     return {'schema': 1, 'events': events}
 
@@ -570,14 +723,11 @@ def main():
     except Exception:
         print(json.dumps({'schema': 1, 'status': 'failed', 'error': 'Private game directories are not provisioned safely'}))
         return 1
-    descriptor = os.open(STATE / '.poll.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(descriptor, 'r+') as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
+    with PollerLease() as lease:
+        if lease.state is PollerLeaseState.CONTENDED:
             print(json.dumps({'schema': 1, 'status': 'failed', 'error': 'Another game puller is active'}))
             return 1
-        return service_loop(arguments)
+        return lease.run(arguments)
 
 
 if __name__ == '__main__':

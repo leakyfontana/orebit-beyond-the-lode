@@ -1,11 +1,20 @@
 class_name CoopTransfer
 extends CanvasLayer
 
+enum Visit { CLOSED, OPEN }
+enum Eligibility { UNAVAILABLE, OUT_OF_REACH, ELIGIBLE }
+enum Submission { READY, WAITING_FOR_SERVER }
+
 const DOOR := Vector2(-5.5, -3.5)
 const ORANGE := Color("ff6100")
 var host: Node
 var client: CoopClient
-var modal := false
+var visit: Visit = Visit.CLOSED
+var modal: bool:
+	get:
+		return visit == Visit.OPEN
+	set(value):
+		visit = Visit.OPEN if value else Visit.CLOSED
 var recipient: OptionButton
 var amount: LineEdit
 var status: Label
@@ -15,7 +24,6 @@ var _root: Control
 var _shade: ColorRect
 var _panel: PanelContainer
 var _send: Button
-var _near := false
 
 func configure(main_host: Node, network: CoopClient) -> void:
 	host = main_host
@@ -113,17 +121,25 @@ func _resize() -> void:
 	_panel.size = panel_size
 	visit_button.position = Vector2((size.x - 260) * 0.5, size.y - 115)
 
-func can_visit() -> bool:
+func visit_eligibility() -> Eligibility:
 	if not host.is_coop or not client.connected or host.scene_name != "Game" or not host.player_alive or host.player == null:
-		return false
+		return Eligibility.UNAVAILABLE
 	var distance: Vector2 = host.player.position_unity - DOOR
-	return absf(distance.x) <= 1.5 and absf(distance.y) <= 1.5
+	if absf(distance.x) <= 1.5 and absf(distance.y) <= 1.5:
+		return Eligibility.ELIGIBLE
+	return Eligibility.OUT_OF_REACH
+
+func can_visit() -> bool:
+	return visit_eligibility() == Eligibility.ELIGIBLE
+
+func submission_state() -> Submission:
+	return Submission.WAITING_FOR_SERVER if client.transfer_pending else Submission.READY
 
 func tick() -> void:
-	_near = can_visit()
-	visit_button.visible = _near and not modal and not host.paused and not host.ui.isUIOpen()
+	var eligibility := visit_eligibility()
+	visit_button.visible = eligibility == Eligibility.ELIGIBLE and not modal and not host.paused and not host.ui.isUIOpen()
 	if modal:
-		if not _near:
+		if eligibility != Eligibility.ELIGIBLE:
 			close_visit()
 		else:
 			_refresh_balance()
@@ -131,7 +147,7 @@ func tick() -> void:
 func open_visit() -> void:
 	if modal or not can_visit() or host.paused or host.ui.isUIOpen():
 		return
-	modal = true
+	visit = Visit.OPEN
 	visit_button.hide()
 	_shade.show()
 	_panel.show()
@@ -145,10 +161,10 @@ func open_visit() -> void:
 func close_visit() -> void:
 	if not modal:
 		return
-	if client.transfer_pending:
+	if submission_state() == Submission.WAITING_FOR_SERVER:
 		status.text = "Wait for server confirmation before leaving the branch."
 		return
-	modal = false
+	visit = Visit.CLOSED
 	_shade.hide()
 	_panel.hide()
 	if host.player != null and host.scene_name == "Game":
@@ -157,7 +173,7 @@ func close_visit() -> void:
 	client.send_state()
 
 func scene_loaded() -> void:
-	modal = false
+	visit = Visit.CLOSED
 	_shade.hide()
 	_panel.hide()
 	visit_button.hide()
@@ -186,9 +202,10 @@ func refresh_recipients() -> void:
 func _refresh_balance() -> void:
 	balance.text = "Available balance: $%d" % host.data.player_money
 	_send.disabled = not client.connected or client.has_pending_actions() or recipient.item_count == 0
-	_send.text = "Waiting for server…" if client.transfer_pending else "Send money"
-	amount.editable = not client.transfer_pending
-	recipient.disabled = client.transfer_pending or recipient.item_count == 0
+	var waiting := submission_state() == Submission.WAITING_FOR_SERVER
+	_send.text = "Waiting for server…" if waiting else "Send money"
+	amount.editable = not waiting
+	recipient.disabled = waiting or recipient.item_count == 0
 
 func submit_transfer() -> void:
 	if not modal or not can_visit():

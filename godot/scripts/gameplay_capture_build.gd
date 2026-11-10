@@ -1,4 +1,4 @@
 class_name GameplayCaptureBuild
 extends RefCounted
 
-const SOURCE_SHA256 := "05f26fcc524a0cd55708a1ec5990065c43ce9a137ce78c8286d810248220554c"
+const SOURCE_SHA256 := "d6826baf1dc24f24df0f07ed973280ee326ceaea3e8b3cad6d1ebd3059f63cad"

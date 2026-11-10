@@ -1,6 +1,11 @@
 class_name AudioEvidenceCapture
 extends Node
 
+enum CaptureState { NEW, STARTING, RECORDING, FINALIZING, SUCCEEDED, FAILED }
+enum AttachmentState { UNATTACHED, ATTACHED, DETACHED }
+enum CaptureHealth { HEALTHY, FAILED }
+enum SampleState { AWAITING_FIRST_SAMPLE, SAMPLES_STORED }
+
 # Records the actual Master bus mix without replacing or changing the audio.
 # Float32 WAVE preserves the effect's samples, including values outside [-1, 1].
 const HEADER_SIZE := 58
@@ -17,10 +22,18 @@ var last_drain_usec := -1
 var simulation_seconds := 0.0
 var start_frame := 0
 var failure := ""
-var finished := false
-var result := false
+var capture_state := CaptureState.NEW
+var attachment_state := AttachmentState.UNATTACHED
+var capture_health := CaptureHealth.HEALTHY
+var finished: bool:
+	get:
+		return capture_state == CaptureState.FINALIZING or capture_state == CaptureState.SUCCEEDED or capture_state == CaptureState.FAILED
+var result: bool:
+	get:
+		return capture_state == CaptureState.SUCCEEDED
 
 func start(output_directory: String) -> bool:
+	capture_state = CaptureState.STARTING
 	directory = output_directory
 	start_usec = Time.get_ticks_usec()
 	start_frame = Engine.get_process_frames()
@@ -41,13 +54,32 @@ func start(output_directory: String) -> bool:
 	var header := PackedByteArray()
 	header.resize(HEADER_SIZE)
 	wav.store_buffer(header)
+	_attach_master_capture()
+	return capture_health == CaptureHealth.HEALTHY
+
+func _attach_master_capture() -> void:
 	effect = AudioEffectCapture.new()
 	effect.buffer_length = 10.0
 	AudioServer.add_bus_effect(0, effect)
-	return failure.is_empty()
+	attachment_state = AttachmentState.ATTACHED
+	capture_state = CaptureState.RECORDING
+
+func _detach_master_capture() -> void:
+	if attachment_state != AttachmentState.ATTACHED:
+		return
+	var effect_index := -1
+	for index in AudioServer.get_bus_effect_count(0):
+		if AudioServer.get_bus_effect(0, index) == effect:
+			effect_index = index
+			break
+	if effect_index >= 0:
+		AudioServer.remove_bus_effect(0, effect_index)
+	else:
+		_fail("Master capture effect was removed before finish")
+	attachment_state = AttachmentState.DETACHED
 
 func _process(delta: float) -> void:
-	if finished or effect == null:
+	if capture_state != CaptureState.RECORDING:
 		return
 	simulation_seconds += delta
 	if int(AudioServer.get_mix_rate()) != sample_rate:
@@ -55,7 +87,7 @@ func _process(delta: float) -> void:
 	_drain()
 
 func _drain() -> void:
-	if wav == null or effect == null:
+	if wav == null or attachment_state == AttachmentState.UNATTACHED:
 		return
 	var available := effect.get_frames_available()
 	while available > 0:
@@ -75,40 +107,50 @@ func _drain() -> void:
 		if wav.get_error() != OK:
 			_fail("Writing actual audio samples failed: " + error_string(wav.get_error()))
 			return
-		frames += count
-		drain_blocks += 1
-		last_drain_usec = Time.get_ticks_usec()
-		if first_drain_usec < 0:
-			first_drain_usec = last_drain_usec
+		_record_drain(count)
 		available -= count
 
+func sample_state() -> SampleState:
+	return SampleState.AWAITING_FIRST_SAMPLE if frames == 0 else SampleState.SAMPLES_STORED
+
+func _record_drain(count: int) -> void:
+	var previous_sample_state := sample_state()
+	frames += count
+	drain_blocks += 1
+	last_drain_usec = Time.get_ticks_usec()
+	if previous_sample_state == SampleState.AWAITING_FIRST_SAMPLE:
+		first_drain_usec = last_drain_usec
+
 func _fail(message: String) -> void:
-	if failure.is_empty():
+	if capture_health == CaptureHealth.HEALTHY:
+		capture_health = CaptureHealth.FAILED
 		failure = message
 		push_error("AUDIO_CAPTURE_FAILED: " + message)
 
-func finish_capture() -> bool:
-	if finished:
-		return result
-	finished = true
+func _begin_finish() -> void:
+	capture_state = CaptureState.FINALIZING
 	set_process(false)
+
+func _complete_finish() -> bool:
+	capture_state = CaptureState.SUCCEEDED if capture_health == CaptureHealth.HEALTHY else CaptureState.FAILED
+	return capture_state == CaptureState.SUCCEEDED
+
+func finish_capture() -> bool:
+	match capture_state:
+		CaptureState.SUCCEEDED:
+			return true
+		CaptureState.FAILED, CaptureState.FINALIZING:
+			return false
+	_begin_finish()
 	# Removing the effect takes the audio-server lock, so an in-flight mix has
 	# completed before the final drain and counters are read. No wait/padding.
-	if effect != null:
-		var effect_index := -1
-		for index in AudioServer.get_bus_effect_count(0):
-			if AudioServer.get_bus_effect(0, index) == effect:
-				effect_index = index
-				break
-		if effect_index >= 0:
-			AudioServer.remove_bus_effect(0, effect_index)
-		else:
-			_fail("Master capture effect was removed before finish")
+	if attachment_state == AttachmentState.ATTACHED:
+		_detach_master_capture()
 		_drain()
 	var end_usec := Time.get_ticks_usec()
 	var pushed_frames := effect.get_pushed_frames() if effect != null else 0
 	var discarded_frames := effect.get_discarded_frames() if effect != null else 0
-	if pushed_frames == 0 or frames == 0:
+	if pushed_frames == 0 or sample_state() == SampleState.AWAITING_FIRST_SAMPLE:
 		_fail("No actual Master DSP frames: missing mixed-output evidence")
 	if discarded_frames != 0:
 		_fail("Master capture buffer overflowed; actual samples were lost")
@@ -142,9 +184,9 @@ func finish_capture() -> bool:
 		if wav.get_error() != OK:
 			_fail("Finalizing audio.wav failed: " + error_string(wav.get_error()))
 		wav.close()
-	result = failure.is_empty()
+	var capture_succeeded := capture_health == CaptureHealth.HEALTHY
 	var metadata := {
-		"success": result, "error": failure, "engine": "Godot",
+		"success": capture_succeeded, "error": failure, "engine": "Godot",
 		"capture_point": "Master bus AudioEffectCapture, after preceding bus effects, before Master fader/mute and device conversion",
 		"driver": AudioServer.get_driver_name(), "master_volume_db": AudioServer.get_bus_volume_db(0),
 		"master_muted": AudioServer.is_bus_mute(0), "sample_rate": sample_rate, "channels": 2,
@@ -155,27 +197,25 @@ func finish_capture() -> bool:
 		"simulation_clock": "Accumulated capture Node _process(delta), PROCESS_MODE_ALWAYS; a main-thread engine clock observation, not per-sample or replay-frame timestamps",
 		"start_frame": start_frame, "end_frame": Engine.get_process_frames(),
 		"pushed_frames": pushed_frames, "discarded_frames": discarded_frames, "drain_blocks": drain_blocks,
-		"first_drain_wall_seconds": float(first_drain_usec - start_usec) / 1000000.0 if first_drain_usec >= 0 else -1.0,
-		"last_drain_wall_seconds": float(last_drain_usec - start_usec) / 1000000.0 if last_drain_usec >= 0 else -1.0,
+		"first_drain_wall_seconds": float(first_drain_usec - start_usec) / 1000000.0 if sample_state() == SampleState.SAMPLES_STORED else -1.0,
+		"last_drain_wall_seconds": float(last_drain_usec - start_usec) / 1000000.0 if sample_state() == SampleState.SAMPLES_STORED else -1.0,
 		"timing_limitation": "PCM follows the real audio/DSP clock, not fixed-frame simulation. Rendering load and fixed-frame replay can change wall time per replay frame. Drain times are main-thread observations, not sample timestamps. No PCM-to-simulation alignment, device latency, or cross-engine timing parity is established. Samples are not padded, resampled, normalized, trimmed, or synthesized. This pre-fader bus tap cannot establish device output or audible sound; silence must be assessed from actual samples."
 	}
 	var metadata_file := FileAccess.open(directory.path_join("audio.json"), FileAccess.WRITE)
 	if metadata_file == null:
 		_fail("Cannot write audio.json: " + error_string(FileAccess.get_open_error()))
-		result = false
 	else:
 		metadata_file.store_string(JSON.stringify(metadata, "\t", true, true))
 		metadata_file.flush()
 		if metadata_file.get_error() != OK:
 			_fail("Writing audio.json failed: " + error_string(metadata_file.get_error()))
-			result = false
 		metadata_file.close()
-	return result
+	return _complete_finish()
 
 func _put_tag(header: PackedByteArray, offset: int, tag: String) -> void:
 	for index in 4:
 		header[offset + index] = tag.unicode_at(index)
 
 func _exit_tree() -> void:
-	if not finished and not directory.is_empty():
+	if capture_state != CaptureState.NEW and not directory.is_empty():
 		finish_capture()

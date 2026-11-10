@@ -14,10 +14,10 @@ index 2229c3f..7505bb4 100644
  	/// @return the parent body.
  	b2Body* GetBody();
 diff --git a/src/dynamics/b2_fixture.cpp b/src/dynamics/b2_fixture.cpp
-index 9fd700a..49f9ffd 100644
+index 9fd700a..a867f0a 100644
 --- a/src/dynamics/b2_fixture.cpp
 +++ b/src/dynamics/b2_fixture.cpp
-@@ -177,6 +177,31 @@ void b2Fixture::Synchronize(b2BroadPhase* broadPhase, const b2Transform& transfo
+@@ -177,6 +177,51 @@ void b2Fixture::Synchronize(b2BroadPhase* broadPhase, const b2Transform& transfo
  	}
  }
  
@@ -35,15 +35,35 @@ index 9fd700a..49f9ffd 100644
 +		return;
 +	}
 +
-+	b2BroadPhase* broadPhase = &world->m_contactManager.m_broadPhase;
-+	const b2Transform& transform = m_body->GetTransform();
-+	for (int32 i = 0; i < m_proxyCount; ++i)
++	// Keep the vendor m_newContacts flag/layout: this first-party boundary
++	// publishes contact discovery only after every edited proxy is synchronized.
++	enum class ShapeSyncState { RefreshProxies, RequestContacts, Complete };
++	ShapeSyncState state = ShapeSyncState::RefreshProxies;
++	while (state != ShapeSyncState::Complete)
 +	{
-+		b2FixtureProxy* proxy = m_proxies + i;
-+		m_shape->ComputeAABB(&proxy->aabb, transform, proxy->childIndex);
-+		broadPhase->MoveProxy(proxy->proxyId, proxy->aabb, b2Vec2_zero);
++		switch (state)
++		{
++		case ShapeSyncState::RefreshProxies:
++		{
++			b2BroadPhase* broadPhase = &world->m_contactManager.m_broadPhase;
++			const b2Transform& transform = m_body->GetTransform();
++			for (int32 i = 0; i < m_proxyCount; ++i)
++			{
++				b2FixtureProxy* proxy = m_proxies + i;
++				m_shape->ComputeAABB(&proxy->aabb, transform, proxy->childIndex);
++				broadPhase->MoveProxy(proxy->proxyId, proxy->aabb, b2Vec2_zero);
++			}
++			state = ShapeSyncState::RequestContacts;
++			break;
++		}
++		case ShapeSyncState::RequestContacts:
++			world->m_newContacts = true;
++			state = ShapeSyncState::Complete;
++			break;
++		case ShapeSyncState::Complete:
++			break;
++		}
 +	}
-+	world->m_newContacts = true;
 +}
 +
  void b2Fixture::SetFilterData(const b2Filter& filter)

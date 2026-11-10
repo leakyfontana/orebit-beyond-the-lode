@@ -16,6 +16,7 @@ from collections import OrderedDict
 from contextlib import ExitStack
 import copy
 from dataclasses import dataclass, field
+from enum import Enum, auto
 import hashlib
 import html
 import json
@@ -36,7 +37,7 @@ from argon2.exceptions import InvalidHashError, VerificationError
 
 from capture import CaptureError, CaptureStore, MAX_COMPRESSED
 from fuel_prices import FuelPrices, PriceUnavailable
-from pvp import MUTATIONS, PvpWorld, UPGRADE_NAMES
+from pvp import MUTATIONS, PvpWorld, SimulationPhase, UPGRADE_NAMES
 from terrain import HEIGHT, MIN_X, MINERALS, WIDTH, WEIGHTS, award, generate, tile_name
 from vulcan import VulcanWorld
 from telemetry import configure_logging, event as log_event, log_context
@@ -53,6 +54,193 @@ STATE_KEYS = {
 }
 ITEMS = {"Reserve Fuel Tank", "Hull Repair Nanobots", "Dynamite", "Plastic Explosives", "Quantum Teleporter", "Matter Transmitter"}
 UPGRADES = {"Drill", "Hull", "Engine", "Fuel", "Radiator", "Cargo"}
+class ServicePhase(Enum):
+    NEW = auto()
+    RESTORE_WORLD = auto()
+    START_ARCHIVE = auto()
+    START_PVP = auto()
+    START_VULCAN = auto()
+    START_HTTP = auto()
+    RUNNING = auto()
+    STOP_PVP = auto()
+    STOP_VULCAN = auto()
+    RETIRE_SOCKETS = auto()
+    CLOSE_SESSIONS = auto()
+    DRAIN_ARCHIVE = auto()
+    STOPPED = auto()
+    CLOSED = auto()
+
+
+class ResourceOwnership(Enum):
+    UNOWNED = auto()
+    OWNED = auto()
+
+
+class SchemaState(Enum):
+    LEGACY = auto()
+    CURRENT = auto()
+
+
+class LegacySchema(Enum):
+    ABSENT = auto()
+    EXISTING = auto()
+
+
+class OAuthState(str, Enum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETE = "complete"
+    FAILED = "failed"
+    UNKNOWN = "unknown"
+
+
+class OAuthTransition(Enum):
+    CLAIM = auto()
+    CANCEL = auto()
+    COMPLETE = auto()
+    FAIL = auto()
+    UNAVAILABLE = auto()
+    EXPIRE = auto()
+
+
+class SessionMembership(Enum):
+    UNASSIGNED = auto()
+    PREPARING = auto()
+    ADMITTED = auto()
+
+
+class CredentialState(Enum):
+    ANONYMOUS = auto()
+    ACTIVE = auto()
+    EXPIRED = auto()
+    MISSING = auto()
+
+
+class QuotaState(Enum):
+    OPEN = auto()
+    EXHAUSTED = auto()
+    RENEWABLE = auto()
+
+
+class RevisionAdmission(Enum):
+    CURRENT = auto()
+    RESYNC = auto()
+
+
+class MutationPhase(Enum):
+    STAGED = auto()
+    COMMITTED = auto()
+    REJECTED = auto()
+    PUBLISHED = auto()
+
+
+class MiningPhase(Enum):
+    REJECTED = auto()
+    ELIGIBLE = auto()
+    COMMITTED = auto()
+    CONFLICT = auto()
+
+
+class ReplayAdmission(Enum):
+    NEW = auto()
+    REPLAY = auto()
+
+
+class ArchiveLink(Enum):
+    UNLINKED = auto()
+    LINKED = auto()
+
+
+class ArchiveBatch(Enum):
+    EMPTY = auto()
+    ACCUMULATING = auto()
+    DUE = auto()
+
+
+class AuthorityCapture(Enum):
+    OMIT = auto()
+    QUEUE = auto()
+    GAP = auto()
+
+
+class GapState(Enum):
+    NONE = auto()
+    PENDING = auto()
+
+
+class UploadPhase(Enum):
+    READING = auto()
+    SEALED = auto()
+
+
+def oauth_state(row):
+    try:
+        return OAuthState(row["status"])
+    except ValueError:
+        return OAuthState.UNKNOWN
+
+
+def transition_oauth(db, hashed, transition, *, user_id=None):
+    if transition is OAuthTransition.CLAIM:
+        db.execute("UPDATE oauth SET status=? WHERE state_hash=?", (OAuthState.PROCESSING.value, hashed))
+    elif transition is OAuthTransition.COMPLETE:
+        db.execute("UPDATE oauth SET status=?,user_id=?,verifier='' WHERE state_hash=?", (OAuthState.COMPLETE.value, user_id, hashed))
+    elif transition is OAuthTransition.CANCEL:
+        db.execute("UPDATE oauth SET status=?,error=?,verifier='' WHERE state_hash=?", (OAuthState.FAILED.value, "Discord authorization was cancelled.", hashed))
+    elif transition is OAuthTransition.FAIL:
+        db.execute("UPDATE oauth SET status=?,error=?,verifier='' WHERE state_hash=?", (OAuthState.FAILED.value, "Discord sign-in failed. Please try again.", hashed))
+    elif transition is OAuthTransition.UNAVAILABLE:
+        db.execute("UPDATE oauth SET status=?,error=?,verifier='' WHERE state_hash=?", (OAuthState.FAILED.value, "Discord is temporarily unavailable. Please try again.", hashed))
+
+    elif transition is OAuthTransition.EXPIRE:
+        db.execute("UPDATE oauth SET status=?,error=?,verifier='' WHERE state_hash=?", (OAuthState.FAILED.value, "Discord sign-in expired. Please try again.", hashed))
+
+
+def ownership(resource):
+    return ResourceOwnership.UNOWNED if resource is None else ResourceOwnership.OWNED
+
+
+def session_membership(player, world):
+    if player is None:
+        return SessionMembership.UNASSIGNED
+    return SessionMembership.ADMITTED if world.members.get(player.player_id) is player else SessionMembership.PREPARING
+
+
+def window_state(started, used, now, seconds, count):
+    if now - started >= seconds:
+        return QuotaState.RENEWABLE
+    return QuotaState.EXHAUSTED if used >= count else QuotaState.OPEN
+
+
+def archive_batch_state(buffered, elapsed):
+    if not buffered:
+        return ArchiveBatch.EMPTY
+    return ArchiveBatch.ACCUMULATING if buffered < 128 and elapsed < 1 else ArchiveBatch.DUE
+
+
+def authority_capture_state(prepared, queue):
+    if prepared is None:
+        return AuthorityCapture.OMIT
+    return AuthorityCapture.QUEUE if prepared[1] is not None and not queue.full() else AuthorityCapture.GAP
+
+
+class UploadBody:
+    def __init__(self):
+        self.phase = UploadPhase.READING
+        self.buffer = bytearray()
+
+    def append(self, block):
+        if self.phase is not UploadPhase.READING:
+            raise RuntimeError("Capture body is already sealed")
+        if len(self.buffer) + len(block) > MAX_COMPRESSED:
+            raise CaptureError("capture_too_large", "Compressed capture exceeds the request limit.", 413)
+        self.buffer.extend(block)
+
+    def seal(self):
+        self.phase = UploadPhase.SEALED
+        return bytes(self.buffer)
+
+
 
 
 def digest(value: str) -> str:
@@ -87,9 +275,9 @@ class Store:
         os.chmod(target, 0o600)
         self.connection.row_factory = sqlite3.Row
         self.lock = threading.RLock()
-        legacy_excavations = self.connection.execute(
+        legacy_schema = LegacySchema.EXISTING if self.connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='excavations'"
-        ).fetchone() is not None
+        ).fetchone() is not None else LegacySchema.ABSENT
         self.connection.executescript("""
             PRAGMA journal_mode=WAL;
             PRAGMA synchronous=FULL;
@@ -135,13 +323,14 @@ class Store:
         if "return_url" not in {row["name"] for row in self.connection.execute("PRAGMA table_info(oauth)")}:
             self.connection.execute("ALTER TABLE oauth ADD COLUMN return_url TEXT")
         self.connection.commit()
-        if self.connection.execute("PRAGMA user_version").fetchone()[0] < 1:
+        schema_state = SchemaState.LEGACY if self.connection.execute("PRAGMA user_version").fetchone()[0] < 1 else SchemaState.CURRENT
+        if schema_state is SchemaState.LEGACY:
             # SQLite cannot alter CHECK constraints in place. Rebuild atomically,
             # retaining the original coordinates, ownership and creation times.
             try:
                 with self.connection:
                     self.connection.execute("BEGIN IMMEDIATE")
-                    if legacy_excavations:
+                    if legacy_schema is LegacySchema.EXISTING:
                         self.connection.execute("""
                             CREATE TABLE excavations_west (
                                 world_id TEXT NOT NULL REFERENCES worlds(id),
@@ -203,8 +392,80 @@ class Player:
     transport: asyncio.Transport | None = None
     is_bot: bool = False
 
+    def credential_state(self, now):
+        if self.user_id is None:
+            return CredentialState.ANONYMOUS
+        return CredentialState.EXPIRED if self.token_expires <= now else CredentialState.ACTIVE
+
+    def consume_message(self, now):
+        self.messages = min(250.0, self.messages + (now - self.refilled_at) * 60)
+        self.refilled_at = now
+        self.messages -= 1
+        return QuotaState.EXHAUSTED if self.messages < 0 else QuotaState.OPEN
+
+    def revision_admission(self, revision):
+        return RevisionAdmission.CURRENT if type(revision) in (int, float) and revision == self.revision else RevisionAdmission.RESYNC
+
+    def replay_admission(self, request_id):
+        return ReplayAdmission.REPLAY if request_id in self.requests else ReplayAdmission.NEW
+
+    def remember_request(self, request_id):
+        self.requests[request_id] = None
+        if len(self.requests) > 512:
+            self.requests.popitem(last=False)
+
+    def archive_link(self):
+        return ArchiveLink.LINKED if self.capture_session else ArchiveLink.UNLINKED
+
+    def attach_archive(self, session):
+        self.capture_session = session
+
+    def begin_capture_context(self, message):
+        self.capture_context = {key: message[key] for key in ("request_id", "motion_seq") if key in message}
+
+    def end_capture_context(self):
+        self.capture_context = {}
+
+
     def public(self):
         return {"player_id": self.player_id, "name": self.name, "state": self.state}
+
+
+@dataclass
+class TransferSettlement:
+    sender: Player
+    recipient: Player
+    sender_state: dict
+    recipient_state: dict
+    sender_revision: int
+    recipient_revision: int
+    phase: MutationPhase = MutationPhase.STAGED
+
+    @classmethod
+    def stage(cls, sender, recipient, amount):
+        sender_state, recipient_state = dict(sender.state), dict(recipient.state)
+        sender_state["player_money"] = sender.state.get("player_money", 0) - amount
+        recipient_state["player_money"] = recipient.state.get("player_money", 0) + amount
+        return cls(sender, recipient, sender_state, recipient_state, sender.revision + 1, recipient.revision + 1)
+
+    async def commit(self, service):
+        def save(db):
+            service.save_state(db, self.sender, self.sender_state, self.sender_revision)
+            service.save_state(db, self.recipient, self.recipient_state, self.recipient_revision)
+        try:
+            await service.store.run(save)
+        except sqlite3.Error:
+            self.phase = MutationPhase.REJECTED
+            raise
+        self.phase = MutationPhase.COMMITTED
+
+    def publish(self):
+        if self.phase is not MutationPhase.COMMITTED:
+            raise RuntimeError("Only committed transfers may publish")
+        self.sender.state, self.sender.revision = self.sender_state, self.sender_revision
+        self.recipient.state, self.recipient.revision = self.recipient_state, self.recipient_revision
+        self.phase = MutationPhase.PUBLISHED
+
 
 
 class Service:
@@ -246,6 +507,7 @@ class Service:
         self.capture_task = None
         self.capture_gaps = OrderedDict()
         self.retiring_sockets = {}
+        self.phase = ServicePhase.NEW
 
     async def startup(self, app):
         asyncio.get_running_loop().set_exception_handler(
@@ -259,46 +521,69 @@ class Service:
             seed = db.execute("SELECT seed FROM worlds WHERE id=?", (self.world_id,)).fetchone()[0]
             cells = {(r[0], r[1]) for r in db.execute("SELECT x,y FROM excavations WHERE world_id=?", (self.world_id,))}
             return seed, cells
-        self.seed, self.excavated = await self.store.run(load)
-        self.terrain = await asyncio.to_thread(generate, self.seed)
-        self.capture_task = asyncio.create_task(self.capture_writer())
-        await self.pvp.startup()
-        await self.vulcan.startup()
-        self.http = ClientSession(timeout=ClientTimeout(total=20), raise_for_status=True)
-        self.fuel_prices = FuelPrices(
-            user_agent=f"OrebitBeyondTheLode/1.0 (+{self.public_url})",
-        )
+        self.phase = ServicePhase.RESTORE_WORLD
+        while self.phase is not ServicePhase.RUNNING:
+            if self.phase is ServicePhase.RESTORE_WORLD:
+                self.seed, self.excavated = await self.store.run(load)
+                self.terrain = await asyncio.to_thread(generate, self.seed)
+                self.phase = ServicePhase.START_ARCHIVE
+            elif self.phase is ServicePhase.START_ARCHIVE:
+                self.capture_task = asyncio.create_task(self.capture_writer())
+                self.phase = ServicePhase.START_PVP
+            elif self.phase is ServicePhase.START_PVP:
+                await self.pvp.startup()
+                self.phase = ServicePhase.START_VULCAN
+            elif self.phase is ServicePhase.START_VULCAN:
+                await self.vulcan.startup()
+                self.phase = ServicePhase.START_HTTP
+            elif self.phase is ServicePhase.START_HTTP:
+                self.http = ClientSession(timeout=ClientTimeout(total=20), raise_for_status=True)
+                self.fuel_prices = FuelPrices(user_agent=f"OrebitBeyondTheLode/1.0 (+{self.public_url})")
+                self.phase = ServicePhase.RUNNING
         log_event("startup", world_id=self.world_id, members=len(self.members))
 
     async def shutdown(self, app):
-        await self.pvp.stop()
-        await self.vulcan.stop()
-        retiring = list(self.retiring_sockets)
-        for task in retiring:
-            task.cancel()
-        await asyncio.gather(*retiring, return_exceptions=True)
-        players = [*self.members.values(), *self.pvp.members.values(), *self.vulcan.members.values()]
-        results = await asyncio.gather(*(p.socket.close(code=1001, message=b"Server shutting down; reconnect to resume") for p in players), return_exceptions=True)
-        for player, result in zip(players, results):
-            if isinstance(result, BaseException):
-                log_event("session_error", level=logging.ERROR, error=result, world_id=self.world_id, request_id=player.session_id, session_id=player.session_id, player_id=player.player_id, user_id=player.user_id)
-        if self.capture_task:
-            try:
-                await asyncio.wait_for(self.capture_queue.join(), timeout=5)
-            except asyncio.TimeoutError:
-                pass
-            self.capture_task.cancel()
-            try:
-                await self.capture_task
-            except asyncio.CancelledError:
-                pass
-            self.capture_task = None
+        self.phase = ServicePhase.STOP_PVP
+        while self.phase is not ServicePhase.STOPPED:
+            if self.phase is ServicePhase.STOP_PVP:
+                await self.pvp.stop()
+                self.phase = ServicePhase.STOP_VULCAN
+            elif self.phase is ServicePhase.STOP_VULCAN:
+                await self.vulcan.stop()
+                self.phase = ServicePhase.RETIRE_SOCKETS
+            elif self.phase is ServicePhase.RETIRE_SOCKETS:
+                retiring = list(self.retiring_sockets)
+                for task in retiring:
+                    task.cancel()
+                await asyncio.gather(*retiring, return_exceptions=True)
+                self.phase = ServicePhase.CLOSE_SESSIONS
+            elif self.phase is ServicePhase.CLOSE_SESSIONS:
+                players = [*self.members.values(), *self.pvp.members.values(), *self.vulcan.members.values()]
+                results = await asyncio.gather(*(p.socket.close(code=1001, message=b"Server shutting down; reconnect to resume") for p in players), return_exceptions=True)
+                for player, result in zip(players, results):
+                    if isinstance(result, BaseException):
+                        log_event("session_error", level=logging.ERROR, error=result, world_id=self.world_id, request_id=player.session_id, session_id=player.session_id, player_id=player.player_id, user_id=player.user_id)
+                self.phase = ServicePhase.DRAIN_ARCHIVE
+            elif self.phase is ServicePhase.DRAIN_ARCHIVE:
+                if ownership(self.capture_task) is ResourceOwnership.OWNED:
+                    try:
+                        await asyncio.wait_for(self.capture_queue.join(), timeout=5)
+                    except asyncio.TimeoutError:
+                        pass
+                    self.capture_task.cancel()
+                    try:
+                        await self.capture_task
+                    except asyncio.CancelledError:
+                        pass
+                    self.capture_task = None
+                self.phase = ServicePhase.STOPPED
 
     async def cleanup(self, app):
-        if self.http:
+        if ownership(self.http) is ResourceOwnership.OWNED:
             await self.http.close()
         await self.store.close()
         await self.vulcan_store.close()
+        self.phase = ServicePhase.CLOSED
         log_event("shutdown", world_id=self.world_id, members=len(self.members))
 
     def rate_limit(self, request, bucket: str, count: int, seconds: int):
@@ -309,12 +594,14 @@ class Service:
         key = (bucket, peer)
         now = time.monotonic()
         started, used = self.rate_limits.pop(key, (now, 0))
-        if now - started >= seconds:
+        quota = window_state(started, used, now, seconds, count)
+        if quota is QuotaState.RENEWABLE:
             started, used = now, 0
+        quota = QuotaState.EXHAUSTED if used >= count else QuotaState.OPEN
         self.rate_limits[key] = (started, used + 1)
         while len(self.rate_limits) > 8192:
             self.rate_limits.popitem(last=False)
-        if used >= count:
+        if quota is QuotaState.EXHAUSTED:
             raise APIError("rate_limited", "Too many requests. Please try again later.", 429)
 
     async def body(self, request):
@@ -391,7 +678,8 @@ class Service:
         if not isinstance(token, str) or not 20 <= len(token) <= 200:
             raise APIError("invalid_token", "Your sign-in expired. Sign in again.", 401)
         user = await self.auth_store(mode).run(lambda db: db.execute("SELECT u.*,t.expires_at FROM tokens t JOIN users u ON u.id=t.user_id WHERE t.hash=? AND t.expires_at>?", (digest(token), int(time.time()))).fetchone())
-        if not user:
+        credential = CredentialState.ACTIVE if user else CredentialState.MISSING
+        if credential is CredentialState.MISSING:
             raise APIError("invalid_token", "Your sign-in expired. Sign in again.", 401)
         return user
 
@@ -511,9 +799,9 @@ class Service:
             return self.callback_page("This sign-in link is invalid or expired. Start again in Orebit.", 400)
         hashed = digest(state)
         def claim(db):
-            row = db.execute("SELECT * FROM oauth WHERE state_hash=? AND status='pending'", (hashed,)).fetchone()
+            row = db.execute("SELECT * FROM oauth WHERE state_hash=? AND status=?", (hashed, OAuthState.PENDING.value)).fetchone()
             if row:
-                db.execute("UPDATE oauth SET status='processing' WHERE state_hash=?", (hashed,))
+                transition_oauth(db, hashed, OAuthTransition.CLAIM)
             return row
         store = self.store
         flow = await store.run(claim)
@@ -525,12 +813,12 @@ class Service:
             return self.callback_page("This sign-in link has expired or was already used. Start again in Orebit.", 400)
         if flow["expires_at"] <= int(time.time()):
             request["error_code"] = "invalid_callback"
-            await store.run(lambda db: db.execute("UPDATE oauth SET status='failed',error='Discord sign-in expired. Please try again.',verifier='' WHERE state_hash=?", (hashed,)))
+            await store.run(transition_oauth, hashed, OAuthTransition.EXPIRE)
             return self.callback_page("This sign-in expired. Start again in Orebit.", 400, flow["return_url"])
         code = request.query.get("code", "")
         if request.query.get("error") or not code or len(code) > 2048:
             request["error_code"] = "discord_cancelled"
-            await store.run(lambda db: db.execute("UPDATE oauth SET status='failed',error='Discord authorization was cancelled.',verifier='' WHERE state_hash=?", (hashed,)))
+            await store.run(transition_oauth, hashed, OAuthTransition.CANCEL)
             return self.callback_page("Discord sign-in was cancelled. Try again in Orebit when you're ready.", 400, flow["return_url"])
         try:
             async with self.http.post("https://discord.com/api/oauth2/token", data={"client_id": self.client_id, "client_secret": self.client_secret, "grant_type": "authorization_code", "code": code, "redirect_uri": self.callback, "code_verifier": flow["verifier"]}) as response:
@@ -548,16 +836,16 @@ class Service:
             def complete(db):
                 db.execute("INSERT INTO users(discord_id,display_name,created_at) VALUES(?,?,?) ON CONFLICT(discord_id) DO UPDATE SET display_name=excluded.display_name", (discord_id, display, int(time.time())))
                 user = db.execute("SELECT id FROM users WHERE discord_id=?", (discord_id,)).fetchone()
-                db.execute("UPDATE oauth SET status='complete',user_id=?,verifier='' WHERE state_hash=?", (user["id"], hashed))
+                transition_oauth(db, hashed, OAuthTransition.COMPLETE, user_id=user["id"])
                 return user["id"]
             request["user_id"] = await store.run(complete)
         except (asyncio.TimeoutError, ValueError, KeyError, web.HTTPException) as error:
             request["error_code"], request["log_error"] = "discord_failed", error
-            await store.run(lambda db: db.execute("UPDATE oauth SET status='failed',error='Discord sign-in failed. Please try again.',verifier='' WHERE state_hash=?", (hashed,)))
+            await store.run(transition_oauth, hashed, OAuthTransition.FAIL)
             return self.callback_page("Discord sign-in failed. Try again in Orebit.", 502, flow["return_url"])
         except Exception as error:
             request["error_code"], request["log_error"] = "discord_failed", error
-            await store.run(lambda db: db.execute("UPDATE oauth SET status='failed',error='Discord is temporarily unavailable. Please try again.',verifier='' WHERE state_hash=?", (hashed,)))
+            await store.run(transition_oauth, hashed, OAuthTransition.UNAVAILABLE)
             return self.callback_page("Discord is temporarily unavailable. Try again in Orebit.", 502, flow["return_url"])
         log_event("auth_success", operation="discord_callback", user_id=request["user_id"])
         return self.callback_page("Your account is ready. Orebit will finish signing you in automatically.", return_url=flow["return_url"], complete=True)
@@ -573,20 +861,20 @@ class Service:
             row = db.execute("SELECT * FROM oauth WHERE poll_hash=? AND expires_at>?", (digest(secret), int(time.time()))).fetchone()
             if not row:
                 raise APIError("expired_completion", "This sign-in has expired or was already completed. Start again.", 401)
-            if row["status"] == "complete":
+            if oauth_state(row) is OAuthState.COMPLETE:
                 user = db.execute("SELECT * FROM users WHERE id=?", (row["user_id"],)).fetchone()
                 result = self.issue_token(db, user)
                 db.execute("DELETE FROM oauth WHERE poll_hash=?", (digest(secret),))
                 return {"status": "complete", **result}
-            if row["status"] == "failed":
+            if oauth_state(row) is OAuthState.FAILED:
                 db.execute("DELETE FROM oauth WHERE poll_hash=?", (digest(secret),))
                 return {"status": "failed", "message": row["error"]}
             return {"status": "pending"}
         result = await store.run(poll)
-        if result["status"] == "complete":
+        if oauth_state(result) is OAuthState.COMPLETE:
             request["user_id"] = result["user"]["id"]
             log_event("auth_success", operation="discord_poll", user_id=request["user_id"])
-        elif result["status"] == "failed":
+        elif oauth_state(result) is OAuthState.FAILED:
             request["error_code"] = "discord_failed"
             result["request_id"] = request["request_id"]
         return web.json_response(result)
@@ -617,9 +905,9 @@ class Service:
             ])
             humans, _ = self.pvp.population()
             return web.json_response({
-                "enabled": not self.pvp.failed, "capacity": 5,
+                "enabled": self.pvp.phase is not SimulationPhase.FAILED, "capacity": 5,
                 "world_id": self.pvp.world_id, "round_id": self.pvp.round_id,
-                "humans": humans, "target_bots": max(0, 5 - humans) if not self.pvp.failed else 0,
+                "humans": humans, "target_bots": max(0, 5 - humans) if self.pvp.phase is not SimulationPhase.FAILED else 0,
                 "bots": bots,
                 "connected_bots": [
                     {"user_id": p.user_id, "player_id": p.player_id, "cash": int(p.state.get("player_money", 0))}
@@ -649,14 +937,12 @@ class Service:
         async with self.capture.slots:
             try:
                 async with asyncio.timeout(15):
-                    body = bytearray()
+                    body = UploadBody()
                     async for block in request.content.iter_chunked(16384):
-                        if len(body) + len(block) > MAX_COMPRESSED:
-                            raise CaptureError("capture_too_large", "Compressed capture exceeds the request limit.", 413)
-                        body.extend(block)
+                        body.append(block)
             except asyncio.TimeoutError:
                 raise CaptureError("capture_timeout", "Capture upload timed out.", 408) from None
-            result = await asyncio.to_thread(self.capture.ingest, session, token, int(index_text), bytes(body))
+            result = await asyncio.to_thread(self.capture.ingest, session, token, int(index_text), body.seal())
         return web.json_response(result)
 
     def link_capture(self, player, message):
@@ -666,7 +952,7 @@ class Service:
             self.capture.authenticate(message.get("capture_session"), message.get("capture_token"))
         except CaptureError:
             return False
-        player.capture_session = message["capture_session"]
+        player.attach_archive(message["capture_session"])
         return True
 
     def capture_gap(self, session, first, last):
@@ -686,7 +972,7 @@ class Service:
                 buffered += 1
             except asyncio.TimeoutError:
                 pass
-            if not buffered or (buffered < 128 and time.monotonic() - flushed_at < 1):
+            if archive_batch_state(buffered, time.monotonic() - flushed_at) is not ArchiveBatch.DUE:
                 continue
             for session, entries in buffers.items():
                 first, last = entries[0][0], entries[-1][0]
@@ -726,7 +1012,7 @@ class Service:
 
     async def send(self, player, message):
         socket = player.socket
-        if player.capture_session:
+        if player.archive_link() is ArchiveLink.LINKED:
             try:
                 # pvp_tick contains a peers list, not top-level state. Capture
                 # only this recipient's authoritative state, never peer names.
@@ -736,15 +1022,17 @@ class Service:
                 if message.get("ore") in MINERALS:
                     source["ore_code"] = MINERALS.index(message["ore"])
                 prepared = self.capture.prepare_authority(player.capture_session, source, player.capture_context)
-                if prepared:
+                capture_state = authority_capture_state(prepared, self.capture_queue)
+                if capture_state is not AuthorityCapture.OMIT:
                     sequence, raw = prepared
-                    if raw is not None and not self.capture_queue.full():
+                    if capture_state is AuthorityCapture.QUEUE:
                         self.capture_queue.put_nowait((player.capture_session, sequence, raw))
                     else:
                         self.capture_gap(player.capture_session, sequence, sequence)
                     message = {**message, "capture_server_sequence": sequence, "capture_session_id": player.capture_session}
                 gap = self.capture_gaps.pop(player.capture_session, None)
-                if gap:
+                gap_state = GapState.PENDING if gap else GapState.NONE
+                if gap_state is GapState.PENDING:
                     message = {**message, "capture_session_id": player.capture_session, "capture_gap_first": gap[0], "capture_gap_last": gap[1]}
             except Exception:
                 pass
@@ -803,7 +1091,7 @@ class Service:
     async def update_state(self, player, message):
         state = self.validate_state(message.get("state"))
         revision = message.get("state_revision")
-        if type(revision) not in (int, float) or revision != player.revision:
+        if player.revision_admission(revision) is RevisionAdmission.RESYNC:
             await self.send(player, {"type": "state_sync", "state": player.state, "state_revision": player.revision})
             return
         await self.store.run(self.save_state, player, state, player.revision)
@@ -831,28 +1119,20 @@ class Service:
             await self.send(player, {"type": "transfer_result", "accepted": False, "message": rejection})
             return
 
-        sender_state, recipient_state = dict(player.state), dict(recipient.state)
-        sender_state["player_money"] = player.state.get("player_money", 0) - amount
-        recipient_state["player_money"] = recipient.state.get("player_money", 0) + amount
-        sender_revision, recipient_revision = player.revision + 1, recipient.revision + 1
-
-        def commit(db):
-            self.save_state(db, player, sender_state, sender_revision)
-            self.save_state(db, recipient, recipient_state, recipient_revision)
+        settlement = TransferSettlement.stage(player, recipient, amount)
 
         # The caller holds world_lock across validation, persistence and publication,
         # so neither participant can overwrite this action with an old snapshot.
         try:
-            await self.store.run(commit)
+            await settlement.commit(self)
         except sqlite3.Error as error:
             log_event("session_error", level=logging.ERROR, error=error, error_code="transfer_save_failed")
             await self.send(player, {"type": "transfer_result", "accepted": False, "message": "The transfer could not be saved. No money was moved."})
             return
-        player.state, player.revision = sender_state, sender_revision
-        recipient.state, recipient.revision = recipient_state, recipient_revision
+        settlement.publish()
         await asyncio.gather(
-            self.send(player, {"type": "transfer_result", "accepted": True, "message": f"Sent ${amount:,} to {recipient.name}.", "state": sender_state, "state_revision": sender_revision}),
-            self.send(recipient, {"type": "state_sync", "state": recipient_state, "state_revision": recipient_revision}),
+            self.send(player, {"type": "transfer_result", "accepted": True, "message": f"Sent ${amount:,} to {recipient.name}.", "state": settlement.sender_state, "state_revision": settlement.sender_revision}),
+            self.send(recipient, {"type": "state_sync", "state": settlement.recipient_state, "state_revision": settlement.recipient_revision}),
         )
 
     async def mine(self, player, message):
@@ -862,7 +1142,7 @@ class Service:
             player.mine_rejected += 1
             log_event("mining_decision", level=logging.WARNING, action=method, accepted=False, error_code="invalid_mine")
             raise APIError("invalid_mine", "Mining needs a unique request_id of 1-64 characters.")
-        if request_id in player.requests:
+        if player.replay_admission(request_id) is ReplayAdmission.REPLAY:
             # A retried packet never awards twice or replays an obsolete state snapshot.
             player.mine_duplicates += 1
             log_event("mining_decision", action=method, accepted=False, error_code="duplicate_mine")
@@ -874,25 +1154,25 @@ class Service:
             raise APIError("invalid_mine", "Mining coordinates or method are invalid.")
         x, y = int(x), int(y)
         name = tile_name(self.terrain[x][y])
-        accepted = bool(name and (x, y) not in self.excavated and (method == "blast" or name != "Rock"))
-        event = {"type": "mined", "request_id": request_id, "player_id": player.player_id, "x": x, "y": y, "method": method, "accepted": accepted, "ore": name if accepted and method == "drill" else ""}
-        if accepted:
+        decision = MiningPhase.ELIGIBLE if name and (x, y) not in self.excavated and (method == "blast" or name != "Rock") else MiningPhase.REJECTED
+        event = {"type": "mined", "request_id": request_id, "player_id": player.player_id, "x": x, "y": y, "method": method, "accepted": decision is MiningPhase.ELIGIBLE, "ore": name if decision is MiningPhase.ELIGIBLE and method == "drill" else ""}
+        if decision is MiningPhase.ELIGIBLE:
             state = award(copy.deepcopy(player.state), event["ore"])
             revision = player.revision + 1
             def commit(db):
                 try:
                     db.execute("INSERT INTO excavations(world_id,x,y,user_id,created_at) VALUES(?,?,?,?,?)", (self.world_id, x, y, player.user_id, int(time.time())))
                 except sqlite3.IntegrityError:
-                    return False
+                    return MiningPhase.CONFLICT
                 self.save_state(db, player, state, revision)
-                return True
+                return MiningPhase.COMMITTED
             try:
-                accepted = await self.store.run(commit)
+                decision = await self.store.run(commit)
             except Exception as error:
                 player.mine_rejected += 1
                 log_event("mining_decision", level=logging.ERROR, error=error, action=method, x=x, y=y, accepted=False, error_code="server_error")
                 raise
-            if accepted:
+            if decision is MiningPhase.COMMITTED:
                 self.excavated.add((x, y))
                 player.state, player.revision = state, revision
                 event.update(state=state, state_revision=revision)
@@ -904,13 +1184,20 @@ class Service:
         else:
             player.mine_rejected += 1
         log_event("mining_decision", action=method, x=x, y=y, accepted=event["accepted"])
-        player.requests[request_id] = None
-        if len(player.requests) > 512:
-            player.requests.popitem(last=False)
+        player.remember_request(request_id)
         if event["accepted"]:
             await self.broadcast(event)
         else:
             await self.send(player, event)
+
+    @staticmethod
+    def admit_player(world, player):
+        world.members[player.player_id] = player
+
+    @staticmethod
+    def retire_player(world, player):
+        world.members.pop(player.player_id, None)
+
 
     async def websocket(self, request):
         if self.joining >= 32:
@@ -966,7 +1253,7 @@ class Service:
                     resumed = bool(user and previous and previous.user_id == user["id"]
                                    and previous.token_hash == digest(token))
                     if resumed:
-                        if world is self.pvp and world.failed:
+                        if world is self.pvp and world.phase is SimulationPhase.FAILED:
                             raise APIError("pvp_unavailable", "PvP simulation is unavailable. Co-op remains available.", 503)
                         if world is self.vulcan and world.failed:
                             raise APIError("vulcan_unavailable", "Vulcan simulation is unavailable. Other modes remain available.", 503)
@@ -979,7 +1266,7 @@ class Service:
                     else:
                         if user and any(p.user_id == user["id"] for p in world.members.values()):
                             raise APIError("already_connected", "This account is already connected to this server.", 409)
-                        if world is self.pvp and world.failed:
+                        if world is self.pvp and world.phase is SimulationPhase.FAILED:
                             raise APIError("pvp_unavailable", "PvP simulation is unavailable. Co-op remains available.", 503)
                         victim = world.admission_victim(is_bot) if world is self.pvp else None
                         if len(world.members) >= 5 and victim is None:
@@ -999,7 +1286,7 @@ class Service:
                     self.link_capture(player, join)
                     request["player_id"] = player.player_id
                     contexts.enter_context(log_context(player_id=player.player_id))
-                    world.members[player.player_id] = player
+                    self.admit_player(world, player)
                     log_event("session_join", members=len(world.members), joining=self.joining)
                     await self.send(player, {"type": "joined", "player_id": player.player_id, "world_id": self.world_id, "seed": world.seed, "excavated": sorted(world.excavated), "players": [p.public() for p in world.members.values()], "state": player.state, "state_revision": player.revision, **(world.join_details() if world is not self else {})})
                     if not resumed and victim is not None:
@@ -1023,19 +1310,16 @@ class Service:
                     async with world.world_lock:
                         # Both checks are required: the logical player survives a
                         # handoff, but only its current socket may mutate it.
-                        if world.members.get(player.player_id) is not player or player.socket is not socket:
+                        if session_membership(player, world) is not SessionMembership.ADMITTED or player.socket is not socket:
                             break
                         player.received += 1
                         now = time.monotonic()
-                        player.messages = min(250.0, player.messages + (now - player.refilled_at) * 60)
-                        player.refilled_at = now
-                        player.messages -= 1
-                        if player.messages < 0:
+                        if player.consume_message(now) is QuotaState.EXHAUSTED:
                             raise APIError("rate_limited", "Too many game messages. Reconnect to resume.", 429)
-                        if player.user_id is not None and player.token_expires <= int(time.time()):
+                        if player.credential_state(int(time.time())) is CredentialState.EXPIRED:
                             raise APIError("invalid_token", "Your sign-in expired. Sign in again.", 401)
                         if world is self.pvp and message.get("type") in MUTATIONS:
-                            if world.failed:
+                            if world.phase is SimulationPhase.FAILED:
                                 raise APIError("pvp_unavailable", "PvP simulation is unavailable. Co-op remains available.", 503)
                             if not world.accepts_round(message):
                                 await world.send(player, {"type": "round_rejected", "code": "stale_round",
@@ -1045,7 +1329,7 @@ class Service:
                                 continue
                         if world is self.vulcan and world.failed:
                             raise APIError("vulcan_unavailable", "Vulcan simulation is unavailable. Other modes remain available.", 503)
-                        player.capture_context = {key: message[key] for key in ("request_id", "motion_seq") if key in message}
+                        player.begin_capture_context(message)
                         if message.get("type") == "capture_link":
                             linked = self.link_capture(player, message)
                             await self.send(player, {"type": "capture_linked", "accepted": linked})
@@ -1065,7 +1349,7 @@ class Service:
                             break
                         else:
                             raise APIError("invalid_message", "Unknown game message type.")
-                        player.capture_context = {}
+                        player.end_capture_context()
             except APIError as error:
                 request["error_code"] = error.code
                 log_event("session_error", level=logging.WARNING, error=error, error_code=error.code)
@@ -1093,10 +1377,10 @@ class Service:
             finally:
                 self.joining -= 1
                 try:
-                    if player:
+                    if session_membership(player, world) is not SessionMembership.UNASSIGNED:
                         async with world.world_lock:
-                            if world.members.get(player.player_id) is player and player.socket is socket:
-                                del world.members[player.player_id]
+                            if session_membership(player, world) is SessionMembership.ADMITTED and player.socket is socket:
+                                self.retire_player(world, player)
                                 await world.broadcast({"type": "player_left", "player_id": player.player_id})
                 finally:
                     log_event(

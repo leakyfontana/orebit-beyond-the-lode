@@ -164,6 +164,17 @@ class AuthServiceTest(unittest.IsolatedAsyncioTestCase):
                 await asyncio.sleep(0.01)
 
     async def test_authenticated_resume_preserves_full_world_slot_state_and_capture(self):
+        async def drain_peer(connection):
+            async for _ in connection:
+                pass
+
+        async def stop_reader(task):
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
         credentials = {"username": "resume_full", "password": "resume-full-long-password"}
         _, account = await self.json_request("POST", "/api/auth/signup", json=credentials)
         for mode in ("coop", "pvp"):
@@ -174,6 +185,11 @@ class AuthServiceTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(response.status, 200)
                 old, joined = await self.join(account["token"], **fields, capture_session=capability["session_id"], capture_token=capability["token"])
                 peers = [await self.join(**fields) for _ in range(4)]
+                # Real clients consume recurring PvP ticks. Keep passive guests
+                # reading so this ownership test does not create slow consumers.
+                for connection, _ in peers[1:]:
+                    reader = asyncio.create_task(drain_peer(connection))
+                    self.addAsyncCleanup(stop_reader, reader)
                 observer, observer_joined = peers[0]
                 if mode == "coop":
                     state = {"player_money": 83, "player_hp": 4, "player_cargo": {"Ironium": 2}, "player_items": {"Dynamite": 1}, "x": 3, "y": -8}

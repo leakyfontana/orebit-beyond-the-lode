@@ -9,6 +9,7 @@ reported on stderr, never with their potentially sensitive contents.
 
 import argparse
 from collections import Counter
+from enum import Enum, auto
 import heapq
 import json
 import os
@@ -26,6 +27,80 @@ MAX_LIMIT = 10000
 ARCHIVE_NAME = re.compile(r"events\.jsonl(?:\.([1-9][0-9]*))?\Z")
 
 
+class DirectorySnapshotState(Enum):
+    STABLE = auto()
+    CHANGED = auto()
+
+
+class FileIdentityState(Enum):
+    UNSEEN = auto()
+    ALREADY_READ = auto()
+
+
+class SnapshotReadState(Enum):
+    READING = auto()
+    COMPLETE = auto()
+    ROTATED = auto()
+    TRUNCATED = auto()
+
+
+class SnapshotContentState(Enum):
+    PRESERVED = auto()
+    APPENDED = auto()
+    CHANGED = auto()
+
+
+class RecordReadState(Enum):
+    READING = auto()
+    DISCARDING_OVERSIZED = auto()
+
+
+def _directory_snapshot_state(before, after):
+    if (before.st_dev, before.st_ino, before.st_mtime_ns) != (
+        after.st_dev, after.st_ino, after.st_mtime_ns
+    ):
+        return DirectorySnapshotState.CHANGED
+    return DirectorySnapshotState.STABLE
+
+
+def _claim_file_identity(info, seen):
+    identity = (info.st_dev, info.st_ino)
+    if identity in seen:
+        return FileIdentityState.ALREADY_READ
+    seen.add(identity)
+    return FileIdentityState.UNSEEN
+
+
+class _FileSnapshot:
+    """Read only the discovered bytes from the discovered file identity."""
+
+    def __init__(self, expected, opened):
+        self.expected = expected
+        self.remaining = expected.st_size
+        self.verify_opened(opened)
+
+    def verify_opened(self, opened):
+        if (opened.st_dev, opened.st_ino) != (self.expected.st_dev, self.expected.st_ino):
+            self.state = SnapshotReadState.ROTATED
+        else:
+            self.state = SnapshotReadState.READING if self.remaining else SnapshotReadState.COMPLETE
+
+    def consume(self, raw):
+        if not raw:
+            self.state = SnapshotReadState.TRUNCATED
+            return
+        self.remaining -= len(raw)
+        if not self.remaining:
+            self.state = SnapshotReadState.COMPLETE
+
+    def content_state(self, after):
+        if after.st_size < self.expected.st_size or (
+            after.st_size == self.expected.st_size and after.st_mtime_ns != self.expected.st_mtime_ns
+        ):
+            return SnapshotContentState.CHANGED
+        if after.st_size > self.expected.st_size:
+            return SnapshotContentState.APPENDED
+        return SnapshotContentState.PRESERVED
 
 
 def snapshot_files(directory, problems):
@@ -49,9 +124,7 @@ def snapshot_files(directory, problems):
                 number = int(match.group(1) or 0)
                 files.append((number, Path(directory) / entry.name, info))
         after = os.stat(directory)
-        if (before.st_dev, before.st_ino, before.st_mtime_ns) != (
-            after.st_dev, after.st_ino, after.st_mtime_ns
-        ):
+        if _directory_snapshot_state(before, after) is DirectorySnapshotState.CHANGED:
             problems["log directory changed during discovery"] += 1
     except OSError:
         problems["log directory could not be read"] += 1
@@ -68,27 +141,29 @@ def read_records(path, expected, problems):
         problems["log file disappeared or could not be opened"] += 1
         return
     with os.fdopen(descriptor, "rb") as source:
-        opened = os.fstat(source.fileno())
-        if (opened.st_dev, opened.st_ino) != (expected.st_dev, expected.st_ino):
+        snapshot = _FileSnapshot(expected, os.fstat(source.fileno()))
+        if snapshot.state is SnapshotReadState.ROTATED:
             problems["log rotated before it could be read"] += 1
             return
-        remaining = expected.st_size
-        oversized = False
-        while remaining:
+        record_state = RecordReadState.READING
+        while snapshot.state is SnapshotReadState.READING:
             try:
-                raw = source.readline(min(MAX_LINE_BYTES + 1, remaining))
+                raw = source.readline(min(MAX_LINE_BYTES + 1, snapshot.remaining))
             except OSError:
                 problems["log file could not be read"] += 1
                 return
-            if not raw:
+            snapshot.consume(raw)
+            if snapshot.state is SnapshotReadState.TRUNCATED:
                 problems["log truncated while being read"] += 1
                 break
-            remaining -= len(raw)
             ended = raw.endswith(b"\n")
-            if oversized or len(raw) > MAX_LINE_BYTES:
-                if not oversized:
-                    problems["oversized record ignored"] += 1
-                oversized = not ended
+            if record_state is RecordReadState.DISCARDING_OVERSIZED:
+                if ended:
+                    record_state = RecordReadState.READING
+                continue
+            if len(raw) > MAX_LINE_BYTES:
+                problems["oversized record ignored"] += 1
+                record_state = RecordReadState.READING if ended else RecordReadState.DISCARDING_OVERSIZED
                 continue
             if not ended:
                 problems["truncated or unterminated record ignored"] += 1
@@ -99,9 +174,7 @@ def read_records(path, expected, problems):
             except (ValueError, TypeError, RecursionError, OverflowError):
                 problems["malformed or unsafe record ignored"] += 1
         after = os.fstat(source.fileno())
-        if after.st_size < expected.st_size or (
-            after.st_size == expected.st_size and after.st_mtime_ns != expected.st_mtime_ns
-        ):
+        if snapshot.content_state(after) is SnapshotContentState.CHANGED:
             problems["log changed while being read"] += 1
 
 
@@ -144,11 +217,9 @@ def main(argv=None):
     seen_files = set()
     sequence = 0
     for _, path, info in files:
-        identity = (info.st_dev, info.st_ino)
-        if identity in seen_files:
+        if _claim_file_identity(info, seen_files) is FileIdentityState.ALREADY_READ:
             problems["duplicate file identity ignored during rotation"] += 1
             continue
-        seen_files.add(identity)
         for timestamp, record in read_records(path, info, problems):
             if args.since is not None and timestamp < args.since:
                 continue

@@ -27,6 +27,7 @@
   "patch": {
     "path": "verification/box2d-godot-4.7.2.patch",
     "base_commit": "f717f7534da19fa2618b82fbcdafc040093aaafe",
+    "sha256": "d0defd1940c6df15f020c21f07905b2455a744481bf74fa2efafa7b0785d658e",
     "changed_paths": [
       "SConstruct",
       "src/b2_user_settings.h",
@@ -57,6 +58,7 @@
   "box2d_fixture_patch": {
     "path": "verification/box2d-fixture-shape-sync.patch",
     "base_commit": "b31e89d5d923b485d72bf58899304a8863e5caa0",
+    "sha256": "5c799cf4d44b19c413fde20817167e86fde28792b71ed71d9d2f3308fb27aedb",
     "changed_paths": ["include/box2d/b2_fixture.h", "src/dynamics/b2_fixture.cpp"],
     "apply_from_repository_root": "git -C verification/tools/box2d-source/box2d apply ../../../box2d-fixture-shape-sync.patch",
     "purpose": "Synchronize only the edited fixture's broad-phase bounds after local geometry baking; preserve fixture/contact identity and schedule next-step pair creation."
@@ -109,7 +111,8 @@
     "Scale circle/capsule end-cap radius using absolute uniform scale, including reflected actors; keep circle centers and single-fixture synchronization unchanged.",
     "Refilter existing owned fixtures when collision layer/mask actually changes, so stationary overlapping bodies enter/leave contacts without moving or rebuilding fixture identity.",
     "Expose the existing factory as main-thread-only Box2DClock. Exclusive manual ownership gates automatic stepping/query flushing and completes native space stepping plus existing body/contact/area synchronization once per gameplay fixed tick.",
-    "Treat segment and concave line fixtures as zero-area in all compound mass/center/inertia calculations, even when diagonal AABBs enclose area; retain the original solid-shape mass convention."
+    "Treat segment and concave line fixtures as zero-area in all compound mass/center/inertia calculations, even when diagonal AABBs enclose area; retain the original solid-shape mass convention.",
+    "Model only existing public monitor/contact accounting, fixture/space ownership, shape-index transfer, manual-clock synchronization and fixture proxy/contact publication as explicit states. Preserve the production geometry, impulse, gravity, CCD and floating-point operations; the current patch SHA-256 values are distinct from immutable historical build evidence below."
   ],
   "remaining_upstream_limitations": [
     "No double-precision Box2D backend; evaluate precision=single only.",

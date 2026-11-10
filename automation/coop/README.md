@@ -48,6 +48,19 @@ excavation, retained money, resource loss, stale writes, respawn and saved-trail
 growth. Scoped Discord callback/poll, cancellation and pending-flow restart cases
 live in `test_auth.py`.
 
+## Internal state models
+
+Service startup/shutdown, OAuth transitions, capture admission/publication, and
+log ownership use explicit enum states without changing wire or storage schemas.
+PvP uses `SimulationPhase` instead of `failed`, `SavePhase` for runtime save
+eligibility (`stage_runtime()` stages a mutation), and `BodyMotionPhase` for
+gravity results. Replay admission and economy reconciliation return enums rather
+than boolean decisions. Fuel quotes use private enum-governed cache state while
+retaining the bounded system `curl` transport and Eastern-midnight expiry.
+Deploy the backend files together and restart the service; no new data migration
+or engine build is required.
+
+
 ## Signed-in connection recovery
 
 A recovery `join` may include the previous `resume_player_id`. Under the target

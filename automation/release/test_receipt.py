@@ -90,6 +90,32 @@ class ReceiptPolicyTest(unittest.TestCase):
             save.assert_not_called()
             self.assertEqual(record['public_result']['status'], 'deployed')
 
+    def test_completed_workflow_only_verifies_existing(self):
+        with patch.object(pull_deploy, 'run_identity', return_value={'status': 'completed'}), patch.object(pull_deploy, 'fetch_json') as fetch:
+            self.assertIs(pull_deploy.check_ready({'run_id': 1, 'commit': COMMIT}),
+                          pull_deploy.CandidateAction.VERIFY_EXISTING)
+        fetch.assert_not_called()
+
+    def test_running_workflow_deploys_only_after_build_and_drive_gates(self):
+        jobs = [{'name': name, 'status': 'completed', 'conclusion': 'success'}
+                for name in sorted(pull_deploy.BUILD_JOBS)]
+        drive = {'name': 'Publish and verify Drive artifacts',
+                 'status': 'completed', 'conclusion': 'success'}
+        jobs.append({'name': 'Publish', 'steps': [drive]})
+        request = {'run_id': 1, 'commit': COMMIT}
+        for conclusion in ('success', 'failure'):
+            with self.subTest(conclusion=conclusion):
+                drive['conclusion'] = conclusion
+                with patch.object(pull_deploy, 'run_identity', return_value={'status': 'in_progress'}), patch.object(pull_deploy, 'fetch_json', side_effect=[{'jobs': jobs}, {'commit': {'sha': COMMIT}}]) as fetch:
+                    if conclusion == 'success':
+                        self.assertIs(pull_deploy.check_ready(request),
+                                      pull_deploy.CandidateAction.DEPLOY)
+                        self.assertEqual(fetch.call_count, 2)
+                    else:
+                        with self.assertRaises(pull_deploy.Rejected):
+                            pull_deploy.check_ready(request)
+                        self.assertEqual(fetch.call_count, 1)
+
 
 if __name__ == '__main__':
     unittest.main()

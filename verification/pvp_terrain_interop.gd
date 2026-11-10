@@ -44,7 +44,7 @@ func detached_hazard(tile: int, label: String) -> void:
 	network._receive({"type":"mined", "x":support.x, "y":support.y, "accepted":true, "player_id":"other", "method":"drill", "ore":"Dirt"})
 	network._receive({"type":"pvp_tick", "players":[], "terrain_changes":[[support.x,support.y,0],[source.x,source.y,0]], "falling":[{"id":label,"x":20.5,"y":-33.5,"tile":tile}], "bags":[], "impacts":[]})
 	check(host.world.getRawTile(source.x, source.y)[0] == 0, label + " detached source remained solid")
-	check(host.coop.pvp.objects.has("falling" + label), label + " detached sprite was not presented")
+	check(host.coop.pvp._replicas.has("falling" + label) and host.coop.pvp._replicas["falling" + label].sprite.is_visible_in_tree(), label + " detached sprite was not presented")
 	for offset in WorldData.NEIGHBOURS:
 		var cell: Vector2i = source + offset
 		check(host.terrain.tile_layer.get_cell_atlas_coords(cell) == empty_atlas, label + " left stale earth crust at " + str(cell))

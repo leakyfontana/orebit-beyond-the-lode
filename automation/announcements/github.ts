@@ -95,38 +95,66 @@ async function github(path: string, options: { pages?: boolean } = {}): Promise<
   }
 }
 
+enum CacheState {
+  Cold,
+  Cached,
+}
+
+type ReleaseInventory =
+  | { state: CacheState.Cold }
+  | { state: CacheState.Cached; releases: Release[]; etag: string | null; digest: string };
+
+enum RevalidationState {
+  Reuse,
+  Refresh,
+}
+
+type InventoryRevalidation =
+  | { state: RevalidationState.Reuse; releases: Release[] }
+  | { state: RevalidationState.Refresh; etag: string | null; digest: string };
+
 export class PublicationSource {
-  private defaultBranch: string | undefined;
-  private releaseCache: Release[] | undefined;
-  private releaseFeedTag: string | null = null;
-  private releaseFeedDigest: string | undefined;
+  private defaultBranch: { state: CacheState.Cold } | { state: CacheState.Cached; name: string } = { state: CacheState.Cold };
+  private inventory: ReleaseInventory = { state: CacheState.Cold };
 
   async branch(): Promise<string> {
-    if (!this.defaultBranch) {
+    if (this.defaultBranch.state === CacheState.Cold) {
       const repo = await github(`repos/${REPOSITORY}`);
       if (repo.full_name !== REPOSITORY || typeof repo.default_branch !== 'string' || !repo.default_branch) {
         throw new Error('Unexpected GitHub repository identity');
       }
-      this.defaultBranch = repo.default_branch;
+      this.defaultBranch = { state: CacheState.Cached, name: repo.default_branch };
     }
-    return this.defaultBranch!;
+    return this.defaultBranch.name;
   }
 
   async releases(): Promise<Release[]> {
     // The public Atom feed is outside the API rate bucket. Unchanged minute polls
     // reuse inventory; pending trusted-run checks still run until publication.
     const feed = await publicGet(`https://github.com/${REPOSITORY}/releases.atom`, 256 * 1024,
-      'application/atom+xml', this.releaseFeedTag ? { 'If-None-Match': this.releaseFeedTag } : {});
-    const digest = createHash('sha256').update(feed.body).digest('hex');
-    if (this.releaseCache && (feed.status === 304 || digest === this.releaseFeedDigest)) return this.releaseCache;
+      'application/atom+xml', this.inventory.state === CacheState.Cached && this.inventory.etag
+        ? { 'If-None-Match': this.inventory.etag } : {});
+    const revalidation = this.revalidateInventory(feed);
+    if (revalidation.state === RevalidationState.Reuse) return revalidation.releases;
     const pages = await github(`repos/${REPOSITORY}/releases?per_page=100`, { pages: true });
     if (!Array.isArray(pages) || pages.some(page => !Array.isArray(page))) throw new Error('Invalid GitHub releases response');
     const releases = pages.flat().filter(isPublicRelease)
       .sort((a: Release, b: Release) => Date.parse(a.published_at!) - Date.parse(b.published_at!));
-    this.releaseCache = releases;
-    this.releaseFeedTag = feed.etag;
-    this.releaseFeedDigest = digest;
+    this.inventory = { state: CacheState.Cached, releases, etag: revalidation.etag, digest: revalidation.digest };
     return releases;
+  }
+
+  private revalidateInventory(feed: { status: number; body: string; etag: string | null }): InventoryRevalidation {
+    const digest = createHash('sha256').update(feed.body).digest('hex');
+    switch (this.inventory.state) {
+      case CacheState.Cached:
+        if (feed.status === 304 || digest === this.inventory.digest) {
+          return { state: RevalidationState.Reuse, releases: this.inventory.releases };
+        }
+        return { state: RevalidationState.Refresh, etag: feed.etag, digest };
+      case CacheState.Cold:
+        return { state: RevalidationState.Refresh, etag: feed.etag, digest };
+    }
   }
 
   async run(id: number): Promise<WorkflowRun> {

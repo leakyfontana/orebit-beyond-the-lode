@@ -177,16 +177,24 @@ const PLATFORM_ORDER = ["web", "windows-x86_64", "macos-arm64", "android-arm64"]
 const BUTTON_LABELS = { web: "Play web", "windows-x86_64": "Windows", "macos-arm64": "macOS", "android-arm64": "Android" } as const;
 const TOOLING_NOTE = /^(?:ci|build|chore|docs|test|style|refactor)(?:\([^)]*\))?!?:|\b(?:GitHub Actions|CI\/CD|CI|inbound SSH|outbound (?:beta )?deploy(?:ment)?|beta delivery|publication receipts?|release automation|(?:build|release|deployment) (?:pipelines?|workflows?))\b/i;
 
+enum HighlightLexicalState {
+  Prose,
+  FencedCode,
+}
+
 function highlights(receipt: PublicationReceipt): string[] {
   const candidates = receipt.notes.markdown.trim()
     ? receipt.notes.markdown.split("\n")
     : receipt.notes.commits.map(note => note.subject);
   const result: string[] = [];
   const seen = new Set<string>();
-  let inCode = false;
+  let lexicalState = HighlightLexicalState.Prose;
   for (const candidate of candidates) {
-    if (/^\s*(`{3,}|~{3,})/.test(candidate)) { inCode = !inCode; continue; }
-    if (inCode || TOOLING_NOTE.test(candidate) || /^\s*(?:#{1,6}\s|https?:\/\/|<!--)/.test(candidate)) continue;
+    if (/^\s*(`{3,}|~{3,})/.test(candidate)) {
+      lexicalState = lexicalState === HighlightLexicalState.Prose ? HighlightLexicalState.FencedCode : HighlightLexicalState.Prose;
+      continue;
+    }
+    if (lexicalState === HighlightLexicalState.FencedCode || TOOLING_NOTE.test(candidate) || /^\s*(?:#{1,6}\s|https?:\/\/|<!--)/.test(candidate)) continue;
     const note = candidate.trim().replace(/^[-*•]\s+|^\d+\.\s+/, "")
       .replace(/\s*\(?`[0-9a-f]{7,40}`\)?\s*$/i, "")
       .replace(/\s*\(#\d+\)\s*$/, "")

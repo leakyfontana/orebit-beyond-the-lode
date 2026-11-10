@@ -3,6 +3,29 @@ extends Node
 
 const UNITS := Vector2(1.0, -1.0)
 const ITEM_NAMES := ["Reserve Fuel Tank", "Hull Repair Nanobots", "Dynamite", "Plastic Explosives", "Quantum Teleporter", "Matter Transmitter"]
+enum FacingState { LEFT, RIGHT }
+enum GroundState { AIRBORNE, SUPPORTED }
+enum FlightState { STOWED, FLYING }
+enum LegacyDrillState { RESTING, DIGGING }
+enum DigState { IDLE = 0, BOTTOM_APPROACH = 1, SIDE_APPROACH = 2, BOTH_APPROACH = 3, IDLE_AWAITING_AUTHORITY = 4, BOTTOM_AWAITING_AUTHORITY = 5, SIDE_AWAITING_AUTHORITY = 6, BOTH_AWAITING_AUTHORITY = 7 }
+enum ShopState { OUTSIDE, INSIDE }
+enum MousePermission { BLOCKED, ALLOWED }
+enum SteeringOwner { AXES, MOUSE }
+enum EncounterState { EXPLORING, LOCKED }
+enum ImmunityState { VULNERABLE, TIMED }
+enum DamagePolicy { NORMAL, IMMUNE }
+enum LifeState { DEAD, ALIVE }
+enum TeleportState { IDLE, ANIMATING }
+enum ExplosionState { IDLE, EMITTING }
+enum FuelDeathState { READY, WAITING, SUBMITTED, SENT_WITHOUT_WAITING }
+enum PresenceState { EXTERIOR, INTERIOR }
+enum KeyState { RELEASED, HELD }
+enum TimerState { ELAPSED, DUE, RUNNING, UNORDERED }
+enum AttackState { INACTIVE, ARMED, SPENT }
+enum BlinkState { VISIBLE, HIDDEN }
+enum RenderPoseState { CACHED, FROZEN, RAW, EXTRAPOLATED }
+enum GroundSampleState { UNSAMPLED, CURRENT, STALE }
+enum MovementAdmission { AVAILABLE, DIGGING, SHOP, TELEPORT }
 
 var host: Node
 var body: RigidBody2D
@@ -16,19 +39,18 @@ var my_rigidbody: RigidBody2D
 var _float32_buffer := PackedFloat32Array([0.0])
 var moveX: float = 0.0
 var moveY: float = 0.0
-var isFacingRight: bool = false
-var isOnGround: bool = false
-var isFlying: bool = false
-var isDigging: bool = false
-var is_digging_side: bool = false
-var is_digging_bottom: bool = false
-var is_in_shop: bool = false
+var facing_state: FacingState = FacingState.LEFT
+var ground_state: GroundState = GroundState.AIRBORNE
+var flight_state: FlightState = FlightState.STOWED
+var legacy_drill_state: LegacyDrillState = LegacyDrillState.RESTING
+var dig_state: DigState = DigState.IDLE
+var shop_state: ShopState = ShopState.OUTSIDE
 var _capture_shop_category := -1
-var can_use_mouse_control: bool = true
-var mouse_is_last_used_input: bool = false
-var has_bossfight_started: bool = false
-var is_invincible: bool = false
-var is_permanently_invincible: bool = false
+var mouse_permission: MousePermission = MousePermission.ALLOWED
+var steering_owner: SteeringOwner = SteeringOwner.AXES
+var encounter_state: EncounterState = EncounterState.EXPLORING
+var immunity_state: ImmunityState = ImmunityState.VULNERABLE
+var permanent_immunity: DamagePolicy = DamagePolicy.NORMAL
 var invincibility_time: float = 2.0
 var invincibility_time_left: float = 0.0
 var frames_of_invisibility: int = 10
@@ -55,13 +77,13 @@ var position_unity: Vector2:
 		host.player_position = value
 		_reset_pvp_fall_history()
 
-var _alive: bool = true
+var life_state: LifeState = LifeState.ALIVE
 var _smooth_velocity: float = 0.0
 var _previous_y_velocity: float = 0.0
 var _drill_clink_audio_cooldown: float = 0.0
 var _time_until_can_use_item: float = 0.0
-var _is_teleporting: bool = false
-var _is_creating_explosions: bool = false
+var teleport_state: TeleportState = TeleportState.IDLE
+var explosion_state: ExplosionState = ExplosionState.IDLE
 var _explosion_location := Vector2i.ZERO
 var _explosion_min := Vector2.ZERO
 var _explosion_max := Vector2.ZERO
@@ -86,18 +108,165 @@ var _shapes: Array[Node2D] = []
 var _shape_transforms: Array[Transform2D] = []
 var _collision_layer: int
 var _collision_mask: int
-var _item_keys_down: Array[bool] = [false, false, false, false, false, false]
+var _item_key_states: Array[int] = [KeyState.RELEASED, KeyState.RELEASED, KeyState.RELEASED, KeyState.RELEASED, KeyState.RELEASED, KeyState.RELEASED]
 var _pressed_item: int = -1
 var _frame_delta: float = 0.0
 var _physics_delta: float = 0.02
 var _sprite: CanvasItem
-var _coop_mine_waiting := false
-var _pvp_fuel_death_pending := false
-var _pvp_fuel_death_sent := false
+var fuel_death_state: FuelDeathState = FuelDeathState.READY
 var _pvp_death_prefab: Node2D
-var pvp_building_hidden := false
+var presence_state: PresenceState = PresenceState.EXTERIOR
 var _building_particle_visibility: Dictionary = {}
 var _building_particle_emission: Dictionary = {}
+
+# Asset/script-facing properties project the authoritative orthogonal states.
+var isFacingRight: bool:
+	get: return facing_state == FacingState.RIGHT
+	set(value): facing_state = FacingState.RIGHT if value else FacingState.LEFT
+
+var isOnGround: bool:
+	get: return ground_state == GroundState.SUPPORTED
+	set(value): ground_state = GroundState.SUPPORTED if value else GroundState.AIRBORNE
+
+var isFlying: bool:
+	get: return flight_state == FlightState.FLYING
+	set(value): flight_state = FlightState.FLYING if value else FlightState.STOWED
+
+var isDigging: bool:
+	get: return legacy_drill_state == LegacyDrillState.DIGGING
+	set(value): legacy_drill_state = LegacyDrillState.DIGGING if value else LegacyDrillState.RESTING
+
+var is_digging_bottom: bool:
+	get: return (dig_state & 1) != 0
+	set(value): dig_state = (dig_state | 1) if value else (dig_state & ~1)
+
+var is_digging_side: bool:
+	get: return (dig_state & 2) != 0
+	set(value): dig_state = (dig_state | 2) if value else (dig_state & ~2)
+
+var _coop_mine_waiting: bool:
+	get: return (dig_state & 4) != 0
+	set(value): dig_state = (dig_state | 4) if value else (dig_state & ~4)
+
+var is_in_shop: bool:
+	get: return shop_state == ShopState.INSIDE
+	set(value): shop_state = ShopState.INSIDE if value else ShopState.OUTSIDE
+
+var can_use_mouse_control: bool:
+	get: return mouse_permission == MousePermission.ALLOWED
+	set(value): mouse_permission = MousePermission.ALLOWED if value else MousePermission.BLOCKED
+
+var mouse_is_last_used_input: bool:
+	get: return steering_owner == SteeringOwner.MOUSE
+	set(value): steering_owner = SteeringOwner.MOUSE if value else SteeringOwner.AXES
+
+var has_bossfight_started: bool:
+	get: return encounter_state == EncounterState.LOCKED
+	set(value): encounter_state = EncounterState.LOCKED if value else EncounterState.EXPLORING
+
+var is_invincible: bool:
+	get: return immunity_state == ImmunityState.TIMED
+	set(value): immunity_state = ImmunityState.TIMED if value else ImmunityState.VULNERABLE
+
+var is_permanently_invincible: bool:
+	get: return permanent_immunity == DamagePolicy.IMMUNE
+	set(value): permanent_immunity = DamagePolicy.IMMUNE if value else DamagePolicy.NORMAL
+
+var _alive: bool:
+	get: return life_state == LifeState.ALIVE
+	set(value): life_state = LifeState.ALIVE if value else LifeState.DEAD
+
+var _is_teleporting: bool:
+	get: return teleport_state == TeleportState.ANIMATING
+	set(value): teleport_state = TeleportState.ANIMATING if value else TeleportState.IDLE
+
+var _is_creating_explosions: bool:
+	get: return explosion_state == ExplosionState.EMITTING
+	set(value): explosion_state = ExplosionState.EMITTING if value else ExplosionState.IDLE
+
+var pvp_building_hidden: bool:
+	get: return presence_state == PresenceState.INTERIOR
+	set(value): presence_state = PresenceState.INTERIOR if value else PresenceState.EXTERIOR
+
+var _pvp_fuel_death_pending: bool:
+	get: return fuel_death_state == FuelDeathState.WAITING or fuel_death_state == FuelDeathState.SUBMITTED
+	set(value):
+		if value:
+			fuel_death_state = FuelDeathState.SUBMITTED if _pvp_fuel_death_sent else FuelDeathState.WAITING
+		else:
+			fuel_death_state = FuelDeathState.SENT_WITHOUT_WAITING if _pvp_fuel_death_sent else FuelDeathState.READY
+
+var _pvp_fuel_death_sent: bool:
+	get: return fuel_death_state == FuelDeathState.SUBMITTED or fuel_death_state == FuelDeathState.SENT_WITHOUT_WAITING
+	set(value):
+		if value:
+			fuel_death_state = FuelDeathState.SUBMITTED if _pvp_fuel_death_pending else FuelDeathState.SENT_WITHOUT_WAITING
+		else:
+			fuel_death_state = FuelDeathState.WAITING if _pvp_fuel_death_pending else FuelDeathState.READY
+
+func _await_mine_acknowledgment() -> void:
+	_coop_mine_waiting = true
+
+func _begin_teleport() -> void:
+	teleport_state = TeleportState.ANIMATING
+
+func _end_teleport() -> void:
+	teleport_state = TeleportState.IDLE
+
+func _begin_explosions() -> void:
+	explosion_state = ExplosionState.EMITTING
+
+func _end_explosions() -> void:
+	explosion_state = ExplosionState.IDLE
+
+func clear_fuel_death() -> void:
+	fuel_death_state = FuelDeathState.READY
+
+func _begin_fuel_death() -> void:
+	_pvp_fuel_death_pending = true
+
+func _submit_fuel_death() -> void:
+	_pvp_fuel_death_sent = true
+
+func movement_admission() -> MovementAdmission:
+	if (dig_state & 3) != 0:
+		return MovementAdmission.DIGGING
+	if is_in_shop:
+		return MovementAdmission.SHOP
+	if _is_teleporting:
+		return MovementAdmission.TELEPORT
+	return MovementAdmission.AVAILABLE
+
+static func _timer_state(remaining: float) -> TimerState:
+	if remaining < 0.0:
+		return TimerState.ELAPSED
+	if remaining == 0.0:
+		return TimerState.DUE
+	return TimerState.RUNNING if remaining > 0.0 else TimerState.UNORDERED
+
+func _begin_item_cooldown() -> void:
+	_time_until_can_use_item = max_cooldown_between_item_use
+
+func _begin_drill_sound_cooldown(duration: float) -> void:
+	_drill_clink_audio_cooldown = duration
+
+func blink_state() -> BlinkState:
+	return BlinkState.HIDDEN if _sprite != null and _sprite.modulate.a == 0.0 else BlinkState.VISIBLE
+
+func render_pose_state(render_pose: bool) -> RenderPoseState:
+	if render_pose and _pose_render_frame == host.frame_number:
+		return RenderPoseState.CACHED
+	if body.freeze:
+		return RenderPoseState.FROZEN
+	return _render_history_state() if render_pose else RenderPoseState.RAW
+
+func _render_history_state() -> RenderPoseState:
+	return RenderPoseState.EXTRAPOLATED if host.physics_step - _pose_history_start_step >= 2 else RenderPoseState.RAW
+
+func ground_sample_state(step: int) -> GroundSampleState:
+	if step == _last_ground_render_step:
+		return GroundSampleState.CURRENT
+	return GroundSampleState.UNSAMPLED if _last_ground_render_step < 0 else GroundSampleState.STALE
 
 func configure(main_host: Node, player_body: RigidBody2D, player_visual: Node2D, serialized_properties: Dictionary) -> void:
 	host = main_host
@@ -200,17 +369,17 @@ func sync_physics_pose(render_pose: bool = true) -> void:
 	# Unity reconstructs the render pose before Update. Later same-frame reads
 	# must not recompute it from velocities changed by gameplay or animation.
 	if render_pose:
-		if _pose_render_frame == host.frame_number:
+		if render_pose_state(render_pose) == RenderPoseState.CACHED:
 			host.player_position = visual.global_position / UNITS
 			return
 		_pose_render_frame = host.frame_number
 	# Static bodies retain the last rendered transform, including direct writes
 	# made by digging/teleport animation events, rather than restoring raw state.
-	if body.freeze:
+	if render_pose_state(false) == RenderPoseState.FROZEN:
 		host.player_position = visual.global_position / UNITS
 		return
 	var pose: Transform2D = PhysicsServer2D.body_get_state(body.get_rid(), PhysicsServer2D.BODY_STATE_TRANSFORM)
-	if render_pose and host.physics_step - _pose_history_start_step >= 2:
+	if render_pose and _render_history_state() == RenderPoseState.EXTRAPOLATED:
 		# A new dynamic body needs two completed native steps for extrapolation
 		# history. The first pose remains raw even across renders with no step.
 		var elapsed: float = _f32(host.physics_render_delta)
@@ -247,12 +416,13 @@ func tick(delta: float) -> void:
 	sync_physics_pose()
 	_tick_explosions(delta)
 	_tick_invincibility(delta)
-	if _time_until_can_use_item <= 0.0 and _can_move():
+	if _timer_state(_time_until_can_use_item) <= TimerState.DUE and _can_move():
 		checkIfObjectIsPressed()
 	else:
 		_time_until_can_use_item = _f32(_time_until_can_use_item - _f32(delta))
-	if _drill_clink_audio_cooldown >= 0.0:
-		_drill_clink_audio_cooldown = _f32(_drill_clink_audio_cooldown - _f32(delta))
+	match _timer_state(_drill_clink_audio_cooldown):
+		TimerState.DUE, TimerState.RUNNING:
+			_drill_clink_audio_cooldown = _f32(_drill_clink_audio_cooldown - _f32(delta))
 	if data.pvp_mode:
 		_read_axes()
 	if _can_move():
@@ -331,7 +501,7 @@ func physics_tick(delta: float) -> void:
 	host.player_position = position_unity
 
 func _can_move() -> bool:
-	return not is_digging_bottom and not is_digging_side and not is_in_shop and not _is_teleporting
+	return movement_admission() == MovementAdmission.AVAILABLE
 
 func _read_axes() -> void:
 	_resolve_axes()
@@ -407,7 +577,7 @@ func _configure_ground_detector() -> void:
 
 func refresh_ground_after_step() -> void:
 	var step: int = host.physics_step
-	if step == _last_ground_render_step:
+	if ground_sample_state(step) == GroundSampleState.CURRENT:
 		return
 	_last_ground_render_step = step
 	sync_physics_pose(false)
@@ -448,8 +618,7 @@ func _try_start_dig(cell: Vector2i, bottom: bool) -> void:
 	if data.pvp_mode and not world.inBounds(cell.x, cell.y):
 		return
 	if world.doesBlockExistAndIsDiggable(cell.x, cell.y):
-		is_digging_bottom = bottom
-		is_digging_side = not bottom
+		dig_state = (dig_state & 4) | (DigState.BOTTOM_APPROACH if bottom else DigState.SIDE_APPROACH)
 		_block_target = cell
 		_block_target_data = world.getBlockData(cell.x, cell.y).duplicate()
 		var tile_position := Vector2(cell.x + 0.5, -cell.y + 0.5)
@@ -467,9 +636,9 @@ func _try_start_dig(cell: Vector2i, bottom: bool) -> void:
 		host.audio.PlaySound("Drill")
 		body.rotation = 0.0
 		visual.global_rotation = 0.0
-	elif world.doesBlockExistAndIsNotDiggable(cell.x, cell.y) and _drill_clink_audio_cooldown <= 0.0:
+	elif world.doesBlockExistAndIsNotDiggable(cell.x, cell.y) and _timer_state(_drill_clink_audio_cooldown) <= TimerState.DUE:
 		host.audio.PlaySoundOneShot("DrillClink")
-		_drill_clink_audio_cooldown = 0.25 if bottom else 0.5
+		_begin_drill_sound_cooldown(0.25 if bottom else 0.5)
 
 func dig() -> void:
 	if _block_target_data.is_empty():
@@ -511,7 +680,7 @@ func dig() -> void:
 	if distance < 0.05:
 		if host.is_coop:
 			if not _coop_mine_waiting:
-				_coop_mine_waiting = true
+				_await_mine_acknowledgment()
 				host.coop.network.send_state()
 				host.coop.network.mine(_block_target.x, _block_target.y)
 			return
@@ -533,9 +702,7 @@ func dig() -> void:
 		cancelVelocity()
 
 func _finish_dig() -> void:
-	_coop_mine_waiting = false
-	is_digging_side = false
-	is_digging_bottom = false
+	dig_state = DigState.IDLE
 	_block_target = Vector2i(-1, -1)
 	_block_target_data = {}
 	_block_target_position = Vector2.ZERO
@@ -692,7 +859,7 @@ func exitShop() -> void:
 func set_pvp_building_hidden(hidden: bool) -> void:
 	if pvp_building_hidden == hidden:
 		return
-	pvp_building_hidden = hidden
+	presence_state = PresenceState.INTERIOR if hidden else PresenceState.EXTERIOR
 	if not hidden:
 		for particle_node in _building_particle_visibility:
 			if is_instance_valid(particle_node):
@@ -705,8 +872,8 @@ func set_pvp_building_hidden(hidden: bool) -> void:
 	if hidden:
 		cancelDig()
 		_deactivate_attacks()
-		_is_creating_explosions = false
-		_is_teleporting = false
+		_end_explosions()
+		_end_teleport()
 		moveX = 0.0
 		moveY = 0.0
 		isFlying = false
@@ -749,9 +916,9 @@ func _poll_item_keys() -> void:
 			down = false
 		elif host.replay_runner != null and not host.replay_runner.live_input:
 			down = bool(host.replay_runner.keys.get("Alpha" + str(index + 1), false))
-		if down and not _item_keys_down[index] and _pressed_item < 0:
+		if down and _item_key_states[index] == KeyState.RELEASED and _pressed_item < 0:
 			_pressed_item = index
-		_item_keys_down[index] = down
+		_item_key_states[index] = KeyState.HELD if down else KeyState.RELEASED
 
 func checkIfObjectIsPressed() -> void:
 	if _pressed_item >= 0:
@@ -759,9 +926,9 @@ func checkIfObjectIsPressed() -> void:
 		_pressed_item = -1
 
 func use_item(index: int) -> void:
-	if not _alive or host.paused or not _can_move() or _time_until_can_use_item > 0.0 or index < 0 or index >= ITEM_NAMES.size():
+	if not _alive or host.paused or not _can_move() or _timer_state(_time_until_can_use_item) == TimerState.RUNNING or index < 0 or index >= ITEM_NAMES.size():
 		return
-	_time_until_can_use_item = max_cooldown_between_item_use
+	_begin_item_cooldown()
 	var item_name: String = ITEM_NAMES[index]
 	if index >= 4 and has_bossfight_started:
 		createPopup("Cannot teleport", "IsWarning")
@@ -794,7 +961,7 @@ func use_item(index: int) -> void:
 			_activate_attack("C4_hitbox")
 		4, 5:
 			animator.pulse("TeleportDangerous" if index == 4 else "TeleportSafe")
-			_is_teleporting = true
+			_begin_teleport()
 			stopMovement()
 			host.audio.PlaySoundOneShot("QuantumTeleporter" if index == 4 else "MatterTransmitter")
 			host.resetBackgroundColor()
@@ -813,7 +980,7 @@ func createExplosions(explosion_range: float, time: float, quantity: int) -> voi
 	_explosion_min = player_position - Vector2.ONE * (explosion_range + 0.5)
 	_explosion_max = player_position + Vector2.ONE * (explosion_range + 0.5)
 	_time_until_next_explosion_creation = 0.0
-	_is_creating_explosions = true
+	_begin_explosions()
 	_number_of_explosions_per_batch = quantity
 	_range_to_destroy_around_player = int(explosion_range)
 
@@ -822,14 +989,14 @@ func _tick_explosions(delta: float) -> void:
 		return
 	_time_until_next_explosion_creation = _f32(_time_until_next_explosion_creation - _f32(delta))
 	_total_explosion_time = _f32(_total_explosion_time - _f32(delta))
-	if _time_until_next_explosion_creation <= 0.0:
+	if _timer_state(_time_until_next_explosion_creation) <= TimerState.DUE:
 		var property_name: String = "explosion_without_particles_prefab" if has_bossfight_started else "explosion_prefab"
 		var prefab_name: String = _prefab_name(property_name)
 		for i in _number_of_explosions_per_batch:
 			host.spawn_prefab(prefab_name, Vector2(host.unity_random.range_float(_explosion_min.x, _explosion_max.x), host.unity_random.range_float(_explosion_min.y, _explosion_max.y)), host.world_root)
 		_time_until_next_explosion_creation = _f32(0.1)
-	if _total_explosion_time <= 0.0:
-		_is_creating_explosions = false
+	if _timer_state(_total_explosion_time) <= TimerState.DUE:
+		_end_explosions()
 		destroyBlocksFromExplosion(_range_to_destroy_around_player)
 		bridge.set_active(properties.get("dynamite_hitbox", {}), false)
 		bridge.set_active(properties.get("C4_hitbox", {}), false)
@@ -881,40 +1048,41 @@ func _activate_attack(property_name: String) -> void:
 		collision.position = Vector2(float(offset.get("x", 0.0)), float(offset.get("y", 0.0))) * UNITS
 		area.add_child(collision)
 		bridge.node(reference).add_child(area)
-		var attack := {"area": area, "damage": int(source_attack.get("damage", 0)), "hit": false}
+		var attack := {"area": area, "damage": int(source_attack.get("damage", 0)), "state": AttackState.INACTIVE}
 		area.body_entered.connect(_attack_entered.bind(attack))
 		area.area_entered.connect(_attack_entered.bind(attack))
 		_attack_areas[owner_id] = attack
 	var attack: Dictionary = _attack_areas[owner_id]
-	attack.hit = false
+	attack.state = AttackState.ARMED
 	attack.area.collision_mask = 1 | PortBoss.HURTBOX_LAYER
 
 func _attack_entered(collider: Node2D, attack: Dictionary) -> void:
-	if not _alive or host.paused or attack.hit or attack.area.collision_mask == 0:
+	if not _alive or host.paused or attack.state != AttackState.ARMED or attack.area.collision_mask == 0:
 		return
 	var boss: Variant = host.get("boss")
 	if boss != null and is_instance_valid(boss):
-		attack.hit = boss.damage_from_attack(collider, attack.damage)
+		if boss.damage_from_attack(collider, attack.damage):
+			attack.state = AttackState.SPENT
 
 func _deactivate_attacks() -> void:
 	for id in _attack_areas:
 		var attack: Dictionary = _attack_areas[id]
 		attack.area.collision_mask = 0
-		attack.hit = false
+		attack.state = AttackState.INACTIVE
 
 func teleportPlayerSafe() -> void:
 	position_unity = Vector2(5.5, -3.5)
 
 func endTeleportPlayerSafe() -> void:
 	startMovement()
-	_is_teleporting = false
+	_end_teleport()
 
 func teleportPlayerDangerous() -> void:
 	position_unity = Vector2(5.5, -1.5)
 
 func endTeleportPlayerDangerous() -> void:
 	startMovement()
-	_is_teleporting = false
+	_end_teleport()
 	velocity_unity = Vector2(host.unity_random.range_float(-6.0, 6.0), -5.0 if host.unity_random.value() < 0.6 else 10.0)
 
 func _tick_invincibility(delta: float) -> void:
@@ -925,8 +1093,8 @@ func _tick_invincibility(delta: float) -> void:
 	if frames_of_invisibility_left <= 0:
 		frames_of_invisibility_left = frames_of_invisibility
 		if _sprite != null:
-			_sprite.modulate = Color(1.0, 1.0, 1.0, 1.0 if _sprite.modulate.a == 0.0 else 0.0)
-	if invincibility_time_left <= 0.0:
+			_sprite.modulate = Color(1.0, 1.0, 1.0, 1.0 if blink_state() == BlinkState.HIDDEN else 0.0)
+	if _timer_state(invincibility_time_left) <= TimerState.DUE:
 		is_invincible = false
 		frames_of_invisibility_left = 0
 		if _sprite != null:
@@ -962,8 +1130,8 @@ func apply_pvp_life(alive: bool, position: Vector2) -> void:
 	if host.gameplay_capture != null:
 		host.gameplay_capture.life(alive)
 	cancelDig()
-	_is_creating_explosions = false
-	_is_teleporting = false
+	_end_explosions()
+	_end_teleport()
 	is_in_shop = false
 	isFlying = false
 	moveX = 0.0
@@ -972,10 +1140,8 @@ func apply_pvp_life(alive: bool, position: Vector2) -> void:
 	_deactivate_attacks()
 	if alive:
 		_clear_pvp_death_prefab()
-		_pvp_fuel_death_pending = false
-		_pvp_fuel_death_sent = false
-		for parameter_name in animator.native_parameters:
-			animator.native_parameters[parameter_name] = animator._set.parameters[parameter_name].default
+		clear_fuel_death()
+		animator.reset_parameters()
 		animator.native_playback.start(animator._set.default_node)
 		position_unity = position
 		body.rotation = 0.0
@@ -1020,14 +1186,14 @@ func _report_pvp_fuel_death() -> void:
 	if data.vulcan_mode:
 		var state: Dictionary = host.coop_state()
 		state.alive = false
-		_pvp_fuel_death_sent = true
+		_submit_fuel_death()
 		network._send({"type": "state", "state": state, "state_revision": network.state_revision})
 		return
 	# Reconcile mining/transfers first, then preserve the latest purchases,
 	# carried money and physics position before the server creates the bag.
 	data.player_fuel = minf(0.0, data.player_fuel)
 	network.send_state()
-	_pvp_fuel_death_sent = true
+	_submit_fuel_death()
 	network.pvp_action("damage", {"source": "fuel", "amount": 10})
 
 func killPlayer() -> void:
@@ -1036,7 +1202,7 @@ func killPlayer() -> void:
 			return
 		# Do not predict life: an earlier alive snapshot may still be in flight.
 		# Latch exhaustion until authority confirms death and the next life.
-		_pvp_fuel_death_pending = true
+		_begin_fuel_death()
 		stopMovement()
 		_deactivate_attacks()
 		_report_pvp_fuel_death()

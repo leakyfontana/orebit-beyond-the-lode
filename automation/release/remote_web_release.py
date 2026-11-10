@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Trusted isolated deployment operation; all filesystem writes stay in /srv/motherload."""
 import contextlib
+from enum import Enum
 import fcntl
 import gzip
 import hashlib
@@ -36,6 +37,43 @@ ALLOWED_SUFFIXES = {'.html', '.js', '.wasm', '.pck', '.png', '.svg', '.ico',
                     '.ttf', '.otf', '.ogg', '.mp3', '.wav', '.bin'}
 DIAGNOSTIC_ARGUMENTS = (b'--replay', b'--capture', b'--fixed-fps',
                         b'MOTHERLOAD_REPLAY', b'MOTHERLOAD_CAPTURE')
+
+
+class ReleaseOperation(str, Enum):
+    DEPLOY = 'deploy'
+    ROLLBACK = 'rollback'
+    VERIFY_CURRENT = 'verify-current'
+
+
+class ResultStatus(str, Enum):
+    DEPLOYED = 'deployed'
+    VERIFIED_EXISTING = 'verified-existing'
+    VERIFIED_CURRENT = 'verified-current'
+    ROLLED_BACK = 'rolled-back'
+    FAILED = 'failed'
+
+
+def result_status(result):
+    try:
+        return ResultStatus(result.get('status'))
+    except ValueError:
+        return None
+
+
+class ActivationState(Enum):
+    EXISTING_CURRENT = 'existing-current'
+    UNACTIVATED = 'unactivated'
+    PREVIOUS_OWNED = 'previous-owned'
+    CURRENT_OWNED = 'current-owned'
+    COMPENSATED = 'compensated'
+
+
+class RollbackState(Enum):
+    READY = 'ready'
+    RESTORED = 'restored'
+    VERIFIED = 'verified'
+    FAILED_UNRESTORED = 'failed-unrestored'
+    FAILED_RESTORED = 'failed-restored'
 
 
 def require(condition, message):
@@ -306,6 +344,106 @@ def release_inventory(root):
     return sorted(files, key=lambda item: item['path'])
 
 
+class Activation:
+    """Own only the link changes made by this locked deployment attempt."""
+
+    def __init__(self, current, previous, release):
+        self.current = current
+        self.previous = previous
+        self.release = release
+        self.state = (ActivationState.EXISTING_CURRENT if current == release
+                      else ActivationState.UNACTIVATED)
+
+    @property
+    def mutated(self):
+        return self.state in {ActivationState.CURRENT_OWNED, ActivationState.COMPENSATED}
+
+    def activate(self, commit, version, artifact):
+        if self.state is ActivationState.EXISTING_CURRENT:
+            return
+        require(self.state is ActivationState.UNACTIVATED, 'Deployment already activated')
+        save_rollback_record(commit, {'schema': 1, 'commit': commit, 'version': version,
+                                     'archive_sha256': artifact['sha256'], 'from': str(self.current),
+                                     'previous_before': str(self.previous) if self.previous is not None else None,
+                                     'from_files': release_inventory(self.current)})
+        # Claim previous before its write, including a failure during that write.
+        # Current's atomic rename remains the only live cutover.
+        self.state = ActivationState.PREVIOUS_OWNED
+        replace_link('previous', self.current)
+        replace_link('current', self.release)
+        self.state = ActivationState.CURRENT_OWNED
+
+    def compensate(self, failure, site):
+        observed = link_target('current', required=True)
+        if (self.state in {ActivationState.PREVIOUS_OWNED, ActivationState.CURRENT_OWNED}
+                and observed == self.release and self.current != self.release):
+            failure['mutated'] = True
+            replace_link('current', self.current)
+            self.state = ActivationState.COMPENSATED
+            failure['rolled_back'] = True
+        elif self.state is ActivationState.CURRENT_OWNED:
+            failure['rollback_skipped'] = 'Current no longer selects this deployment'
+        if (self.state is ActivationState.COMPENSATED
+                or self.state is ActivationState.PREVIOUS_OWNED and observed == self.current):
+            if self.previous is None:
+                (BASE / 'previous').unlink(missing_ok=True)
+            else:
+                replace_link('previous', self.previous)
+        failure['current'] = str(link_target('current', required=True))
+        if self.state is ActivationState.COMPENSATED:
+            failure['rollback_public_checks'] = public_verify(
+                site, current_inventory(self.current),
+                require_build=(self.current / 'build.json').is_file())
+
+
+class Rollback:
+    def __init__(self, current, prior, previous):
+        self.current = current
+        self.prior = prior
+        self.previous = previous
+        self.state = RollbackState.READY
+        self.details = {}
+        self.error = None
+        self.observed = None
+
+    def restore(self, site):
+        require(self.state is RollbackState.READY, 'Rollback already consumed')
+        require(link_target('current', required=True) == self.current, 'Current changed before rollback')
+        replace_link('current', self.prior)
+        self.state = RollbackState.RESTORED
+        if self.previous is None:
+            (BASE / 'previous').unlink(missing_ok=True)
+        else:
+            replace_link('previous', self.previous)
+        self.details['previous'] = str(self.previous) if self.previous is not None else None
+        self.details['public_checks'] = public_verify(
+            site, current_inventory(self.prior), require_build=(self.prior / 'build.json').is_file())
+        require(link_target('current', required=True) == self.prior, 'Current changed during rollback verification')
+        self.state = RollbackState.VERIFIED
+
+    def fail(self, error):
+        # A failed verification must never re-publish the failed candidate.
+        self.error = str(error)
+        self.observed = link_target('current', required=True)
+        restored = link_target('current', required=True) == self.prior
+        self.state = (RollbackState.FAILED_RESTORED
+                      if self.state in {RollbackState.RESTORED, RollbackState.VERIFIED} or restored
+                      else RollbackState.FAILED_UNRESTORED)
+
+    def evidence(self, header):
+        restored = self.state in {RollbackState.VERIFIED, RollbackState.FAILED_RESTORED}
+        evidence = {'schema': 1,
+                    'status': (ResultStatus.ROLLED_BACK.value if self.state is RollbackState.VERIFIED
+                               else ResultStatus.FAILED.value),
+                    'rolled_back': restored, 'mutated': restored,
+                    'commit': header['commit'], 'version': header['version'],
+                    'site': header['site'], 'failed_release': str(self.current), 'release': str(self.prior)}
+        evidence.update(self.details)
+        if self.error is not None:
+            evidence.update({'error': self.error, 'current': str(self.observed)})
+        return evidence
+
+
 def rollback_release(header):
     commit, version = header['commit'], header['version']
     valid_identity(commit, version)
@@ -338,28 +476,12 @@ def rollback_release(header):
             require(old_previous.parent == BASE / 'releases', 'Invalid recorded previous target')
             real_directory(old_previous)
         verify_files(prior, record['from_files'])
-        evidence = {'schema': 1, 'status': 'rolled-back', 'rolled_back': False,
-                    'mutated': False, 'commit': commit, 'version': version,
-                    'site': header['site'], 'failed_release': str(current), 'release': str(prior)}
+        rollback = Rollback(current, prior, old_previous)
         try:
-            require(link_target('current', required=True) == current, 'Current changed before rollback')
-            replace_link('current', prior)
-            evidence.update({'rolled_back': True, 'mutated': True})
-            if old_previous is None:
-                (BASE / 'previous').unlink(missing_ok=True)
-            else:
-                replace_link('previous', old_previous)
-            evidence['previous'] = str(old_previous) if old_previous is not None else None
-            evidence['public_checks'] = public_verify(
-                header['site'], current_inventory(prior), require_build=(prior / 'build.json').is_file())
-            require(link_target('current', required=True) == prior, 'Current changed during rollback verification')
+            rollback.restore(header['site'])
         except BaseException as error:
-            # Never re-publish the failed candidate if checking the restored release fails.
-            evidence.update({'status': 'failed', 'error': str(error),
-                             'current': str(link_target('current', required=True))})
-            if link_target('current', required=True) == prior:
-                evidence.update({'rolled_back': True, 'mutated': True})
-        return evidence
+            rollback.fail(error)
+        return rollback.evidence(header)
 
 
 def run_remote(original_command):
@@ -373,16 +495,16 @@ def run_remote(original_command):
     rollback_command = re.fullmatch(r'rollback ([0-9a-f]{40})', original_command)
     require(original_command == 'verify' or deployment_command is not None or rollback_command is not None,
             'Only verify, deploy <fullsha> <zipsha256>, or rollback <fullsha> commands are permitted')
-    operation = ('verify-current' if original_command == 'verify' else
-                 'rollback' if rollback_command is not None else 'deploy')
-    require(header.get('operation') == operation, 'Command and operation header differ')
+    operation = (ReleaseOperation.VERIFY_CURRENT if original_command == 'verify' else
+                 ReleaseOperation.ROLLBACK if rollback_command is not None else ReleaseOperation.DEPLOY)
+    require(header.get('operation') == operation.value, 'Command and operation header differ')
     real_directory(BASE)
     real_directory(BASE / 'releases')
     real_directory(BASE / 'manifests')
-    if operation == 'rollback':
+    if operation is ReleaseOperation.ROLLBACK:
         require(rollback_command.group(1) == header.get('commit'), 'Rollback command/header SHA differs')
         return rollback_release(header)
-    if header['operation'] == 'verify-current':
+    if operation is ReleaseOperation.VERIFY_CURRENT:
         current = link_target('current', required=True)
         files = current_inventory(current)
         build_path = current / 'build.json'
@@ -397,11 +519,11 @@ def run_remote(original_command):
         evidence = public_verify(site, files, build.get('commit'), build.get('version'),
                                  require_build=build_path.is_file())
         require(link_target('current', required=True) == current, 'Current changed during verification')
-        return {'schema': 1, 'status': 'verified-current', 'mutated': False, 'site': site,
+        return {'schema': 1, 'status': ResultStatus.VERIFIED_CURRENT.value, 'mutated': False, 'site': site,
                 'release': str(current), 'commit': build.get('commit'), 'version': build.get('version'),
                 'provenance': 'build.json' if build else 'legacy-release-without-build.json',
                 'public_checks': evidence}
-    require(header['operation'] == 'deploy', 'Unknown operation')
+    require(operation is ReleaseOperation.DEPLOY, 'Unknown operation')
     commit, version = header['commit'], header['version']
     valid_identity(commit, version)
     artifact = header['artifact']
@@ -418,9 +540,8 @@ def run_remote(original_command):
         current = link_target('current', required=True)
         previous = link_target('previous')
         stage = Path(tempfile.mkdtemp(prefix='.stage-', dir=BASE))
-        switched = False
-        previous_updated = False
         release = BASE / 'releases' / ('sha-' + commit)
+        activation = Activation(current, previous, release)
         try:
             archive_path = stage / 'web.zip'
             with open(archive_path, 'xb') as output:
@@ -458,44 +579,22 @@ def run_remote(original_command):
                 os.replace(content, release)
             atomic_manifest(BASE / 'manifests' / (release.name + '.json'), manifest)
             require(link_target('current', required=True) == current, 'Current changed outside deployment lock')
-            # Publish previous first; current's atomic rename is the only live cutover.
-            if current != release:
-                save_rollback_record(commit, {'schema': 1, 'commit': commit, 'version': version,
-                                             'archive_sha256': artifact['sha256'], 'from': str(current),
-                                             'previous_before': str(previous) if previous is not None else None,
-                                             'from_files': release_inventory(current)})
-                previous_updated = True
-                replace_link('previous', current)
-                replace_link('current', release)
-                switched = True
+            activation.activate(commit, version, artifact)
             evidence = public_verify(site, originals, commit, version)
             require(link_target('current', required=True) == release, 'Another actor replaced current')
-            return {'schema': 1, 'status': 'deployed' if switched else 'verified-existing',
-                    'mutated': switched, 'commit': commit, 'version': version, 'site': site,
-                    'release': str(release), 'previous': str(current if switched else previous),
+            return {'schema': 1,
+                    'status': (ResultStatus.DEPLOYED.value if activation.mutated
+                               else ResultStatus.VERIFIED_EXISTING.value),
+                    'mutated': activation.mutated, 'commit': commit, 'version': version, 'site': site,
+                    'release': str(release), 'previous': str(current if activation.mutated else previous),
                     'archive_sha256': artifact['sha256'], 'public_checks': evidence,
                     'duration_seconds': round(time.time() - started, 3)}
         except BaseException as error:
-            failure = {'schema': 1, 'status': 'failed', 'error': str(error), 'commit': commit,
-                       'version': version, 'site': site, 'rolled_back': False, 'mutated': switched,
+            failure = {'schema': 1, 'status': ResultStatus.FAILED.value, 'error': str(error), 'commit': commit,
+                       'version': version, 'site': site, 'rolled_back': False, 'mutated': activation.mutated,
                        'duration_seconds': round(time.time() - started, 3)}
             try:
-                observed = link_target('current', required=True)
-                if previous_updated and observed == release and current != release:
-                    failure['mutated'] = True
-                    replace_link('current', current)
-                    failure['rolled_back'] = True
-                elif switched:
-                    failure['rollback_skipped'] = 'Current no longer selects this deployment'
-                if previous_updated and (failure['rolled_back'] or not switched and observed == current):
-                    if previous is None:
-                        (BASE / 'previous').unlink(missing_ok=True)
-                    else:
-                        replace_link('previous', previous)
-                failure['current'] = str(link_target('current', required=True))
-                if failure['rolled_back']:
-                    failure['rollback_public_checks'] = public_verify(
-                        site, current_inventory(current), require_build=(current / 'build.json').is_file())
+                activation.compensate(failure, site)
             except BaseException as rollback_error:
                 failure['rollback_error'] = str(rollback_error)
             return failure
@@ -515,10 +614,10 @@ def main():
                 'Invoke only through the installed forced-command wrapper')
         result = run_remote(sys.argv[2])
     except BaseException as error:
-        result = {'schema': 1, 'status': 'failed', 'error': str(error),
+        result = {'schema': 1, 'status': ResultStatus.FAILED.value, 'error': str(error),
                   'deployment_completion': 'not-established'}
     print(json.dumps(result, sort_keys=True), flush=True)
-    return 1 if result['status'] == 'failed' else 0
+    return 1 if result_status(result) is ResultStatus.FAILED else 0
 
 
 if __name__ == '__main__':

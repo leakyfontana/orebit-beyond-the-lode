@@ -27,6 +27,9 @@ func press(button: int) -> void:
 func focus_name() -> String:
 	var control := root.gui_get_focus_owner()
 	return str(control.name) if control != null else "none"
+func control_visible(name: String) -> bool:
+	var control := game.coop.lobby._body.find_child(name, true, false) as Control
+	return control != null and control.is_visible_in_tree()
 func escape() -> void:
 	for pressed in [true, false]:
 		var event := InputEventKey.new()
@@ -75,7 +78,7 @@ func modal_button_gestures() -> void:
 	await mouse_drag_at(start + drag_step * 8, Vector2.ZERO)
 	await mouse_button_at(start + drag_step * 8, false)
 	check(game.coop.lobby._scroll.scroll_vertical > initial_scroll + 24, "a touch-emulated drag starting on a button scrolls the modal")
-	check(game.coop.lobby._page == "lobby", "scrolling over a button does not activate its action")
+	check(control_visible("UsePassword") and not control_visible("AuthUsername"), "scrolling over a button does not activate its action")
 	game.coop.lobby.show_lobby()
 	await process_frame
 	await process_frame
@@ -89,7 +92,7 @@ func modal_button_gestures() -> void:
 	await mouse_button_at(start, true)
 	await mouse_drag_at(start + small_move, small_move)
 	await mouse_button_at(start + small_move, false)
-	check(game.coop.lobby._page == "password", "a small moving tap still activates the modal button")
+	check(control_visible("AuthUsername") and control_visible("AuthPassword"), "a small moving tap still activates the modal button")
 	Input.emulate_touch_from_mouse = previous_emulation
 	root.size = Vector2i(1280, 720)
 	await process_frame
@@ -108,7 +111,7 @@ func compact_menu_views() -> void:
 	for viewport_size in [Vector2i(320, 568), Vector2i(712, 311)]:
 		root.size = viewport_size
 		game.coop.lobby._message = ""
-		game.coop.lobby._auth_kind = "login"
+		game.coop.lobby._auth_kind = CoopLobby.AuthKind.LOGIN
 		game.coop.lobby.show_mode()
 		await check_menu_fit("mode chooser")
 		game.coop.lobby.show_lobby()
@@ -136,7 +139,7 @@ func compact_menu_views() -> void:
 		game.coop.lobby._set_status("Use an HTTPS address. Localhost HTTP is supported for development.")
 		await check_menu_fit("server validation error")
 	game.coop.lobby._message = ""
-	game.coop.lobby._auth_kind = "login"
+	game.coop.lobby._auth_kind = CoopLobby.AuthKind.LOGIN
 	root.size = Vector2i(1280, 720)
 	await process_frame
 	await process_frame
@@ -157,36 +160,36 @@ func _run() -> void:
 	await press(JOY_BUTTON_DPAD_DOWN)
 	check(focus_name() == "ChooseCoop", "Dpad selects co-op")
 	await press(JOY_BUTTON_A)
-	check(game.coop.lobby._page == "lobby", "A opens co-op menu")
+	check(control_visible("UsePassword") and control_visible("ContinueDiscord"), "A opens co-op menu")
 	await press(JOY_BUTTON_DPAD_DOWN)
 	check(focus_name() == "UsePassword", "Dpad selects password sign-in")
 	await press(JOY_BUTTON_A)
-	check(game.coop.lobby._page == "password", "A opens password sign-in")
+	check(control_visible("AuthUsername") and control_visible("AuthPassword"), "A opens password sign-in")
 	await press(JOY_BUTTON_DPAD_UP)
 	check(focus_name() == "AuthPassword", "Dpad reaches password field")
 	await press(JOY_BUTTON_B)
-	check(game.coop.lobby._page == "lobby", "B leaves sign-in")
+	check(control_visible("UsePassword") and not control_visible("AuthUsername"), "B leaves sign-in")
 	await press(JOY_BUTTON_DPAD_DOWN)
 	await press(JOY_BUTTON_DPAD_DOWN)
 	await press(JOY_BUTTON_DPAD_DOWN)
 	await press(JOY_BUTTON_A)
-	check(game.coop.lobby._page == "server", "controller opens server options")
+	check(control_visible("ServerAddress"), "controller opens server options")
 	await press(JOY_BUTTON_B)
-	check(game.coop.lobby._page == "lobby", "B leaves server options")
+	check(control_visible("UsePassword") and not control_visible("ServerAddress"), "B leaves server options")
 	game.coop.lobby._show_server()
 	await process_frame
 	game.notification(Node.NOTIFICATION_WM_GO_BACK_REQUEST)
 	await process_frame
-	check(game.coop.lobby._page == "lobby", "native Back returns exactly one level from server options")
+	check(control_visible("UsePassword") and not control_visible("ServerAddress"), "native Back returns exactly one level from server options")
 	game.notification(Node.NOTIFICATION_WM_GO_BACK_REQUEST)
 	await process_frame
-	check(game.coop.lobby.modal and game.coop.lobby._page == "mode", "next native Back returns exactly one level to modes")
+	check(game.coop.lobby.modal and control_visible("ChoosePrivate") and control_visible("ChooseCoop"), "next native Back returns exactly one level to modes")
 	game.notification(Node.NOTIFICATION_WM_GO_BACK_REQUEST)
 	await process_frame
 	check(not game.coop.lobby.modal and not game.paused, "native Back dismisses modes without opening another UI")
 	game.coop.lobby.show_lobby()
 	await escape()
-	check(game.coop.lobby._page == "mode", "Escape returns from server lobby to modes")
+	check(control_visible("ChoosePrivate") and control_visible("ChooseCoop"), "Escape returns from server lobby to modes")
 	await escape()
 	check(not game.coop.lobby.modal and not game.paused, "Escape dismisses modes to prior private menu")
 	game.coop.lobby.show_mode()

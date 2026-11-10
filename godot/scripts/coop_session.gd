@@ -1,11 +1,20 @@
 class_name CoopSession
 extends Node
 
+enum Ownership { PRIVATE, SHARED }
+enum PeerPresence { SURFACE, INTERIOR, DEAD }
+enum JoinOrigin { EXPLICIT, RECOVERY }
+
 var host: Node
 var network: CoopClient
 var lobby: CoopLobby
 var transfer: CoopTransfer
-var active := false
+var ownership: Ownership = Ownership.PRIVATE
+var active: bool:
+	get:
+		return ownership == Ownership.SHARED
+	set(value):
+		ownership = Ownership.SHARED if value else Ownership.PRIVATE
 var _private_data: GameData
 var _private_world: WorldData
 var _snapshot: Dictionary = {}
@@ -13,7 +22,7 @@ var _remote_visuals: Dictionary = {}
 var _remote_bodies: Dictionary = {}
 var pvp: PvpView
 var vulcan: VulcanView
-var _recovery_join := false
+var _join_origin: JoinOrigin = JoinOrigin.EXPLICIT
 
 func configure(main_host: Node) -> void:
 	host = main_host
@@ -50,10 +59,7 @@ func _joined(snapshot: Dictionary) -> void:
 	lobby.leaderboard.close()
 	if host.gameplay_capture != null:
 		host.gameplay_capture.finish("scene_change")
-	if not active:
-		_private_data = host.data
-		_private_world = host.world
-	active = true
+	_enter_shared_ownership()
 	_snapshot = snapshot
 	host.data = GameData.new()
 	host.data.coop_mode = true
@@ -87,7 +93,7 @@ func scene_loaded() -> void:
 			if bool(state.get("facing", false)) != host.player.isFacingRight:
 				host.player.flipCharacter()
 			if not host.data.pvp_mode and not host.data.vulcan_mode and (not bool(state.get("alive", true)) or host.data.player_hp <= 0):
-				if _recovery_join:
+				if _join_origin == JoinOrigin.RECOVERY:
 					# Recovery is not a new life. Keep the server-confirmed death.
 					host.player.killPlayer()
 				else:
@@ -114,7 +120,7 @@ func scene_loaded() -> void:
 		vulcan.clear()
 	lobby._resize.call_deferred()
 	network.finish_round_load()
-	_recovery_join = false
+	_join_origin = JoinOrigin.EXPLICIT
 	if network.recovering:
 		lobby.show_lobby()
 
@@ -127,20 +133,30 @@ func leave() -> bool:
 	vulcan.clear()
 	if network.connected or network.connecting or network.recovering or not network.player_id.is_empty():
 		network.leave_world()
-	if active:
-		active = false
-		_private_data.music_volume = host.data.music_volume
-		_private_data.sound_volume = host.data.sound_volume
-		host.data = _private_data
-		host.world = _private_world
-		host.audio.state = host.data
-		_private_data = null
-		_private_world = null
+	_restore_private_ownership()
 	_snapshot.clear()
 	_remote_visuals.clear()
 	_remote_bodies.clear()
-	_recovery_join = false
+	_join_origin = JoinOrigin.EXPLICIT
 	return true
+
+func _enter_shared_ownership() -> void:
+	if ownership == Ownership.PRIVATE:
+		_private_data = host.data
+		_private_world = host.world
+	ownership = Ownership.SHARED
+
+func _restore_private_ownership() -> void:
+	if ownership == Ownership.PRIVATE:
+		return
+	ownership = Ownership.PRIVATE
+	_private_data.music_volume = host.data.music_volume
+	_private_data.sound_volume = host.data.sound_volume
+	host.data = _private_data
+	host.world = _private_world
+	host.audio.state = host.data
+	_private_data = null
+	_private_world = null
 
 func state() -> Dictionary:
 	var result: Dictionary = host.data.coop_snapshot()
@@ -166,7 +182,7 @@ func state() -> Dictionary:
 	return result
 
 func _recovering() -> void:
-	_recovery_join = true
+	_join_origin = JoinOrigin.RECOVERY
 	# This only suspends local input/simulation. The authoritative server,
 	# including PvP damage, hazards and respawn timers, keeps running.
 	lobby.show_lobby()
@@ -198,7 +214,7 @@ func _event(event: Dictionary) -> void:
 				var saved: Dictionary = event.get("state", {})
 				if not bool(saved.get("alive", true)) and host.player_alive:
 					for panel in host.ui.PANEL_SCRIPTS:
-						if bool(host.ui.panel_active.get(panel, false)):
+						if host.ui.is_panel_visible(panel):
 							host.ui._set_panel(panel, false)
 					host.player.exitShop()
 					host.createPopup("Consumed by Shai-Hulud · cargo lost, money retained", "IsMineral")
@@ -315,7 +331,7 @@ func _sync_peers() -> void:
 	for id in _remote_visuals:
 		if network.peers.has(id):
 			var peer_state: Dictionary = network.peers[id].get("state", {})
-			var present := bool(peer_state.get("alive", true)) and str(peer_state.get("building", "")).is_empty()
+			var present := _peer_presence(peer_state) == PeerPresence.SURFACE
 			_remote_visuals[id].visible = present
 			if _remote_bodies.has(id):
 				var contact: StaticBody2D = _remote_bodies[id]
@@ -329,6 +345,13 @@ func _sync_peers() -> void:
 				for shape in contact.get_children():
 					var base: Transform2D = shape.get_meta("base_transform")
 					shape.transform = mirror * base if bool(peer_state.get("facing", false)) else base
+
+func _peer_presence(peer_state: Dictionary) -> PeerPresence:
+	if not bool(peer_state.get("alive", true)):
+		return PeerPresence.DEAD
+	if not str(peer_state.get("building", "")).is_empty():
+		return PeerPresence.INTERIOR
+	return PeerPresence.SURFACE
 
 func tick(delta: float) -> void:
 	if not active or network.recovering:

@@ -1,5 +1,18 @@
 extends Node2D
 
+enum SceneReplacement { IDLE, PENDING }
+enum PauseState { RUNNING, PAUSED }
+enum PlayerAdmission { ABSENT, HIDDEN, PAUSED, ACTIVE }
+enum ClockOrigin { AWAITING_ORIGIN, STARTED }
+enum SchedulerClock { AUTOMATIC, MANUAL }
+enum FixedDebt { PAUSED, WAITING, DUE }
+enum TriggerOccupancy { OUTSIDE, INSIDE }
+enum TriggerAdmission { DISARMED, ARMED }
+enum TriggerSample { EMPTY, COMPLETED }
+enum AnimatorLifecycle { REGISTERED, COMPLETION_QUEUED, RETIRED }
+enum FirstAnimation { READY, EXPLOSION_PENDING, STARTED }
+enum BackgroundState { IDLE, CHANGING, CONVERGED }
+
 const UNIT := Vector2(1, -1)
 # Unity's source intervals are binary32; keep their accumulated clock in double.
 # Exact binary32(0.02); a binary rational avoids decimal-parser drift.
@@ -8,7 +21,7 @@ var physics_render_delta := 0.0
 var physics_step := 0
 var _physics_clock: Object
 var _physics_accumulator := 0.0
-var _physics_clock_started := false
+var _physics_origin := ClockOrigin.AWAITING_ORIGIN
 var _clock_float32 := PackedFloat32Array([0.0])
 var manifest: Dictionary
 var data := GameData.new()
@@ -23,7 +36,8 @@ var _player_trigger_query: PhysicsShapeQueryParameters2D
 var _player_trigger_transform := Transform2D.IDENTITY
 var _sensor_triggers: Dictionary = {}
 var _shop_queries: Dictionary = {}
-var _last_trigger_step := -1
+var _trigger_sample := TriggerSample.EMPTY
+var _last_trigger_step := 0
 var terrain: TerrainView
 var camera: Camera2D
 var _camera_orthographic_size := 5.0
@@ -34,12 +48,12 @@ var player_alive := false:
 	set(value):
 		player_alive = value
 		_sync_touch_controls()
-var paused := false:
+var pause_state := PauseState.RUNNING
+var paused: bool:
+	get:
+		return pause_state == PauseState.PAUSED
 	set(value):
-		paused = value
-		if is_inside_tree():
-			get_tree().paused = value
-		_sync_touch_controls()
+		set_paused(value)
 var scene_name := ""
 var player_go := ""
 var animators: Array = []
@@ -52,7 +66,14 @@ var unity_random := UnityRandom.new()
 var replay: Dictionary = {}
 var frame_number := 0
 var capture_directory := ""
-var pending_scene := ""
+var _scene_replacement := SceneReplacement.IDLE
+var _pending_scene_name := ""
+var pending_scene: String:
+	get:
+		return _pending_scene_name if _scene_replacement == SceneReplacement.PENDING else ""
+	set(value):
+		_request_scene(value)
+var _ui_clock_origin := ClockOrigin.AWAITING_ORIGIN
 var _last_ui_usec := 0
 var replay_runner: ReplayRunner
 var agent_axes: Variant = null
@@ -146,8 +167,58 @@ func _exit_tree() -> void:
 		_physics_clock.set_manual_clock(false)
 
 func change_scene(which: String) -> void:
-	pending_scene = which
+	_request_scene(which)
 	_sync_touch_controls()
+
+func _request_scene(which: String) -> void:
+	_pending_scene_name = which
+	_scene_replacement = SceneReplacement.IDLE if which.is_empty() else SceneReplacement.PENDING
+
+func _take_pending_scene() -> String:
+	var which := _pending_scene_name
+	_scene_replacement = SceneReplacement.IDLE
+	_pending_scene_name = ""
+	return which
+
+func set_paused(value: bool) -> void:
+	pause_state = PauseState.PAUSED if value else PauseState.RUNNING
+	if is_inside_tree():
+		get_tree().paused = pause_state == PauseState.PAUSED
+	_sync_touch_controls()
+
+func _player_admission() -> PlayerAdmission:
+	if player == null:
+		return PlayerAdmission.ABSENT
+	if not player_alive:
+		return PlayerAdmission.HIDDEN
+	return PlayerAdmission.PAUSED if pause_state == PauseState.PAUSED else PlayerAdmission.ACTIVE
+
+func _scheduler_clock() -> SchedulerClock:
+	return SchedulerClock.MANUAL if _physics_clock != null else SchedulerClock.AUTOMATIC
+
+func _fixed_debt() -> FixedDebt:
+	if pause_state == PauseState.PAUSED:
+		return FixedDebt.PAUSED
+	return FixedDebt.DUE if _physics_accumulator >= PHYSICS_DELTA else FixedDebt.WAITING
+
+func _advance_ui_clock(now_usec: int, fallback_delta: float) -> float:
+	var delta := fallback_delta
+	if _ui_clock_origin == ClockOrigin.STARTED:
+		delta = float(now_usec - _last_ui_usec) / 1000000.0
+	_last_ui_usec = now_usec
+	_ui_clock_origin = ClockOrigin.STARTED if now_usec > 0 else ClockOrigin.AWAITING_ORIGIN
+	return delta
+
+func _has_present_player() -> bool:
+	var admission := _player_admission()
+	return admission == PlayerAdmission.ACTIVE or admission == PlayerAdmission.PAUSED
+
+func _body_admission() -> PlayerAdmission:
+	if body == null:
+		return PlayerAdmission.ABSENT
+	if not player_alive:
+		return PlayerAdmission.HIDDEN
+	return PlayerAdmission.PAUSED if pause_state == PauseState.PAUSED else PlayerAdmission.ACTIVE
 
 func _sync_touch_controls() -> void:
 	if is_instance_valid(touch_controls):
@@ -162,7 +233,7 @@ func _load_scene(which: String) -> void:
 	scene_triggers.clear()
 	_sensor_triggers.clear()
 	_shop_queries.clear()
-	_last_trigger_step = -1
+	_trigger_sample = TriggerSample.EMPTY
 	background_goal.clear()
 	for instance in [ui, player, boss, bridge, world_root, ui_root, camera, body]:
 		if is_instance_valid(instance):
@@ -207,7 +278,7 @@ func _load_scene(which: String) -> void:
 	_resize_camera()
 	_setup_background()
 	if which == "Game":
-		if not data.level_is_already_generated:
+		if data.world_admission == GameData.WorldAdmission.GENERATE_ON_ENTRY:
 			world.generate(seed_value if _seed_is_explicit else null)
 		data.initPlayer()
 	ui = GameUI.new()
@@ -239,7 +310,7 @@ func _load_scene(which: String) -> void:
 				var controller: String = component.properties.get("m_Controller", {}).get("guid", "")
 				if not controller.is_empty():
 					var animator := make_animator(visual, controller)
-					animators.append({"root": visual, "animator": animator})
+					_register_animator(visual, animator)
 					animator.animation_event.connect(_scene_event.bind(id))
 	ui.updateAllUI()
 	if coop != null:
@@ -407,7 +478,7 @@ func _setup_static_collisions() -> void:
 							_add_shape(area, shape_component, visual.global_scale)
 				var sensor := script in ["TransmissionTrigger", "StartBossfightTrigger", "BackgroundChangeColorTrigger"]
 				var trigger := {"id": id, "script": script, "properties": component.properties, "area": area,
-					"sensor": sensor, "inside": false, "touching": false}
+					"occupancy": TriggerOccupancy.OUTSIDE, "contact": false}
 				scene_triggers.append(trigger)
 				area.monitoring = false
 				if sensor:
@@ -469,9 +540,7 @@ func _extend_surface_boundary(solid: StaticBody2D, boundary_name: String) -> voi
 		child.position.x += world.surface_left()
 
 func _process(delta: float) -> void:
-	var now_usec := Time.get_ticks_usec()
-	var ui_delta := float(now_usec - _last_ui_usec) / 1000000.0 if _last_ui_usec > 0 else delta
-	_last_ui_usec = now_usec
+	var ui_delta := _advance_ui_clock(Time.get_ticks_usec(), delta)
 	if replay_runner != null and not replay_runner.live_input:
 		ui_delta = replay_runner.render_delta
 		delta = ui_delta * Engine.time_scale
@@ -482,49 +551,45 @@ func _process(delta: float) -> void:
 	# ScrollContainer needs a nonzero UI delta to calculate touch inertia.
 	if paused:
 		delta = 0.0
-	if _physics_clock != null:
+	if _scheduler_clock() == SchedulerClock.MANUAL:
 		# Scene changes requested during Update take effect before the next
 		# fixed phase, including frames on which no fixed update is due.
-		if not pending_scene.is_empty():
-			var which := pending_scene
-			pending_scene = ""
-			_load_scene(which)
+		if _scene_replacement == SceneReplacement.PENDING:
+			_load_scene(_take_pending_scene())
 		_clock_float32[0] = delta
 		delta = _clock_float32[0]
 		_advance_physics_clock(delta)
 	else:
 		physics_step = Engine.get_physics_frames()
-	if player != null and player_alive and not paused:
+	if _player_admission() == PlayerAdmission.ACTIVE:
 		var render_delta := physics_render_delta
 		physics_render_delta = 0.0
 		player.refresh_ground_after_step()
 		_sample_player_triggers()
 		physics_render_delta = render_delta
-	if player != null and player_alive:
+	if _has_present_player():
 		player.begin_render_pose()
-	var next := pending_scene
-	pending_scene = ""
+	var next_state := _scene_replacement
+	var next := _take_pending_scene()
 	if replay_runner != null and bridge != null:
 		replay_runner.pre_tick()
-	if not next.is_empty():
+	if next_state == SceneReplacement.PENDING:
 		_load_scene(next)
-	if player != null and player_alive:
+	if _has_present_player():
 		player.sync_physics_pose()
 	if ui != null:
 		ui.tick(ui_delta)
 	if coop != null:
 		coop.tick(ui_delta)
-	if not paused:
+	if pause_state == PauseState.RUNNING:
 		# Spawns append for the next frame; queued tree exits retire after this pass.
 		var animator_count := animators.size()
 		for index in animator_count:
 			var record: Dictionary = animators[index]
 			if is_instance_valid(record.root) and record.root.is_visible_in_tree():
-				if record.get("start_explosion", false):
-					record.animator.parameter("ExplosionNumber", unity_random.range_int(1, 4))
-					record.erase("start_explosion")
-				record.animator.advance(delta)
-		if player != null and player_alive:
+				if _begin_animator_frame(record):
+					record.animator.advance(delta)
+		if _player_admission() == PlayerAdmission.ACTIVE:
 			player.tick(delta)
 		if boss != null:
 			boss.tick(delta)
@@ -544,15 +609,15 @@ func _process(delta: float) -> void:
 
 func _advance_physics_clock(delta: float) -> void:
 	# The first rendered snapshot is the clock origin, not one elapsed frame.
-	if not _physics_clock_started:
-		_physics_clock_started = true
+	if _physics_origin == ClockOrigin.AWAITING_ORIGIN:
+		_physics_origin = ClockOrigin.STARTED
 		physics_render_delta = 0.0
 		return
 	_physics_accumulator += delta
 	physics_render_delta = 0.0
-	while not paused and _physics_accumulator >= PHYSICS_DELTA:
+	while _fixed_debt() == FixedDebt.DUE:
 		_fixed_update(PHYSICS_DELTA)
-		if paused:
+		if _fixed_debt() == FixedDebt.PAUSED:
 			break
 		if not _physics_clock.step_manual(PHYSICS_DELTA):
 			push_error("The native Box2D clock could not complete a physics step")
@@ -568,17 +633,15 @@ func _advance_physics_clock(delta: float) -> void:
 	physics_render_delta = _physics_accumulator
 
 func _physics_process(delta: float) -> void:
-	if _physics_clock != null:
+	if _scheduler_clock() == SchedulerClock.MANUAL:
 		return
 	physics_render_delta = 0.0
 	_fixed_update(delta)
 
 func _fixed_update(delta: float) -> void:
-	if not pending_scene.is_empty():
-		var next := pending_scene
-		pending_scene = ""
-		_load_scene(next)
-	if paused or body == null or not player_alive:
+	if _scene_replacement == SceneReplacement.PENDING:
+		_load_scene(_take_pending_scene())
+	if _body_admission() != PlayerAdmission.ACTIVE:
 		return
 	player.physics_tick(delta)
 	if boss != null:
@@ -609,6 +672,36 @@ func make_animator(visual: CanvasItem, controller_guid: String) -> NativeAnimato
 	animator.bind_controller(controller_guid, visual, bridge)
 	return animator
 
+func _register_animator(root: CanvasItem, animator: NativeAnimator, explosion: bool = false) -> Dictionary:
+	var record := {"root": root, "animator": animator, "state": AnimatorLifecycle.REGISTERED,
+		"first_animation": FirstAnimation.EXPLOSION_PENDING if explosion else FirstAnimation.READY}
+	animators.append(record)
+	return record
+
+func _begin_animator_frame(record: Dictionary) -> bool:
+	if record.state == AnimatorLifecycle.RETIRED:
+		return false
+	match record.first_animation:
+		FirstAnimation.EXPLOSION_PENDING:
+			record.animator.parameter("ExplosionNumber", unity_random.range_int(1, 4))
+			record.first_animation = FirstAnimation.STARTED
+		FirstAnimation.READY:
+			record.first_animation = FirstAnimation.STARTED
+	# Queued completion remains advanceable until tree exit, as in Unity.
+	# Its independent first-animation initialization must still draw its RNG.
+	return true
+
+func _retire_animator(record: Dictionary) -> void:
+	if record.state != AnimatorLifecycle.RETIRED:
+		record.state = AnimatorLifecycle.RETIRED
+		animators.erase(record)
+
+func _queue_prefab_completion(container: Node2D) -> void:
+	for record in container.get_meta("native_animators"):
+		if record.state != AnimatorLifecycle.RETIRED:
+			record.state = AnimatorLifecycle.COMPLETION_QUEUED
+	container.queue_free()
+
 func spawn_prefab(prefab_name: String, position_unity: Vector2, parent: Node2D) -> Node2D:
 	if not manifest.prefabs.has(prefab_name):
 		push_error("Missing original prefab: " + prefab_name)
@@ -633,14 +726,13 @@ func spawn_prefab(prefab_name: String, position_unity: Vector2, parent: Node2D) 
 			if component.get("type", "") == "Animator":
 				var animator := NativeAnimator.new()
 				animator.bind_controller(component.properties.get("m_Controller", {}).get("guid", ""), root, prefab_bridge)
-				var record := {"root": root, "animator": animator, "start_explosion": random_explosion}
-				animators.append(record)
+				var record := _register_animator(root, animator, random_explosion)
 				owned_animators.append(record)
 				animator.animation_event.connect(_prefab_event.bind(container))
 	container.set_meta("native_animators", owned_animators)
 	container.tree_exited.connect(func():
 		for record in owned_animators:
-			animators.erase(record)
+			_retire_animator(record)
 	)
 	container.tree_exited.connect(prefab_bridge.queue_free)
 	return container
@@ -657,7 +749,7 @@ func createPopup(text: String, kind: String) -> void:
 
 func _prefab_event(method: String, argument: Variant, container: Node2D) -> void:
 	if method in ["destroyObject", "DestroyObject", "destroy", "finishAnimation"]:
-		container.queue_free()
+		_queue_prefab_completion(container)
 	elif method == "playSound":
 		audio.PlaySoundOneShot(str(argument))
 	else:
@@ -687,17 +779,18 @@ func _sample_player_triggers() -> void:
 	if _player_trigger_query == null:
 		return
 	var step := physics_step
-	if step == _last_trigger_step:
+	if _trigger_sample == TriggerSample.COMPLETED and step == _last_trigger_step:
 		return
 	_last_trigger_step = step
+	_trigger_sample = TriggerSample.COMPLETED
 	var pose: Transform2D = PhysicsServer2D.body_get_state(body.get_rid(), PhysicsServer2D.BODY_STATE_TRANSFORM)
 	_player_trigger_query.transform = pose * _player_trigger_transform
 	for trigger in scene_triggers:
-		trigger.touching = false
+		trigger.contact = false
 	for hit in body.get_world_2d().direct_space_state.intersect_shape(_player_trigger_query, scene_triggers.size()):
 		var trigger: Dictionary = _sensor_triggers.get(hit.collider, {})
 		if not trigger.is_empty():
-			trigger.touching = true
+			trigger.contact = true
 	if body.collision_layer != 0 and body.collision_mask != 0:
 		for collider_id in _shop_queries:
 			var record: Dictionary = _shop_queries[collider_id]
@@ -709,24 +802,35 @@ func _sample_player_triggers() -> void:
 			for hit in body.get_world_2d().direct_space_state.intersect_shape(query, scene_triggers.size()):
 				var trigger: Dictionary = record.triggers.get(hit.collider, {})
 				if not trigger.is_empty():
-					trigger.touching = true
+					trigger.contact = true
 	for trigger in scene_triggers:
-		var visual := bridge.nodes.get(trigger.id) as Node2D
-		var touching: bool = trigger.touching and is_instance_valid(trigger.area) and is_instance_valid(visual) and visual.is_visible_in_tree()
-		var entered: bool = touching and not trigger.inside
-		var exited: bool = not touching and trigger.inside
-		trigger.inside = touching
-		if entered:
-			_activate_trigger(trigger)
-		elif exited and trigger.script == "ExitShopDoorCollision":
-			bridge.set_active(trigger.properties.get("linked_door", {}), true)
+		_sample_trigger_occupancy(trigger)
 
+
+func _trigger_admission(trigger: Dictionary) -> TriggerAdmission:
+	var visual := bridge.nodes.get(trigger.id) as Node2D
+	if not is_instance_valid(trigger.area) or not is_instance_valid(visual) or not visual.is_visible_in_tree():
+		return TriggerAdmission.DISARMED
+	return TriggerAdmission.ARMED
+
+func _sample_trigger_occupancy(trigger: Dictionary) -> void:
+	var next := TriggerOccupancy.INSIDE if trigger.contact and _trigger_admission(trigger) == TriggerAdmission.ARMED else TriggerOccupancy.OUTSIDE
+	if next == trigger.occupancy:
+		return
+	trigger.occupancy = next
+	if next == TriggerOccupancy.INSIDE:
+		_activate_trigger(trigger)
+	elif trigger.script == "ExitShopDoorCollision":
+		_rearm_linked_door(trigger)
+
+func _disarm_trigger(trigger: Dictionary) -> void:
+	bridge.nodes[trigger.id].visible = false
+
+func _rearm_linked_door(trigger: Dictionary) -> void:
+	bridge.set_active(trigger.properties.get("linked_door", {}), true)
 
 func _activate_trigger(trigger: Dictionary) -> void:
-	if not player_alive or not is_instance_valid(trigger.area):
-		return
-	var visual := bridge.nodes[trigger.id] as Node2D
-	if not is_instance_valid(visual) or not visual.is_visible_in_tree():
+	if not player_alive or _trigger_admission(trigger) == TriggerAdmission.DISARMED:
 		return
 	var p: Dictionary = trigger.properties
 	match trigger.script:
@@ -735,12 +839,12 @@ func _activate_trigger(trigger: Dictionary) -> void:
 				return
 			audio.PlayMusic("ShopMusic")
 			ui.open_shop(p.linked_shop_object)
-			visual.visible = false
+			_disarm_trigger(trigger)
 		"TransmissionTrigger":
 			ui.displayTransmission(int(p.get("transmission_index", 0)))
 		"StartBossfightTrigger":
 			begin_boss()
-			visual.visible = false
+			_disarm_trigger(trigger)
 		"BackgroundChangeColorTrigger":
 			_set_background_goal(p.background_object, p.color_goal)
 
@@ -755,7 +859,7 @@ func _setup_background() -> void:
 		if props.is_empty() or not bool(props.get("m_Enabled", true)) or not bridge.graphics.has(id):
 			continue
 		var goal: Dictionary = props.get("goal", {})
-		background_goal[id] = {"goal": Color(float(goal.get("r", 0)), float(goal.get("g", 0)), float(goal.get("b", 0))), "changing": false}
+		background_goal[id] = {"goal": Color(float(goal.get("r", 0)), float(goal.get("g", 0)), float(goal.get("b", 0))), "state": BackgroundState.IDLE}
 		# Start preserves the baked SpriteRenderer.m_Color, not base_color/goal.
 		# The source background follows its Cinemachine virtual-camera parent.
 		# Bind that visual attachment to the live native camera; the imported
@@ -772,7 +876,7 @@ func _set_background_goal(reference: Variant, serialized_color: Dictionary) -> v
 	if not background_goal.has(id):
 		return
 	background_goal[id].goal = Color(float(serialized_color.get("r", 0)), float(serialized_color.get("g", 0)), float(serialized_color.get("b", 0)))
-	background_goal[id].changing = true
+	background_goal[id].state = BackgroundState.CHANGING
 
 func resetBackgroundColor() -> void:
 	for id in background_goal:
@@ -781,7 +885,7 @@ func resetBackgroundColor() -> void:
 func _tick_background() -> void:
 	for id in background_goal:
 		var state: Dictionary = background_goal[id]
-		if not state.changing or not bridge.nodes[id].is_visible_in_tree():
+		if state.state != BackgroundState.CHANGING or not bridge.nodes[id].is_visible_in_tree():
 			continue
 		var sprite: CanvasItem = bridge.graphics[id]
 		var goal: Color = state.goal
@@ -789,7 +893,7 @@ func _tick_background() -> void:
 		color = Color(_background_move_towards(color.r, goal.r), _background_move_towards(color.g, goal.g), _background_move_towards(color.b, goal.b))
 		sprite.modulate = color
 		if color.r == goal.r and color.g == goal.g and color.b == goal.b:
-			state.changing = false
+			state.state = BackgroundState.CONVERGED
 
 func _background_move_towards(current: float, target: float) -> float:
 	# Mathf.MoveTowards rounds the subtraction and addition to float32.

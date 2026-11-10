@@ -1,10 +1,27 @@
 class_name FuelPricing
 extends Node
 
+enum RequestState { NOT_STARTED, REQUESTING, START_FAILED, RESPONSE_FAILED, INVALID_QUOTE, SUCCEEDED }
+enum QuoteState { UNAVAILABLE, FRESH, EXPIRED }
+enum RefreshAdmission { NONE, DAY_CHANGED, QUOTE_EXPIRED }
+
 var price_per_gallon := 0.0
 var price_date := ""
 var valid_until := 0.0
-var status := "Fetching today's AAA national average…"
+var request_state := RequestState.NOT_STARTED
+var status: String:
+	get:
+		match request_state:
+			RequestState.START_FAILED:
+				return "AAA price service unavailable. Retry before purchasing."
+			RequestState.RESPONSE_FAILED:
+				return "Today's AAA price is unavailable. Retry before purchasing."
+			RequestState.INVALID_QUOTE:
+				return "No valid AAA price for today. Retry before purchasing."
+			RequestState.SUCCEEDED:
+				return "AAA · US national average regular"
+			_:
+				return "Fetching today's AAA national average…"
 var host: Node
 var _http: HTTPRequest
 var _last_day := ""
@@ -28,26 +45,57 @@ func _process(_delta: float) -> void:
 	if now < _next_check:
 		return
 	_next_check = now + 60000
-	if _last_day != Time.get_date_string_from_system(true) or (price_per_gallon > 0.0 and not available()):
+	if automatic_refresh_admission() != RefreshAdmission.NONE:
 		refresh()
 
-func refresh() -> void:
-	_last_day = Time.get_date_string_from_system(true)
+func automatic_refresh_admission() -> RefreshAdmission:
+	if _last_day != Time.get_date_string_from_system(true):
+		return RefreshAdmission.DAY_CHANGED
+	# A failed request has no quote to expire: it waits for a manual retry or
+	# the next UTC day, rather than gaining a new automatic retry loop.
+	if quote_state() == QuoteState.EXPIRED:
+		return RefreshAdmission.QUOTE_EXPIRED
+	return RefreshAdmission.NONE
+
+func _clear_quote() -> void:
 	price_per_gallon = 0.0
 	price_date = ""
 	valid_until = 0.0
-	status = "Fetching today's AAA national average…"
+
+func _begin_request() -> void:
+	_last_day = Time.get_date_string_from_system(true)
+	_clear_quote()
+	request_state = RequestState.REQUESTING
+
+func refresh() -> void:
+	_begin_request()
 	_http.cancel_request()
 	var base_url: String = CoopClient.DEFAULT_URL
 	if host.coop != null:
 		base_url = host.coop.network.base_url
 	var result := _http.request(base_url + "/api/fuel-price")
 	if result != OK:
-		status = "AAA price service unavailable. Retry before purchasing."
+		request_state = RequestState.START_FAILED
 	_update_display()
 
+func quote_state() -> QuoteState:
+	if not price_per_gallon > 0.0:
+		return QuoteState.UNAVAILABLE
+	return QuoteState.FRESH if Time.get_unix_time_from_system() < valid_until else QuoteState.EXPIRED
+
 func available() -> bool:
-	return price_per_gallon > 0.0 and Time.get_unix_time_from_system() < valid_until
+	return quote_state() == QuoteState.FRESH
+
+func _reject_quote(next_state: RequestState) -> void:
+	request_state = next_state
+	_update_display()
+
+func _accept_quote(value: float, day: String, expiry: float) -> void:
+	price_per_gallon = value
+	price_date = day
+	valid_until = expiry
+	request_state = RequestState.SUCCEEDED
+	_update_display()
 
 func _completed(result: int, code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
 	var response: Variant = null
@@ -55,12 +103,9 @@ func _completed(result: int, code: int, _headers: PackedStringArray, body: Packe
 		var parser := JSON.new()
 		if parser.parse(body.get_string_from_utf8()) == OK:
 			response = parser.data
-	price_per_gallon = 0.0
-	price_date = ""
-	valid_until = 0.0
+	_clear_quote()
 	if result != HTTPRequest.RESULT_SUCCESS or code != 200 or not response is Dictionary:
-		status = "Today's AAA price is unavailable. Retry before purchasing."
-		_update_display()
+		_reject_quote(RequestState.RESPONSE_FAILED)
 		return
 	var value: Variant = response.get("price_per_gallon")
 	var valid_number := value is float or value is int
@@ -68,13 +113,9 @@ func _completed(result: int, code: int, _headers: PackedStringArray, body: Packe
 	var expiry: Variant = response.get("valid_until", 0)
 	var valid_expiry := (expiry is float or expiry is int) and is_finite(float(expiry)) and float(expiry) > Time.get_unix_time_from_system()
 	if not valid_number or not is_finite(float(value)) or float(value) <= 0.0 or not valid_expiry or day.is_empty() or str(response.get("source", "")) != "aaa":
-		status = "No valid AAA price for today. Retry before purchasing."
+		_reject_quote(RequestState.INVALID_QUOTE)
 	else:
-		price_per_gallon = float(value)
-		price_date = day
-		valid_until = float(expiry)
-		status = "AAA · US national average regular"
-	_update_display()
+		_accept_quote(float(value), day, float(expiry))
 
 func install_shop_panel(parent: Control) -> void:
 	_panel = PanelContainer.new()
