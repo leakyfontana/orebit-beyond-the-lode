@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "policy": {
+    "file": "policy.gd",
+    "sha256": "866631fb778a16ddf2b63e5ce5bfcf768d3a102af8f5a9dc500b552413a99f4f",
+    "source": "orebit_rl/bot_candidates/cycle_66/pvp_practice_bot.gd",
+    "cycle": 66,
+    "snapshot": "byte-for-byte; load BotHost and BotBrain only; do not run the practice shell",
+    "learning": false
+  },
+  "native_base_revision": "6b80c72ad6679ca5a7b58e445a9f558d20cf0705",
+  "capacity": 5,
+  "maximum_fps": 50,
+  "time_scale": 1.0,
+  "pool_poll_seconds": 1,
+  "control_endpoint": "/api/pvp/bot-pool",
+  "authentication_endpoint": "/api/auth/login",
+  "worker_script": "worker.gd",
+  "round_lifecycle": "Discard entire brain and construct a new BotBrain after native round_started scene replacement",
+  "state_isolation": "Unique slot HOME, XDG data/config/cache/state/runtime, settings/save paths, cached token and native user:// session",
+  "logging": "Discard PRACTICE_BOT_ policy traces; capture native stdout/stderr in per-slot rotating 2MiB logs with two backups; retain errors in stderr/journal; disable duplicate native file logging only in the generated bot project"
+}

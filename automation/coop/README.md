@@ -102,3 +102,98 @@ python -m unittest test_pvp.PvpMechanicsTest test_pvp.PvpNetworkTest
 ```
 
 The real subprocess/WebSocket scenario `PvpNetworkTest.test_real_competing_sales_durable_round_offline_reset_and_stale_routes` seeds synthetic near-winning accounts in its temporary database, races sales, checks exactly one winner/reset per connected recipient, rejects stale/missing IDs on every mutation route, checks offline reset and co-op retention, and restarts the service to check durable seed/round identity. Mechanics cases cover every cash credit path, first-winner tick ordering, failed SQLite reset rollback, death-loot conservation, weighted/full bays, bounded counters, and reloaded remaining loot.
+
+## Human-priority production PvP bot pool
+
+The public PvP world has **five real connected players**, not five placeholder
+scoreboard rows. `orebit-pvp-bots.service` keeps five deterministic native clients
+warm when no humans are present and targets `5 - humans` thereafter. A human
+joining a full bot-containing room atomically replaces its lowest-ranked bot:
+minimum integer held cash, then greatest `player_id` on a cash tie, matching the
+existing leaderboard order. Humans are never eviction candidates. Five humans
+mean zero bots; a sixth human receives the normal full-room response.
+
+Human replacement preserves five logical members under the PvP world lock.
+Departure, worker failure and service startup require a brief real-client refill;
+health and snapshots report the actual population during that interval. Invalid
+joins, duplicate accounts and unsupported clients do not evict anyone. Retiring
+socket cleanup cannot remove or mutate a replacement. Eviction saves the bot's
+ordinary profile without death loot, a wallet grant or an equipment reset.
+
+Trusted identities come only from the main store's `pvp_bot_accounts` registry,
+never names or client flags. Dedicated bot accounts may join PvP only. Vulcan's
+separate identity namespace, normal co-op, existing accounts and million-dollar
+round transactions remain unchanged. Native workers discard the entire policy
+brain after a new round, not just its route. The promoted cycle-66 policy and its
+checksum are recorded in `automation/pvp_bots/pool.json`; this is deterministic
+gameplay, **not an RL training run or approval to begin one**.
+
+### Runtime and credentials
+
+- Code: `/srv/orebit-pvp-bots/current`, an immutable release with `provenance.json`.
+- Native game: `current/game`; official Godot 4.7.2 Linux: `current/runtime/godot`.
+  `automation/pvp_bots/package.py` reuses normal release staging and requires the
+  exact current `verification/box2d_build.json` API, physics and fixture patches.
+  Experimental native libraries and stripped-down physics are not substitutes.
+  Linux extension mapping and duplicate file-logging disablement affect only the
+  generated bot project; errors remain in bounded supervisor logs.
+- State and worker logs: `/var/lib/orebit-pvp-bots`, mode `0700`, dedicated
+  `orebit-pvp-bots` user. Each slot has isolated HOME/XDG, save/settings, normal
+  cached tokens and bounded redacted logs. One failing worker does not stop four
+  healthy opponents. Native gameplay runs at normal elapsed time, capped at
+  50 FPS, without `--fixed-fps` or resource/economy privileges.
+- Private configuration: `/etc/orebit-pvp-bots.env`, mode `0600`, supplies
+  `OREBIT_PVP_BOT_CONTROL_KEY`. Both authority and worker service load it through
+  systemd; the authority drop-in is `orebit-coop.service.d/pvp-bots.conf`.
+  Never put the key, passwords or tokens in command arguments or release files.
+- `GET /api/pvp/bot-pool` requires a separate Bearer control key and is unavailable
+  without configuration. It returns actual membership and desired bot count;
+  normal player tokens do not authorize it. The supervisor uses loopback port
+  8765, with no additional public port or TLS downgrade.
+
+Provision ordinary Argon2 accounts as the authority's database owner:
+
+```sh
+/srv/orebit-coop/venv/bin/python /srv/orebit-coop/bot_pool.py provision \
+  --db /var/lib/orebit-coop/coop.sqlite3 \
+  --accounts /var/lib/orebit-coop/pvp-bot-accounts.json
+```
+
+The CLI is idempotent, publishes owner-held `0600` credentials, refuses to adopt
+existing human usernames and grants no game state. Install a `0600` copy owned by
+`orebit-pvp-bots` at `/var/lib/orebit-pvp-bots/accounts.json`; retain the original
+private provisioning document. Do not delete credentials to resolve a mismatch.
+Supervisor settings also accept `OREBIT_PVP_BOT_ENDPOINT`,
+`OREBIT_PVP_BOT_CREDENTIALS`, `OREBIT_PVP_BOT_GAME` and `OREBIT_PVP_BOT_GODOT`.
+The service uses standard-library Python, CPU quota 150% and memory maximum 2 GiB.
+
+### Deployment, proof and rollback
+
+Before public enablement, back up **both** databases with SQLite online backups,
+guard live source hashes against concurrent releases, and deploy `server.py`,
+`pvp.py` and `bot_pool.py` together. Import the staged Linux game with its real
+engine/library, then make its code/cache root-owned and read-only to the worker.
+Prove five native clients, real mining and wall-clock pacing inside the worker
+resource limits against an isolated authority/database. Exercise human priority,
+five-human capacity, refill, one-worker failure and native round reconstruction.
+Synthetic near-winning states belong only in isolated test databases; never
+force a production win/reset as a deployment check.
+
+The real HTTP/WebSocket and provisioning regressions are:
+
+```sh
+python -m unittest discover -s automation/coop -p 'test_bot_pool.py' -v
+```
+
+Observe `systemctl status orebit-pvp-bots`, the unit journal, private rotating slot
+logs and `/coop/healthz`'s truthful `modes.pvp.{players,humans,bots}`. The normal
+production client's PvP entry still joins a bot-filled room; no client release is
+required. Use the normal game, not an older loopback-only playtest APK.
+
+Bot-only rollback is `systemctl disable --now orebit-pvp-bots`: leave authority,
+accounts, credentials and game data intact, allowing normal human-only PvP.
+For authority rollback, stop the bot unit, restore the backed-up `server.py` and
+`pvp.py` together, remove only this rollout's authority drop-in, reload systemd
+and restart `orebit-coop`. Keep the additive registry and all live databases;
+restoring an old database would discard legitimate progress and is not a normal
+code rollback. Do not restart unrelated services or change the public client.
